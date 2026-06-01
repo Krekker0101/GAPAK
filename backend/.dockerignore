@@ -1,0 +1,7 @@
+.git
+.gitignore
+node_modules
+generated
+tmp
+*.log
+front

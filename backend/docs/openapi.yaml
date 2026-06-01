@@ -1,0 +1,771 @@
+openapi: 3.1.0
+info:
+  title: Gapak API
+  version: 1.0.0
+  description: |
+    Gapak is a privacy-first social network built around trust, layered identity,
+    controlled visibility, secure media, live experiences, and time-based social interaction.
+
+    Privacy is a core mechanic rather than a decorative setting. The API is designed for
+    trust-aware access rules, metadata minimization, secure media delivery, and live social primitives.
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: Auth
+    description: Authentication, pseudonymous account access, refresh rotation, and 2FA.
+  - name: Users
+    description: Layer-aware profile and privacy settings management.
+  - name: Sessions
+    description: Device/session visibility and privacy-preserving revocation flows.
+  - name: Security
+    description: Suspicious activity review, alerts, audit controls, and panic mode.
+  - name: Connections
+    description: Trust graph management, trusted circles, and connection flows.
+  - name: Posts
+    description: Feed-ready posts with layered visibility, timing, and one-time access semantics.
+  - name: Chats
+    description: E2EE-friendly personal messaging via encrypted envelopes and metadata-safe contracts.
+  - name: Trust Rooms
+    description: High-trust rooms with privacy-aware membership and access policy mechanics.
+  - name: Media / Video / File
+    description: Secure uploads, processed playback, access grants, and adaptive delivery primitives.
+  - name: Stories
+    description: Timed story objects with privacy-aware viewers, reactions, and highlights.
+  - name: Live
+    description: Privacy-aware live rooms, live chat, replay foundations, and realtime event flows.
+  - name: Battles
+    description: Live duel challenges, rounds, voting, reactions, and replay/history foundations.
+  - name: Moderation
+    description: Safety and reporting architecture that preserves the privacy model.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [username, displayName, password]
+      properties:
+        email: { type: string, format: email }
+        username: { type: string }
+        displayName: { type: string }
+        password: { type: string }
+        preferAnonymous: { type: boolean }
+        deviceName: { type: string }
+        deviceFingerprint: { type: string }
+    LoginRequest:
+      type: object
+      required: [login, password]
+      properties:
+        login: { type: string }
+        password: { type: string }
+        totpCode: { type: string }
+        deviceName: { type: string }
+        deviceFingerprint: { type: string }
+    PostRequest:
+      type: object
+      required: [body, privacy]
+      properties:
+        body: { type: string }
+        privacy: { type: string, enum: [PUBLIC, FRIENDS, TRUSTED_CIRCLE, PRIVATE, ONE_TIME, TIMED] }
+        expiresAt: { type: string, format: date-time }
+        oneTimeViewLimit: { type: integer }
+        audienceUserIds:
+          type: array
+          items: { type: string, format: uuid }
+        mediaFileIds:
+          type: array
+          items: { type: string, format: uuid }
+    MessageRequest:
+      type: object
+      required: [clientMessageId, envelopeType, ciphertext, nonce, senderKeyId]
+      properties:
+        clientMessageId: { type: string }
+        envelopeType: { type: string, enum: [TEXT, ATTACHMENT, KEY_EXCHANGE, SYSTEM] }
+        ciphertext: { type: string }
+        nonce: { type: string }
+        senderKeyId: { type: string }
+        attachmentManifest: { type: object, additionalProperties: true }
+        metadata: { type: object, additionalProperties: true }
+    UploadIntentRequest:
+      type: object
+      required: [fileName, mimeType, sizeBytes]
+      properties:
+        purpose: { type: string, enum: [POST_ATTACHMENT, STORY, PROFILE, TRUST_ROOM, LIVE_REPLAY] }
+        fileName: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer }
+        checksumSha256: { type: string }
+        multipart: { type: boolean }
+        partSizeBytes: { type: integer }
+    CompleteUploadRequest:
+      type: object
+      required: [parts]
+      properties:
+        parts:
+          type: array
+          items:
+            type: object
+            required: [partNumber, etag, sizeBytes]
+            properties:
+              partNumber: { type: integer }
+              etag: { type: string }
+              sizeBytes: { type: integer }
+    PanicModeRequest:
+      type: object
+      required: [reason]
+      properties:
+        preserveCurrentSession: { type: boolean }
+        currentSessionId: { type: string, format: uuid }
+        reason: { type: string }
+    StoryRequest:
+      type: object
+      required: [mediaFileId, privacy]
+      properties:
+        mediaFileId: { type: string, format: uuid }
+        trustRoomId: { type: string, format: uuid }
+        caption: { type: string }
+        privacy: { type: string, enum: [PUBLIC, FRIENDS, TRUSTED_CIRCLE, PRIVATE, ONE_TIME, TIMED] }
+        allowReplies: { type: boolean }
+        allowReactions: { type: boolean }
+        expiresAt: { type: string, format: date-time }
+        customAudienceUserIds:
+          type: array
+          items: { type: string, format: uuid }
+        highlightTitle: { type: string }
+    LiveStreamRequest:
+      type: object
+      required: [title, visibility]
+      properties:
+        trustRoomId: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string }
+        visibility: { type: string, enum: [PUBLIC, FRIENDS, TRUSTED_CIRCLE, PRIVATE, TRUST_ROOM] }
+        scheduledFor: { type: string, format: date-time }
+        allowReplay: { type: boolean }
+    BattleRequest:
+      type: object
+      required: [opponentUserId, mode, title]
+      properties:
+        opponentUserId: { type: string, format: uuid }
+        trustRoomId: { type: string, format: uuid }
+        liveStreamId: { type: string, format: uuid }
+        mode: { type: string, enum: [DUEL, CREATOR_DUEL, ROOM_DUEL] }
+        title: { type: string }
+        invitationMessage: { type: string }
+        scheduledFor: { type: string, format: date-time }
+        roundDurationSec: { type: integer }
+    ReportRequest:
+      type: object
+      required: [targetType, targetId, reason]
+      properties:
+        targetType: { type: string, enum: [USER, POST, TRUST_ROOM, MEDIA, STORY, LIVE_STREAM, BATTLE] }
+        targetId: { type: string, format: uuid }
+        reason: { type: string, enum: [HARASSMENT, SPAM, ILLEGAL_CONTENT, IMPERSONATION] }
+        description: { type: string }
+paths:
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register account with pseudonymous-friendly flow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201': { description: Auth session created }
+  /api/v1/auth/register-anonymous:
+    post:
+      tags: [Auth]
+      summary: Register anonymity-first account without public email identity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201': { description: Anonymous auth session created }
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login account without exposing private identity to client-visible flows
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200': { description: Auth session created }
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate refresh token
+      parameters:
+        - in: header
+          name: X-CSRF-Token
+          schema: { type: string }
+      responses:
+        '200': { description: New access and refresh tokens }
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      security: [{ bearerAuth: [] }]
+      summary: Logout current or all sessions
+      responses:
+        '200': { description: Logout completed }
+  /api/v1/auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request password reset
+      responses:
+        '200': { description: Accepted }
+  /api/v1/auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Reset password by token
+      responses:
+        '200': { description: Password updated }
+  /api/v1/auth/2fa/setup:
+    post:
+      tags: [Auth]
+      security: [{ bearerAuth: [] }]
+      summary: Create TOTP setup secret
+      responses:
+        '200': { description: Secret and OTP Auth URL }
+  /api/v1/auth/2fa/verify:
+    post:
+      tags: [Auth]
+      security: [{ bearerAuth: [] }]
+      summary: Verify and enable TOTP
+      responses:
+        '200': { description: 2FA enabled }
+  /api/v1/users/me:
+    get:
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      summary: Get current profile and active identity layer settings
+      responses:
+        '200': { description: Profile response }
+    patch:
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      summary: Update current profile presentation
+      responses:
+        '200': { description: Updated profile }
+  /api/v1/users/me/privacy:
+    patch:
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      summary: Update visibility and identity-layer privacy settings
+      responses:
+        '200': { description: Updated profile and privacy }
+  /api/v1/sessions:
+    get:
+      tags: [Sessions]
+      security: [{ bearerAuth: [] }]
+      summary: List active sessions without leaking raw peer-visible network metadata
+      responses:
+        '200': { description: Session list }
+  /api/v1/sessions/others:
+    delete:
+      tags: [Sessions]
+      security: [{ bearerAuth: [] }]
+      summary: Revoke all sessions except current
+      responses:
+        '200': { description: Revoked }
+  /api/v1/sessions/{sessionId}:
+    delete:
+      tags: [Sessions]
+      security: [{ bearerAuth: [] }]
+      summary: Revoke one session
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Revoked }
+  /api/v1/security/audit-events:
+    get:
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      summary: List audit events
+      responses:
+        '200': { description: Audit events }
+  /api/v1/security/flags:
+    get:
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      summary: List suspicious activity flags
+      responses:
+        '200': { description: Security flags }
+  /api/v1/security/alerts:
+    get:
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      summary: List device alerts
+      responses:
+        '200': { description: Security alerts }
+  /api/v1/security/panic-mode:
+    post:
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      summary: Revoke sessions, grants, and pending uploads for sensitive account lockdown
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PanicModeRequest' }
+      responses:
+        '200': { description: Panic mode executed }
+  /api/v1/connections:
+    get:
+      tags: [Connections]
+      security: [{ bearerAuth: [] }]
+      summary: List connections, trust edges, and pending requests
+      responses:
+        '200': { description: Connections list }
+  /api/v1/connections/requests:
+    post:
+      tags: [Connections]
+      security: [{ bearerAuth: [] }]
+      summary: Create connection request
+      responses:
+        '201': { description: Created }
+  /api/v1/connections/{connectionId}/accept:
+    post:
+      tags: [Connections]
+      security: [{ bearerAuth: [] }]
+      summary: Accept connection request
+      parameters:
+        - in: path
+          name: connectionId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Accepted }
+  /api/v1/connections/{connectionId}/trusted-circle:
+    put:
+      tags: [Connections]
+      security: [{ bearerAuth: [] }]
+      summary: Toggle trusted circle membership inside the trust graph
+      parameters:
+        - in: path
+          name: connectionId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Updated }
+  /api/v1/connections/{connectionId}:
+    delete:
+      tags: [Connections]
+      security: [{ bearerAuth: [] }]
+      summary: Remove connection
+      parameters:
+        - in: path
+          name: connectionId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Removed }
+  /api/v1/posts/feed:
+    get:
+      tags: [Posts]
+      security: [{ bearerAuth: [] }]
+      summary: Identity-aware and trust-aware feed
+      responses:
+        '200': { description: Post feed }
+  /api/v1/posts:
+    post:
+      tags: [Posts]
+      security: [{ bearerAuth: [] }]
+      summary: Create post with controlled visibility and timed access semantics
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PostRequest' }
+      responses:
+        '201': { description: Created post }
+  /api/v1/posts/{postId}:
+    get:
+      tags: [Posts]
+      security: [{ bearerAuth: [] }]
+      summary: Get visible post
+      parameters:
+        - in: path
+          name: postId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Post }
+    patch:
+      tags: [Posts]
+      security: [{ bearerAuth: [] }]
+      summary: Update post
+      parameters:
+        - in: path
+          name: postId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PostRequest' }
+      responses:
+        '200': { description: Updated post }
+    delete:
+      tags: [Posts]
+      security: [{ bearerAuth: [] }]
+      summary: Soft-delete post
+      parameters:
+        - in: path
+          name: postId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Deleted }
+  /api/v1/chats:
+    get:
+      tags: [Chats]
+      security: [{ bearerAuth: [] }]
+      summary: List chats
+      responses:
+        '200': { description: Chat list }
+  /api/v1/chats/direct:
+    post:
+      tags: [Chats]
+      security: [{ bearerAuth: [] }]
+      summary: Create or reuse E2EE-friendly private dialog
+      responses:
+        '201': { description: Chat created or reused }
+  /api/v1/chats/{chatId}/messages:
+    get:
+      tags: [Chats]
+      security: [{ bearerAuth: [] }]
+      summary: List encrypted message envelopes
+      parameters:
+        - in: path
+          name: chatId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Message list }
+    post:
+      tags: [Chats]
+      security: [{ bearerAuth: [] }]
+      summary: Store encrypted message envelope without plaintext dependency
+      parameters:
+        - in: path
+          name: chatId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageRequest' }
+      responses:
+        '201': { description: Message stored }
+  /api/v1/trust-rooms:
+    get:
+      tags: [Trust Rooms]
+      security: [{ bearerAuth: [] }]
+      summary: List trust rooms available to the current identity/trust layer
+      responses:
+        '200': { description: Trust room list }
+    post:
+      tags: [Trust Rooms]
+      security: [{ bearerAuth: [] }]
+      summary: Create trust room with privacy-aware access policy
+      responses:
+        '201': { description: Trust room created }
+  /api/v1/trust-rooms/{roomId}/members:
+    post:
+      tags: [Trust Rooms]
+      security: [{ bearerAuth: [] }]
+      summary: Add or update member
+      parameters:
+        - in: path
+          name: roomId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Member updated }
+  /api/v1/media/upload-intents:
+    post:
+      tags: [Media / Video / File]
+      security: [{ bearerAuth: [] }]
+      summary: Legacy upload intent entrypoint for secure media flow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UploadIntentRequest' }
+      responses:
+        '201': { description: Upload intent created }
+  /api/v1/media/upload-sessions:
+    post:
+      tags: [Media / Video / File]
+      security: [{ bearerAuth: [] }]
+      summary: Initialize secure resumable upload session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UploadIntentRequest' }
+      responses:
+        '201': { description: Upload session initialized }
+  /api/v1/media/upload-sessions/{sessionId}:
+    get:
+      tags: [Media / Video / File]
+      security: [{ bearerAuth: [] }]
+      summary: Get multipart upload session state
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Upload session }
+  /api/v1/media/upload-sessions/{sessionId}/parts:
+    post:
+      tags: [Media / Video / File]
+      security: [{ bearerAuth: [] }]
+      summary: Request signed part grant for direct-to-storage upload
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Signed part request }
+  /api/v1/media/upload-sessions/{sessionId}/complete:
+    post:
+      tags: [Media / Video / File]
+      security: [{ bearerAuth: [] }]
+      summary: Complete upload and enqueue video/media processing pipeline
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompleteUploadRequest' }
+      responses:
+        '200': { description: Upload completed and queued }
+  /api/v1/media/upload-sessions/{sessionId}/abort:
+    post:
+      tags: [Media / Video / File]
+      security: [{ bearerAuth: [] }]
+      summary: Abort secure upload session
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Upload session aborted }
+  /api/v1/media/assets/{mediaId}:
+    get:
+      tags: [Media / Video / File]
+      security: [{ bearerAuth: [] }]
+      summary: Get secure media asset details with processed video and thumbnail metadata
+      parameters:
+        - in: path
+          name: mediaId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Media asset details }
+  /api/v1/media/assets/{mediaId}/playback-grants:
+    post:
+      tags: [Media / Video / File]
+      security: [{ bearerAuth: [] }]
+      summary: Issue short-lived playback access grant for protected media
+      parameters:
+        - in: path
+          name: mediaId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '201': { description: Playback grant issued }
+  /api/v1/media/{mediaId}/finalize:
+    post:
+      tags: [Media / Video / File]
+      security: [{ bearerAuth: [] }]
+      summary: Legacy finalize endpoint for uploaded asset
+      parameters:
+        - in: path
+          name: mediaId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Upload finalized }
+  /api/v1/media/{mediaId}/access:
+    get:
+      tags: [Media / Video / File]
+      security: [{ bearerAuth: [] }]
+      summary: Legacy signed access data endpoint
+      parameters:
+        - in: path
+          name: mediaId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Access data }
+  /api/v1/stories/feed:
+    get:
+      tags: [Stories]
+      security: [{ bearerAuth: [] }]
+      summary: List visible stories feed with privacy-aware opening order
+      responses:
+        '200': { description: Story feed }
+  /api/v1/stories:
+    post:
+      tags: [Stories]
+      security: [{ bearerAuth: [] }]
+      summary: Create timed story with controlled audience
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StoryRequest' }
+      responses:
+        '201': { description: Story created }
+  /api/v1/stories/{storyId}:
+    get:
+      tags: [Stories]
+      security: [{ bearerAuth: [] }]
+      summary: Get story and record privacy-aware view
+      parameters:
+        - in: path
+          name: storyId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Story response }
+  /api/v1/live-streams:
+    get:
+      tags: [Live]
+      security: [{ bearerAuth: [] }]
+      summary: List visible live experiences
+      responses:
+        '200': { description: Live list }
+    post:
+      tags: [Live]
+      security: [{ bearerAuth: [] }]
+      summary: Create live experience or schedule live room
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LiveStreamRequest' }
+      responses:
+        '201': { description: Live stream created }
+  /api/v1/live-streams/{streamId}:
+    get:
+      tags: [Live]
+      security: [{ bearerAuth: [] }]
+      summary: Get live room details and access posture
+      parameters:
+        - in: path
+          name: streamId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Live stream response }
+  /api/v1/live-streams/{streamId}/events:
+    get:
+      tags: [Live]
+      security: [{ bearerAuth: [] }]
+      summary: Read durable realtime events for one live stream using a sequence cursor
+      parameters:
+        - in: path
+          name: streamId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: after
+          required: false
+          schema: { type: integer, format: int64, minimum: 0 }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100 }
+      responses:
+        '200': { description: Live realtime events response }
+  /api/v1/battles:
+    get:
+      tags: [Battles]
+      security: [{ bearerAuth: [] }]
+      summary: List live challenge and duel objects visible to the current user
+      responses:
+        '200': { description: Battle list }
+    post:
+      tags: [Battles]
+      security: [{ bearerAuth: [] }]
+      summary: Create live battle or duel challenge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BattleRequest' }
+      responses:
+        '201': { description: Battle challenge created }
+  /api/v1/battles/{battleId}:
+    get:
+      tags: [Battles]
+      security: [{ bearerAuth: [] }]
+      summary: Get battle room details, score posture, and participation state
+      parameters:
+        - in: path
+          name: battleId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Battle response }
+  /api/v1/moderation/reports:
+    get:
+      tags: [Moderation]
+      security: [{ bearerAuth: [] }]
+      summary: List own moderation reports
+      responses:
+        '200': { description: Report list }
+    post:
+      tags: [Moderation]
+      security: [{ bearerAuth: [] }]
+      summary: Create moderation report
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportRequest' }
+      responses:
+        '201': { description: Report created }
+  /api/v1/admin/moderation/reports:
+    get:
+      tags: [Moderation]
+      security: [{ bearerAuth: [] }]
+      summary: List reports for moderators/admins
+      responses:
+        '200': { description: Moderation queue }
+  /api/v1/admin/moderation/reports/{reportId}/resolve:
+    post:
+      tags: [Moderation]
+      security: [{ bearerAuth: [] }]
+      summary: Resolve or dismiss report
+      parameters:
+        - in: path
+          name: reportId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Report resolved }

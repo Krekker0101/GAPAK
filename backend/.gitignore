@@ -1,0 +1,10 @@
+.env
+.DS_Store
+node_modules/
+generated/
+dist/
+coverage/
+bin/
+tmp/
+vendor/
+*.log

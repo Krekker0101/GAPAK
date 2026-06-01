@@ -1,0 +1,2 @@
+-- REMOVED: This file will be used only if you manually run the seed.
+-- See FIX_REPORT.md for instructions on creating test users.
