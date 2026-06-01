@@ -120,3 +120,11 @@ ations (если первый запуск)
 
 
 
+## 👨‍💻 About the Author
+
+**Abdulloh Ashurov**
+
+Experienced Go developer and software architect...
+- Expertise: Go, distributed systems, architecture, database design, microservices
+- Focus: Privacy, security, user-centric design
+- Contact: GitHub · LinkedIn · Email
