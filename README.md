@@ -4,13 +4,13 @@
 
 ### Вариант 1: PowerShell (РЕКОМЕНДУЕТСЯ)
 ```powershell
-cd d:\GO-Lessons\pro-go\Gapak
+cd /Gapak
 powershell -ExecutionPolicy Bypass -File .\start-gapak.ps1
 ```
 
 ### Вариант 2: Batch/CMD
 ```bash
-cd d:\GO-Lessons\pro-go\Gapak
+cd \Gapak
 start-gapak.bat
 ```
 
@@ -18,7 +18,7 @@ start-gapak.bat
 
 **Терминал 1 - Backend:**
 ```powershell
-cd d:\GO-Lessons\pro-go\Gapak\backend
+cd \backend
 $env:DATABASE_URL = "postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable"
 go mod tidy
 go run ./cmd/migrate/main.go
@@ -44,7 +44,7 @@ npm run dev
 ## 🛑 Остановка сервисов
 
 ```powershell
-cd d:\GO-Lessons\pro-go\Gapak
+cd \Gapak
 powershell -ExecutionPolicy Bypass -File .\stop-gapak.ps1
 ```
 
