@@ -55,8 +55,12 @@ The `.env` file has been updated with correct values. Verify it contains:
 
 **Critical Variables to Check:**
 ```
-# Database (MUST match docker-compose credentials)
-DATABASE_URL=postgresql://gapak:gapak@127.0.0.1:5432/gapak?sslmode=disable
+# Database (Cloud PostgreSQL - Prisma Data Proxy)
+DATABASE_URL=postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+
+# Previous configurations (for reference):
+# DATABASE_URL=postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable
+# DATABASE_URL=postgresql://gapak:gapak@127.0.0.1:5432/gapak?sslmode=disable
 
 # Secrets (ALL must be present and at least minimum length)
 JWT_ACCESS_SECRET=<minimum 32 characters>

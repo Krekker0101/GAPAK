@@ -89,10 +89,13 @@ if (Test-Path $envFile) {
     
     $content = Get-Content $envFile -Raw
     
-    if ($content -match "postgresql://gapak:gapak") {
-        Write-Host "   ✅ DATABASE_URL: Correct (gapak:gapak)" -ForegroundColor Green
+    # Check for cloud or local database configuration
+    if ($content -match "db\.prisma\.io" -or $content -match "postgresql://postgres:5433@127\.0\.0\.1:5432" -or $content -match "postgresql://gapak:gapak@postgres:5432") {
+        Write-Host "   ✅ DATABASE_URL: Correct (Cloud or Local PostgreSQL)" -ForegroundColor Green
     } else {
         Write-Host "   ❌ DATABASE_URL: Incorrect or missing" -ForegroundColor Red
+        Write-Host "      Expected: postgres://...@db.prisma.io:5432... (Cloud)" -ForegroundColor Yellow
+        Write-Host "      Or: postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable (Local)" -ForegroundColor Yellow
     }
     
     $jwtAccess = $content | Select-String "^JWT_ACCESS_SECRET=(.+)$" | ForEach-Object { $_.Matches.Groups[1].Value }

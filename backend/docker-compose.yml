@@ -73,7 +73,10 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
+      # Cloud PostgreSQL (Prisma Data Proxy)
+      # Previous: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
+      # Previous: postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable
+      DATABASE_URL: postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
       MIGRATIONS_DIR: db/migrations
     depends_on:
       postgres:
@@ -88,7 +91,9 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
+      # Cloud PostgreSQL (Prisma Data Proxy)
+      # Previous: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
+      DATABASE_URL: postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
       REDIS_URL: redis://redis:6379/5
       STORAGE_ENDPOINT: http://minio:9000
       STORAGE_ACCESS_KEY_ID: gapak
@@ -117,7 +122,9 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
+      # Cloud PostgreSQL (Prisma Data Proxy)
+      # Previous: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
+      DATABASE_URL: postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
       REDIS_URL: redis://redis:6379/5
       STORAGE_ENDPOINT: http://minio:9000
       STORAGE_ACCESS_KEY_ID: gapak
