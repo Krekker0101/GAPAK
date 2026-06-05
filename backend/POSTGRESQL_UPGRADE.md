@@ -11,7 +11,7 @@ Project migrations require JSONB for modern data types.
 The project is now configured to use **Prisma Data Proxy** (Cloud PostgreSQL):
 
 ```env
-DATABASE_URL=postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+DATABASE_URL=postgres://user:password@db.example.com:5432/postgres?sslmode=require
 ```
 
 **Advantages:**

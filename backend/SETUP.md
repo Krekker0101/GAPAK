@@ -56,7 +56,7 @@ The `.env` file has been updated with correct values. Verify it contains:
 **Critical Variables to Check:**
 ```
 # Database (Cloud PostgreSQL - Prisma Data Proxy)
-DATABASE_URL=postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+DATABASE_URL=postgres://user:password@db.example.com:5432/postgres?sslmode=require
 
 # Previous configurations (for reference):
 # DATABASE_URL=postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable

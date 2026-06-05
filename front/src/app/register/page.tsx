@@ -21,11 +21,6 @@ import { Switch } from "@/shared/ui/switch";
 
 type RegisterValues = z.infer<typeof registerSchema>;
 
-const oauthProviders = [
-  { name: "Apple", label: "Continue with Apple" },
-  { name: "Google", label: "Continue with Google" },
-  { name: "GitHub", label: "Continue with GitHub" },
-];
 
 export default function RegisterPage() {
   const { locale, t } = useI18n();
@@ -74,7 +69,7 @@ export default function RegisterPage() {
   return (
     <AuthShell
       title="Create account"
-      description="Launch a private identity with premium controls, fluid motion, and a polished first impression for your social workspace."
+      description="Choose a name, set a strong password, and decide whether this account should stay anonymous."
       aside={<LanguageSwitcher compact />}
       footer={
         <p>
@@ -99,8 +94,8 @@ export default function RegisterPage() {
         </FormField>
         <div className="flex items-center justify-between rounded-[1.5rem] border border-white/10 bg-white/[0.03] px-4 py-3 backdrop-blur-xl">
           <div>
-            <p className="text-sm font-medium">Prefer anonymous mode</p>
-            <p className="text-xs leading-6 text-muted-foreground">Register without relying on public email identity.</p>
+            <p className="text-sm font-medium">Anonymous account</p>
+            <p className="text-xs leading-6 text-muted-foreground">Hide email from signup and use a pseudonymous profile. Recovery may be limited.</p>
           </div>
           <Switch checked={form.watch("preferAnonymous")} onCheckedChange={(checked) => form.setValue("preferAnonymous", checked)} />
         </div>
@@ -110,21 +105,6 @@ export default function RegisterPage() {
         <Button className="w-full" size="lg" type="submit" disabled={form.formState.isSubmitting}>
           {form.formState.isSubmitting ? "Creating account..." : "Create account"}
         </Button>
-
-        <div className="space-y-3">
-          <div className="flex items-center gap-3 text-[11px] uppercase tracking-[0.24em] text-muted-foreground">
-            <span className="h-px flex-1 bg-white/10" />
-            <span>OAuth login</span>
-            <span className="h-px flex-1 bg-white/10" />
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {oauthProviders.map((provider) => (
-              <Button key={provider.name} type="button" variant="outline" className="w-full justify-center" disabled>
-                {provider.label}
-              </Button>
-            ))}
-          </div>
-        </div>
       </form>
     </AuthShell>
   );

@@ -1,7 +1,25 @@
 import { MessageAttachment } from "@/components/chat/message-attachment";
+import { formatRelativeTime, cn } from "@/shared/lib/utils";
 import type { MessageResponse } from "@/shared/types/chat";
-import { Card } from "@/shared/ui/card";
-import { formatDateTime } from "@/shared/lib/utils";
+import { Badge } from "@/shared/ui/badge";
+
+function messageLabel(message: MessageResponse, isMine: boolean) {
+  if (isMine) {
+    return "You";
+  }
+  return `Participant ${message.senderId.slice(0, 6)}`;
+}
+
+function messageBody(message: MessageResponse) {
+  const text = message.ciphertext.trim();
+  if (text) {
+    return text;
+  }
+  if (message.attachments && message.attachments.length > 0) {
+    return "Sent an attachment";
+  }
+  return "Message";
+}
 
 export function MessageThread({
   messages,
@@ -12,46 +30,41 @@ export function MessageThread({
 }) {
   return (
     <div className="space-y-3">
-      {messages.map((message) => (
-        <Card
-          key={message.id}
-          className={currentUserId === message.senderId ? "border-primary/20 bg-primary/[0.04] p-5" : "p-5"}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="font-display text-lg font-semibold">
-                {currentUserId === message.senderId ? "You" : "Participant"} · {message.envelopeType}
-              </p>
-              <p className="text-sm text-muted-foreground">Sender {message.senderId}</p>
-            </div>
-            <p className="text-xs text-muted-foreground">{formatDateTime(message.sentAt)}</p>
-          </div>
-          <div className="mt-4 grid gap-3 rounded-[1.25rem] border border-white/8 bg-black/20 p-4 text-sm">
-            <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Message payload</p>
-              <p className="mt-2 whitespace-pre-wrap break-words text-foreground/90">{message.ciphertext}</p>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div>
-                <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Nonce</p>
-                <p className="mt-2 break-all text-foreground/90">{message.nonce}</p>
+      {messages.map((message) => {
+        const isMine = currentUserId === message.senderId;
+        const attachments = message.attachments ?? [];
+        const hasAttachments = attachments.length > 0;
+
+        return (
+          <article key={message.id} className={cn("flex", isMine ? "justify-end" : "justify-start")}>
+            <div className={cn("max-w-[min(100%,44rem)]", isMine ? "items-end" : "items-start")}>
+              <div className={cn("mb-1 flex items-center gap-2 text-xs text-muted-foreground", isMine ? "justify-end" : "justify-start")}>
+                <span>{messageLabel(message, isMine)}</span>
+                <span>·</span>
+                <time dateTime={message.sentAt}>{formatRelativeTime(message.sentAt)}</time>
+                {message.envelopeType !== "TEXT" ? <Badge variant="trusted">{message.envelopeType.toLowerCase()}</Badge> : null}
               </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Sender key</p>
-                <p className="mt-2 break-all text-foreground/90">{message.senderKeyId}</p>
+              <div
+                className={cn(
+                  "rounded-[1.35rem] border px-4 py-3 text-sm leading-6 shadow-lg shadow-black/10",
+                  isMine
+                    ? "rounded-br-md border-primary/20 bg-primary text-primary-foreground"
+                    : "rounded-bl-md border-white/10 bg-white/[0.05] text-foreground",
+                )}
+              >
+                <p className="whitespace-pre-wrap break-words">{messageBody(message)}</p>
+                {hasAttachments ? (
+                  <div className="mt-3 space-y-2">
+                    {attachments.map((attachment) => (
+                      <MessageAttachment key={attachment.mediaFileId} attachment={attachment} />
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </div>
-            {message.attachments && message.attachments.length > 0 ? (
-              <div className="space-y-3">
-                <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Attachments</p>
-                {message.attachments.map((attachment) => (
-                  <MessageAttachment key={attachment.mediaFileId} attachment={attachment} />
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </Card>
-      ))}
+          </article>
+        );
+      })}
     </div>
   );
 }

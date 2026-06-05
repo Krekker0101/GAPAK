@@ -4,7 +4,7 @@
 Обновлена ссилка подключения к базе данных на облачное PostgreSQL соединение (Prisma Data Proxy):
 
 ```
-postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+postgres://user:password@db.example.com:5432/postgres?sslmode=require
 ```
 
 ### Параметры подключения:
@@ -31,7 +31,7 @@ postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_z
 # Database connection – Prisma Data Proxy (Cloud PostgreSQL)
 # Previous: postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable
 # Previous: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
-DATABASE_URL=postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+DATABASE_URL=postgres://user:password@db.example.com:5432/postgres?sslmode=require
 ```
 
 #### `.env.example` (backend/.env.example)
@@ -47,7 +47,7 @@ DATABASE_URL=postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247
 #
 # Docker Compose example:
 # DATABASE_URL=postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
-DATABASE_URL=postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+DATABASE_URL=postgres://user:password@db.example.com:5432/postgres?sslmode=require
 ```
 
 ### 2. **Docker конфигурация**
@@ -60,21 +60,21 @@ DATABASE_URL=postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247
 # Cloud PostgreSQL (Prisma Data Proxy)
 # Previous: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
 # Previous: postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable
-DATABASE_URL: postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+DATABASE_URL: postgres://user:password@db.example.com:5432/postgres?sslmode=require
 ```
 
 **b) Сервис api (строка 92-93)**
 ```yaml
 # Cloud PostgreSQL (Prisma Data Proxy)
 # Previous: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
-DATABASE_URL: postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+DATABASE_URL: postgres://user:password@db.example.com:5432/postgres?sslmode=require
 ```
 
 **c) Сервис worker (строка 122-123)**
 ```yaml
 # Cloud PostgreSQL (Prisma Data Proxy)
 # Previous: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
-DATABASE_URL: postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+DATABASE_URL: postgres://user:password@db.example.com:5432/postgres?sslmode=require
 ```
 
 ### 3. **Документация**
@@ -84,7 +84,7 @@ DATABASE_URL: postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef124
 - Добавлены оба варианта: облако (текущий) и локально
 ```env
 # Cloud PostgreSQL (Prisma Data Proxy)
-DATABASE_URL=postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+DATABASE_URL=postgres://user:password@db.example.com:5432/postgres?sslmode=require
 
 # Or local PostgreSQL 16
 DATABASE_URL=postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable
@@ -95,7 +95,7 @@ DATABASE_URL=postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable
 - Указано текущее решение: облачное подключение
 ```env
 # Database (Cloud PostgreSQL - Prisma Data Proxy)
-DATABASE_URL=postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+DATABASE_URL=postgres://user:password@db.example.com:5432/postgres?sslmode=require
 
 # Previous configurations (for reference):
 # DATABASE_URL=postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable
@@ -165,7 +165,7 @@ cd D:\GO-Lessons\pro-go\Gapak\backend
 grep "DATABASE_URL" backend\.env
 
 # Ожидаемый результат:
-# DATABASE_URL=postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+# DATABASE_URL=postgres://user:password@db.example.com:5432/postgres?sslmode=require
 ```
 
 ### 3. Тест подключения
@@ -184,7 +184,7 @@ go run ./cmd/api
 
 ### Шаг 1: Убедитесь, что `.env` содержит облачное подключение
 ```env
-DATABASE_URL=postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+DATABASE_URL=postgres://user:password@db.example.com:5432/postgres?sslmode=require
 ```
 
 ### Шаг 2: Запустите миграции
