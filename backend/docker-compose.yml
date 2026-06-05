@@ -73,10 +73,7 @@ services:
     env_file:
       - .env
     environment:
-      # Cloud PostgreSQL (Prisma Data Proxy)
-      # Previous: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
-      # Previous: postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable
-      DATABASE_URL: postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+      DATABASE_URL: ${DATABASE_URL:-postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable}
       MIGRATIONS_DIR: db/migrations
     depends_on:
       postgres:
@@ -91,15 +88,13 @@ services:
     env_file:
       - .env
     environment:
-      # Cloud PostgreSQL (Prisma Data Proxy)
-      # Previous: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
-      DATABASE_URL: postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+      DATABASE_URL: ${DATABASE_URL:-postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable}
       REDIS_URL: redis://redis:6379/5
       STORAGE_ENDPOINT: http://minio:9000
       STORAGE_ACCESS_KEY_ID: gapak
       STORAGE_SECRET_ACCESS_KEY: gapak-secret
       STORAGE_BUCKET: gapak-private
-      STORAGE_SIGNING_SECRET: change-me-storage-signing-secret
+      STORAGE_SIGNING_SECRET: ${STORAGE_SIGNING_SECRET:-local-storage-signing-secret-change-me}
     ports:
       - "8080:8080"
     depends_on:
@@ -122,15 +117,13 @@ services:
     env_file:
       - .env
     environment:
-      # Cloud PostgreSQL (Prisma Data Proxy)
-      # Previous: postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable
-      DATABASE_URL: postgres://af38a65d8907ceaa55f2684a59e98269f14a6329dea2b3752fef1247f234aa6a:sk_zsDXsG7i2-7zMEMmZ-bvb@db.prisma.io:5432/postgres?sslmode=require
+      DATABASE_URL: ${DATABASE_URL:-postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable}
       REDIS_URL: redis://redis:6379/5
       STORAGE_ENDPOINT: http://minio:9000
       STORAGE_ACCESS_KEY_ID: gapak
       STORAGE_SECRET_ACCESS_KEY: gapak-secret
       STORAGE_BUCKET: gapak-private
-      STORAGE_SIGNING_SECRET: change-me-storage-signing-secret
+      STORAGE_SIGNING_SECRET: ${STORAGE_SIGNING_SECRET:-local-storage-signing-secret-change-me}
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { AppSidebar } from "@/components/layout/app-sidebar";
+import { AppMobileNav, AppSidebar } from "@/components/layout/app-sidebar";
 import { AppTopbar } from "@/components/layout/app-topbar";
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -15,8 +15,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         <AppSidebar />
         <div className="flex min-h-[calc(100vh-2rem)] flex-1 flex-col gap-4">
           <AppTopbar />
-          <main className="flex-1">{children}</main>
+          <main className="flex-1 pb-24 lg:pb-0">{children}</main>
         </div>
+        <AppMobileNav />
       </div>
     </div>
   );

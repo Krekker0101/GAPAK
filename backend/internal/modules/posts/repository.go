@@ -157,14 +157,43 @@ func (r *Repository) GetVisiblePost(ctx context.Context, viewerID, postID string
 		        ))
 		  )
 		LIMIT 1`
-	post, err := scanPost(r.db.QueryRow(ctx, query, viewerID, postID))
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	post, err := scanPost(tx.QueryRow(ctx, query, viewerID, postID))
 	if err != nil {
 		return nil, err
 	}
 	if post.Privacy == enums.PostPrivacyOneTime && viewerID != post.AuthorID {
-		_, _ = r.db.Exec(ctx, `UPDATE post_audience_grants SET used_views = used_views + 1 WHERE post_id = $1 AND subject_user_id = $2`, postID, viewerID)
+		if err := r.consumeOneTimeAudienceGrant(ctx, tx, postID, viewerID); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return post, nil
+}
+
+func (r *Repository) consumeOneTimeAudienceGrant(ctx context.Context, tx pgx.Tx, postID, viewerID string) error {
+	commandTag, err := tx.Exec(ctx, `
+		UPDATE post_audience_grants
+		SET used_views = used_views + 1
+		WHERE post_id = $1
+		  AND subject_user_id = $2
+		  AND (expires_at IS NULL OR expires_at > NOW())
+		  AND (max_views IS NULL OR used_views < max_views)
+	`, postID, viewerID)
+	if err != nil {
+		return err
+	}
+	if commandTag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
 }
 
 func (r *Repository) Feed(ctx context.Context, viewerID string, page, limit int, contentType string) ([]model.Post, error) {

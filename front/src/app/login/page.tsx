@@ -15,6 +15,7 @@ import { getDeviceFingerprint, getDeviceName } from "@/shared/lib/device";
 import { localizePath, stripLocaleFromPath } from "@/shared/i18n/config";
 import { LocaleLink } from "@/shared/i18n/locale-link";
 import { useI18n } from "@/shared/i18n/provider";
+import { ApiError } from "@/shared/types/api";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
@@ -28,11 +29,6 @@ function safeNextPath(rawNext: string | null) {
   return rawNext;
 }
 
-const oauthProviders = [
-  { name: "Apple", label: "Continue with Apple" },
-  { name: "Google", label: "Continue with Google" },
-  { name: "GitHub", label: "Continue with GitHub" },
-];
 
 export default function LoginPage() {
   const { locale, t } = useI18n();
@@ -41,6 +37,7 @@ export default function LoginPage() {
   const next = safeNextPath(searchParams.get("next"));
   const login = useAuthStore((state) => state.login);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [twoFactorRequired, setTwoFactorRequired] = useState(false);
 
   const form = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
@@ -58,12 +55,17 @@ export default function LoginPage() {
       await login({
         login: values.login,
         password: values.password,
-        totpCode: values.totpCode || undefined,
+        totpCode: twoFactorRequired ? values.totpCode : undefined,
         deviceName: getDeviceName(),
         deviceFingerprint: await getDeviceFingerprint(),
       });
       router.replace(localizePath(stripLocaleFromPath(next), locale));
     } catch (error) {
+      if (error instanceof ApiError && error.code === "auth.two_factor_required") {
+        setTwoFactorRequired(true);
+        form.setFocus("totpCode");
+        return;
+      }
       setSubmitError(error instanceof Error ? error.message : t("auth.unableSignIn"));
     }
   });
@@ -71,7 +73,7 @@ export default function LoginPage() {
   return (
     <AuthShell
       title="Sign in"
-      description="Enter your secure workspace with a cinematic, glass-first entry point built for premium social UX."
+      description="Welcome back. Use your username or email to continue."
       aside={<LanguageSwitcher compact />}
       footer={
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -91,35 +93,17 @@ export default function LoginPage() {
         <FormField label="Password" error={form.formState.errors.password?.message}>
           <Input type="password" placeholder="Minimum 12 characters" {...form.register("password")} />
         </FormField>
-        <FormField label="TOTP code" hint="Use this field when the account requires 2FA." error={form.formState.errors.totpCode?.message}>
-          <Input placeholder="123456" inputMode="numeric" {...form.register("totpCode")} />
-        </FormField>
+        {twoFactorRequired ? (
+          <FormField label="Two-factor code" hint="Enter the 6-digit code from your authenticator app." error={form.formState.errors.totpCode?.message}>
+            <Input placeholder="123456" inputMode="numeric" autoComplete="one-time-code" {...form.register("totpCode")} />
+          </FormField>
+        ) : null}
 
         {submitError ? <p className="text-sm text-red-300">{submitError}</p> : null}
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Button className="w-full" size="lg" type="submit" disabled={form.formState.isSubmitting}>
-            {form.formState.isSubmitting ? "Signing in..." : "Sign in"}
-          </Button>
-          <Button asChild className="w-full" size="lg" variant="outline">
-            <LocaleLink href="/verify-2fa">2FA verify</LocaleLink>
-          </Button>
-        </div>
-
-        <div className="space-y-3">
-          <div className="flex items-center gap-3 text-[11px] uppercase tracking-[0.24em] text-muted-foreground">
-            <span className="h-px flex-1 bg-white/10" />
-            <span>OAuth login</span>
-            <span className="h-px flex-1 bg-white/10" />
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {oauthProviders.map((provider) => (
-              <Button key={provider.name} type="button" variant="outline" className="w-full justify-center" disabled>
-                {provider.label}
-              </Button>
-            ))}
-          </div>
-        </div>
+        <Button className="w-full" size="lg" type="submit" disabled={form.formState.isSubmitting}>
+          {form.formState.isSubmitting ? "Signing in..." : twoFactorRequired ? "Verify and sign in" : "Sign in"}
+        </Button>
       </form>
     </AuthShell>
   );

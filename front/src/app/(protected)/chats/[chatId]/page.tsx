@@ -231,7 +231,7 @@ export default function ChatDetailsPage() {
       const response = await chatService.sendMessage(chatId, {
         clientMessageId: createClientMessageId(),
         envelopeType,
-        ciphertext: body || `Attachment: ${selectedFile?.name ?? "file"}`,
+        ciphertext: body || "",
         nonce: createNonce(),
         senderKeyId: "gapak-web",
         attachmentManifest,
@@ -273,9 +273,9 @@ export default function ChatDetailsPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        eyebrow="Secure thread"
-        title={`Dialog ${chatId.slice(0, 8)}`}
-        description="Messages load from persisted history, new deliveries arrive through durable chat events, and presence is refreshed continuously."
+        eyebrow="Messages"
+        title="Private chat"
+        description="Send messages and attachments in one clean conversation."
         actions={
           participantPresence.length > 0 ? (
             <div className="flex flex-wrap gap-2">
@@ -292,7 +292,7 @@ export default function ChatDetailsPage() {
                           : "default"
                   }
                 >
-                  {presence.userId.slice(0, 6)} · {toSentenceCase(presence.state)}
+                  {toSentenceCase(presence.state)}
                 </Badge>
               ))}
             </div>
@@ -300,10 +300,10 @@ export default function ChatDetailsPage() {
         }
       />
 
-      <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-        <div>
+      <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
+        <div className="min-h-[55vh] rounded-[2rem] border border-white/8 bg-black/10 p-4">
           {messages.length === 0 ? (
-            <EmptyState title="No messages yet" description="Send the first message or attachment to initialize the thread." />
+            <EmptyState title="No messages yet" description="Write the first message to start this chat." />
           ) : (
             <MessageThread currentUserId={authUser?.id} messages={messages} />
           )}
@@ -313,9 +313,9 @@ export default function ChatDetailsPage() {
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs uppercase tracking-[0.28em] text-primary">Composer</p>
-              <h2 className="mt-4 font-display text-3xl font-semibold">Send a private message</h2>
+              <h2 className="mt-4 font-display text-3xl font-semibold">New message</h2>
               <p className="mt-3 text-sm leading-7 text-muted-foreground">
-                Files upload through the shared media API, messages persist immediately, and the active thread refreshes through event polling after reconnects.
+                Write a note or attach a file. Technical delivery details stay out of the conversation.
               </p>
             </div>
             <Button type="button" variant="outline" onClick={() => void reload()}>
@@ -326,7 +326,7 @@ export default function ChatDetailsPage() {
 
           <form className="mt-6 space-y-4" onSubmit={onSubmit}>
             <FormField label="Message">
-              <Textarea rows={7} placeholder="Write something private..." {...form.register("body")} />
+              <Textarea rows={5} placeholder="Write a message..." {...form.register("body")} />
             </FormField>
             <FormField label="Attachment">
               <div className="space-y-3">
