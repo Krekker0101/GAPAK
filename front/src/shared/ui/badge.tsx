@@ -10,7 +10,7 @@ const badgeVariants = cva(
       variant: {
         default: "bg-white/[0.05] text-foreground",
         primary: "bg-primary/12 text-primary",
-        trusted: "bg-amber-300/10 text-amber-200",
+        trusted: "bg-violet-300/10 text-violet-200",
         success: "bg-emerald-400/10 text-emerald-300",
         danger: "bg-red-400/10 text-red-300",
       },

@@ -1,29 +1,47 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Bookmark, Clapperboard, Eye, Heart, Lock, MessageCircle, Repeat2, SendHorizonal, Timer, UsersRound } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Heart, MessageCircle, Repeat2, SendHorizonal } from "lucide-react";
 
 import { AdaptiveVideoPlayer } from "@/components/feed/adaptive-video-player";
 import { useActivityStore } from "@/shared/lib/activity-store";
-import { formatDateTime, formatRelativeTime } from "@/shared/lib/utils";
+import { formatRelativeTime } from "@/shared/lib/utils";
 import type { PostResponse } from "@/shared/types/post";
-import { Badge } from "@/shared/ui/badge";
+import { Avatar, AvatarFallback } from "@/shared/ui/avatar";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 
-const privacyMeta: Record<PostResponse["privacy"], { label: string; variant: "default" | "primary" | "trusted" | "danger" }> = {
-  PUBLIC: { label: "Public", variant: "default" },
-  FRIENDS: { label: "Friends", variant: "primary" },
-  TRUSTED_CIRCLE: { label: "Trusted Circle", variant: "trusted" },
-  PRIVATE: { label: "Private", variant: "danger" },
-  ONE_TIME: { label: "One-Time", variant: "trusted" },
-  TIMED: { label: "Timed", variant: "primary" },
+const authors = [
+  { name: "Mira Chen", username: "@mira" },
+  { name: "Alex Morgan", username: "@alex" },
+  { name: "Noah Kim", username: "@noah" },
+  { name: "Sofia Ray", username: "@sofia" },
+];
+
+function getAuthor(authorId: string) {
+  const index = Math.abs(
+    authorId.split("").reduce((total, char) => total + char.charCodeAt(0), 0),
+  ) % authors.length;
+
+  return authors[index];
+}
+
+function initials(name: string) {
+  return name
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+type PostCardProps = {
+  post: PostResponse;
+  mode?: "feed" | "clip";
 };
 
-export function PostCard({ post }: { post: PostResponse }) {
-  const meta = privacyMeta[post.privacy];
-  const { likedPostIds, savedPostIds, repostedPostIds, commentsByPostId, toggleLike, toggleSave, toggleRepost, addComment, markViewed } =
-    useActivityStore();
+export function PostCard({ post, mode = "feed" }: PostCardProps) {
+  const { likedPostIds, repostedPostIds, commentsByPostId, toggleLike, toggleRepost, addComment, markViewed } = useActivityStore();
   const [draft, setDraft] = useState("");
   const [showComments, setShowComments] = useState(false);
 
@@ -31,8 +49,8 @@ export function PostCard({ post }: { post: PostResponse }) {
     markViewed(post.id);
   }, [markViewed, post.id]);
 
+  const author = useMemo(() => getAuthor(post.authorId), [post.authorId]);
   const liked = likedPostIds.includes(post.id);
-  const saved = savedPostIds.includes(post.id);
   const reposted = repostedPostIds.includes(post.id);
   const comments = commentsByPostId[post.id] ?? [];
 
@@ -47,85 +65,127 @@ export function PostCard({ post }: { post: PostResponse }) {
     setShowComments(true);
   };
 
-  return (
-    <Card className="space-y-5 p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            {post.contentType === "CLIP" ? (
-              <Badge variant="primary" className="gap-1">
-                <Clapperboard className="h-3.5 w-3.5" />
-                Клипс
-              </Badge>
-            ) : null}
-            <Badge variant={meta.variant}>{meta.label}</Badge>
-            {post.oneTimeViewLimit ? (
-              <Badge variant="default" className="gap-1">
-                <Eye className="h-3.5 w-3.5" />
-                {post.oneTimeViewLimit} views
-              </Badge>
-            ) : null}
-            {post.expiresAt ? (
-              <Badge variant="default" className="gap-1">
-                <Timer className="h-3.5 w-3.5" />
-                Expires {formatRelativeTime(post.expiresAt)}
-              </Badge>
-            ) : null}
-            {liked ? <Badge variant="primary">Liked</Badge> : null}
-            {saved ? <Badge variant="trusted">Saved</Badge> : null}
-            {reposted ? <Badge variant="default">Reposted</Badge> : null}
+  if (mode === "clip") {
+    return (
+      <Card className="group relative mx-auto w-full max-w-[420px] overflow-hidden p-3 transition-transform duration-500 hover:-translate-y-1">
+        <div className="relative overflow-hidden rounded-[1.65rem] bg-black">
+          {post.mediaFileIds?.[0] ? (
+            <AdaptiveVideoPlayer mediaId={post.mediaFileIds[0]} />
+          ) : (
+            <div className="aspect-[9/16] bg-[radial-gradient(circle_at_30%_20%,rgba(138,125,255,0.22),transparent_28%),linear-gradient(180deg,#111827,#030712)]" />
+          )}
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent" />
+          <div className="absolute inset-x-0 bottom-0 p-5">
+            <div className="flex items-end justify-between gap-4">
+              <div className="min-w-0 space-y-3">
+                <div className="flex items-center gap-3">
+                  <Avatar className="h-10 w-10 rounded-full border border-white/20">
+                    <AvatarFallback className="rounded-full bg-white/15 text-xs text-white">{initials(author.name)}</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-white">{author.name}</p>
+                    <p className="text-xs text-white/60">{formatRelativeTime(post.publishedAt)}</p>
+                  </div>
+                </div>
+                <p className="line-clamp-2 text-sm leading-6 text-white/90">{post.body}</p>
+              </div>
+              <div className="flex shrink-0 flex-col gap-3">
+                <button
+                  type="button"
+                  aria-label="Like clip"
+                  onClick={() => toggleLike(post.id)}
+                  className="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-xl transition hover:bg-white/15"
+                >
+                  <Heart className={`h-5 w-5 ${liked ? "fill-white" : ""}`} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Comment clip"
+                  onClick={() => setShowComments((current) => !current)}
+                  className="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-xl transition hover:bg-white/15"
+                >
+                  <MessageCircle className="h-5 w-5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Repost clip"
+                  onClick={() => toggleRepost(post.id)}
+                  className="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-xl transition hover:bg-white/15"
+                >
+                  <Repeat2 className={`h-5 w-5 ${reposted ? "text-cyan-200" : ""}`} />
+                </button>
+              </div>
+            </div>
           </div>
-          <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Author {post.authorId}</p>
         </div>
-        <p className="text-sm text-muted-foreground">{formatRelativeTime(post.publishedAt)}</p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="space-y-5 p-5 sm:p-6">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <Avatar className="h-11 w-11 rounded-full border border-white/10">
+            <AvatarFallback className="rounded-full bg-white/10 text-xs text-white">{initials(author.name)}</AvatarFallback>
+          </Avatar>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <p className="truncate text-sm font-semibold text-foreground">{author.name}</p>
+              <span className="h-1 w-1 rounded-full bg-muted-foreground/50" />
+              <p className="text-xs text-muted-foreground">{author.username}</p>
+            </div>
+            <p className="text-xs text-muted-foreground">{formatRelativeTime(post.publishedAt)}</p>
+          </div>
+        </div>
       </div>
+
       {post.contentType === "CLIP" && post.mediaFileIds?.[0] ? (
-        <div className="mx-auto w-full max-w-sm">
+        <div className="mx-auto w-full max-w-sm overflow-hidden rounded-[1.75rem]">
           <AdaptiveVideoPlayer mediaId={post.mediaFileIds[0]} />
         </div>
       ) : null}
-      <p className="text-sm leading-8 text-foreground/95">{post.body}</p>
-      <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-        <span className="inline-flex items-center gap-2">
-          <Lock className="h-4 w-4 text-primary" />
-          Published {formatDateTime(post.publishedAt)}
-        </span>
-        <span className="inline-flex items-center gap-2">
-          <UsersRound className="h-4 w-4 text-primary" />
-          Audience IDs {post.audienceUserIds?.length ?? 0}
-        </span>
-      </div>
 
-      <div className="flex flex-wrap items-center gap-3 border-t border-white/8 pt-4">
-        <Button type="button" size="sm" variant={liked ? "secondary" : "outline"} onClick={() => toggleLike(post.id)}>
-          <Heart className={`h-4 w-4 ${liked ? "fill-current text-rose-300" : ""}`} />
-          {liked ? "Liked" : "Like"}
-        </Button>
-        <Button type="button" size="sm" variant={saved ? "secondary" : "outline"} onClick={() => toggleSave(post.id)}>
-          <Bookmark className={`h-4 w-4 ${saved ? "fill-current text-cyan-200" : ""}`} />
-          {saved ? "Saved" : "Save"}
-        </Button>
-        <Button type="button" size="sm" variant={reposted ? "secondary" : "outline"} onClick={() => toggleRepost(post.id)}>
-          <Repeat2 className="h-4 w-4" />
-          {reposted ? "Reposted" : "Repost"}
-        </Button>
-        <Button type="button" size="sm" variant={showComments ? "secondary" : "outline"} onClick={() => setShowComments((current) => !current)}>
+      <p className="whitespace-pre-line text-[15px] leading-7 text-foreground/92">{post.body}</p>
+
+      <div className="flex items-center gap-1 border-t border-white/8 pt-3 text-muted-foreground">
+        <button
+          type="button"
+          onClick={() => toggleLike(post.id)}
+          className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm transition hover:bg-white/[0.06] hover:text-foreground"
+        >
+          <Heart className={`h-4 w-4 ${liked ? "fill-rose-300 text-rose-300" : ""}`} />
+          {liked ? "Нравится" : "Лайк"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowComments((current) => !current)}
+          className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm transition hover:bg-white/[0.06] hover:text-foreground"
+        >
           <MessageCircle className="h-4 w-4" />
-          {showComments ? "Hide comments" : `Comments ${comments.length}`}
-        </Button>
+          {comments.length}
+        </button>
+        <button
+          type="button"
+          onClick={() => toggleRepost(post.id)}
+          className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm transition hover:bg-white/[0.06] hover:text-foreground"
+        >
+          <Repeat2 className={`h-4 w-4 ${reposted ? "text-cyan-200" : ""}`} />
+          Репост
+        </button>
       </div>
 
       {showComments ? (
-        <div className="rounded-[1.2rem] border border-white/8 bg-white/[0.02] p-4">
+        <div className="rounded-[1.25rem] border border-white/8 bg-white/[0.025] p-4">
           <div className="space-y-3">
             {comments.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No comments yet. Add the first one to keep the thread alive.</p>
+              <p className="text-sm text-muted-foreground">Пока нет комментариев.</p>
             ) : (
               comments
                 .slice()
                 .reverse()
                 .map((comment) => (
-                  <div key={comment.id} className="rounded-[1rem] border border-white/8 bg-black/10 px-3 py-2">
+                  <div key={comment.id} className="rounded-[1rem] bg-white/[0.04] px-3 py-2">
                     <p className="text-sm text-foreground">{comment.text}</p>
                   </div>
                 ))
@@ -136,12 +196,11 @@ export function PostCard({ post }: { post: PostResponse }) {
             <input
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="Add a private comment"
+              placeholder="Комментарий"
               className="w-full rounded-full border border-white/10 bg-black/20 px-4 py-2 text-sm text-foreground outline-none transition focus:border-primary/50"
             />
-            <Button type="submit" size="sm">
+            <Button type="submit" size="sm" variant="outline" aria-label="Send comment">
               <SendHorizonal className="h-4 w-4" />
-              Send
             </Button>
           </form>
         </div>

@@ -1,35 +1,76 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, CirclePlus, Clapperboard, ShieldCheck, Sparkles } from "lucide-react";
+import { CirclePlus, Clapperboard, Sparkles } from "lucide-react";
 
 import { EmptyState } from "@/components/common/empty-state";
-import { MetricCard } from "@/components/common/metric-card";
-import { PageHeader } from "@/components/common/page-header";
 import { StateCard } from "@/components/common/state-card";
 import { PostCard } from "@/components/feed/post-card";
-import { useAsyncResource } from "@/shared/lib/hooks/use-async-resource";
 import { postService } from "@/shared/api/services/post.service";
-import { securityService } from "@/shared/api/services/security.service";
-import { userService } from "@/shared/api/services/user.service";
+import { useAsyncResource } from "@/shared/lib/hooks/use-async-resource";
+import { Avatar, AvatarFallback } from "@/shared/ui/avatar";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 
+const recommendedPeople = [
+  { name: "Lina Park", username: "@lina", followers: "48.2K" },
+  { name: "Marco Silva", username: "@marco", followers: "31.7K" },
+  { name: "Ada Weiss", username: "@ada", followers: "19.4K" },
+  { name: "Kenji Ito", username: "@kenji", followers: "12.8K" },
+];
+
+function initials(name: string) {
+  return name
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+function Recommendations() {
+  return (
+    <Card className="sticky top-4 p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="font-display text-lg font-semibold">Рекомендуемые</h2>
+        <Sparkles className="h-4 w-4 text-primary" />
+      </div>
+      <div className="mt-5 space-y-4">
+        {recommendedPeople.map((person) => (
+          <div key={person.username} className="flex items-center gap-3">
+            <Avatar className="h-11 w-11 rounded-full border border-white/10">
+              <AvatarFallback className="rounded-full bg-[linear-gradient(135deg,rgba(138,125,255,0.35),rgba(103,232,249,0.18))] text-xs text-white">
+                {initials(person.name)}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-foreground">{person.name}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {person.username} · {person.followers}
+              </p>
+            </div>
+            <Button size="sm" variant="outline" className="h-8 px-3">
+              Подписаться
+            </Button>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 export default function FeedPage() {
-  const { data, isLoading, isError, error, reload } = useAsyncResource(async () => {
-    const [profile, posts, flags] = await Promise.all([userService.getMe(), postService.getFeed({ page: 1, limit: 20 }), securityService.getFlags()]);
-    return { profile, posts, flags };
-  }, []);
+  const { data, isLoading, isError, error, reload } = useAsyncResource(() => postService.getFeed({ page: 1, limit: 20 }), []);
 
   if (isError) {
     return (
       <StateCard
-        title="Unable to load the feed"
-        description={error?.message ?? "The feed request failed."}
+        title="Лента недоступна"
+        description={error?.message ?? "Не удалось загрузить публикации."}
         variant="error"
         action={
           <Button onClick={() => void reload()} variant="outline">
-            Retry
+            Повторить
           </Button>
         }
       />
@@ -37,127 +78,76 @@ export default function FeedPage() {
   }
 
   if (isLoading || !data) {
-    return <StateCard title="Loading your feed" description="Restoring identity-aware posts and the current privacy posture." />;
+    return <StateCard title="Загружаем ленту" description="Собираем свежие публикации." />;
   }
 
   return (
-    <div className="space-y-4">
-      <PageHeader
-        eyebrow="Главная"
-        title="Живое пространство, где контент ощущается как премиум-событие"
-        description="Минимум текста, максимум визуального восприятия и ощущение, что ты открыл новый уровень социальной сети."
-        actions={
-          <Button asChild>
-            <Link href="/posts/new">
-              <CirclePlus className="h-4 w-4" />
-              Создать
-            </Link>
-          </Button>
-        }
-      />
+    <div className="space-y-5">
+      <section className="relative overflow-hidden rounded-[2.25rem] border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025))] p-6 shadow-[0_28px_80px_rgba(0,0,0,0.42)] backdrop-blur-2xl sm:p-8 lg:p-10">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(138,125,255,0.18),transparent_28%),radial-gradient(circle_at_88%_20%,rgba(103,232,249,0.12),transparent_24%)]" />
+        <div className="relative grid gap-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-center">
+          <div className="max-w-3xl space-y-5">
+            <p className="text-xs uppercase tracking-[0.28em] text-primary/90">GAPAK</p>
+            <h1 className="font-display text-4xl font-semibold leading-[1.05] tracking-[-0.04em] text-white sm:text-5xl lg:text-6xl">
+              Контролируй свою цифровую жизнь
+            </h1>
+            <p className="max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
+              Приватность, контент и общение без компромиссов.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <Button asChild size="lg">
+                <Link href="/posts/new">
+                  <CirclePlus className="h-4 w-4" />
+                  Начать
+                </Link>
+              </Button>
+              <Button asChild size="lg" variant="outline">
+                <Link href="/clips">
+                  <Clapperboard className="h-4 w-4" />
+                  Клипсы
+                </Link>
+              </Button>
+            </div>
+          </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.45fr_0.55fr]">
-        <div className="space-y-4">
-          <Card className="relative overflow-hidden p-6">
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(102,244,255,0.16),_transparent_30%),radial-gradient(circle_at_bottom_right,_rgba(255,178,244,0.14),_transparent_30%)]" />
-            <div className="relative grid gap-5 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
-              <div className="space-y-4">
-                <p className="text-[11px] uppercase tracking-[0.28em] text-primary">Быстрый старт</p>
-                <h2 className="font-display text-3xl font-semibold">Кино-поток вместо скучной ленты.</h2>
-                <p className="max-w-2xl text-sm leading-7 text-muted-foreground">
-                  Создавайте посты и клипсы в одной визуальной системе: мягкие панели, живые обводки, приглушённые световые акценты.
-                </p>
-                <div className="flex flex-wrap gap-3">
-                  <Button asChild variant="outline">
-                    <Link href="/posts/new">
-                      <CirclePlus className="h-4 w-4" />
-                      Публикация
-                    </Link>
-                  </Button>
-                  <Button asChild variant="outline">
-                    <Link href="/clips">
-                      <Clapperboard className="h-4 w-4" />
-                      Смотреть клипсы
-                    </Link>
-                  </Button>
-                </div>
-              </div>
-              <div className="rounded-[1.5rem] border border-white/8 bg-white/[0.03] p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground">Live deck</span>
-                  <Sparkles className="h-4 w-4 text-primary" />
-                </div>
-                <div className="mt-4 space-y-3">
-                  <div className="rounded-[1.2rem] bg-gradient-to-br from-cyan-300/20 via-transparent to-fuchsia-300/15 p-4">
-                    <p className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground">Visual mood</p>
-                    <p className="mt-2 font-display text-lg font-semibold">Cinematic feed</p>
-                  </div>
-                  <div className="rounded-[1.2rem] border border-white/8 p-4">
-                    <p className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground">Signals</p>
-                    <p className="mt-2 text-sm text-muted-foreground">{data.flags.length} активных сигналов безопасности</p>
-                  </div>
+          <div className="relative hidden min-h-[260px] overflow-hidden rounded-[2rem] border border-white/10 bg-black/30 p-5 lg:block">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_35%_20%,rgba(255,255,255,0.16),transparent_16%),linear-gradient(160deg,rgba(138,125,255,0.3),rgba(8,12,20,0.85)_48%,rgba(103,232,249,0.16))]" />
+            <div className="relative flex h-full flex-col justify-between">
+              <div className="ml-auto h-16 w-16 rounded-full border border-white/15 bg-white/10 backdrop-blur-xl" />
+              <div className="space-y-3">
+                <div className="h-3 w-28 rounded-full bg-white/35" />
+                <div className="h-3 w-44 rounded-full bg-white/18" />
+                <div className="flex gap-2 pt-2">
+                  <span className="h-9 w-9 rounded-full bg-white/20" />
+                  <span className="h-9 w-9 rounded-full bg-white/12" />
+                  <span className="h-9 w-9 rounded-full bg-white/12" />
                 </div>
               </div>
             </div>
-          </Card>
+          </div>
+        </div>
+      </section>
 
-          {data.posts.length === 0 ? (
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="space-y-4">
+          {data.length === 0 ? (
             <EmptyState
-              title="Пока ничего нет"
-              description="Создайте первую публикацию или клипс, чтобы оживить ленту."
+              title="Пока пусто"
+              description="Создайте первую публикацию."
               action={
                 <Button asChild>
-                  <Link href="/posts/new">Создать первую публикацию</Link>
+                  <Link href="/posts/new">Создать</Link>
                 </Button>
               }
             />
           ) : (
-            <div className="space-y-4">
-              {data.posts.map((post) => (
-                <PostCard key={post.id} post={post} />
-              ))}
-            </div>
+            data.map((post) => <PostCard key={post.id} post={post} />)
           )}
         </div>
 
-        <div className="space-y-4">
-          <div className="grid gap-4">
-            <MetricCard
-              label="Приватность"
-              value={data.profile.privacy.postDefaultPrivacy}
-              detail="Ваш стандартный режим видимости для новых публикаций."
-              icon={<ShieldCheck className="h-5 w-5 text-primary" />}
-            />
-            <MetricCard
-              label="Сигналы риска"
-              value={String(data.flags.length)}
-              detail="Безопасность рядом с лентой, чтобы важное не терялось."
-              icon={<AlertTriangle className="h-5 w-5 text-amber-200" />}
-            />
-          </div>
-
-          <Card className="p-6">
-            <p className="text-[11px] uppercase tracking-[0.24em] text-primary">Кто что видит</p>
-            <h3 className="mt-4 font-display text-2xl font-semibold">Профиль и приватность</h3>
-            <div className="mt-5 grid gap-3 text-sm text-muted-foreground">
-              <div className="rounded-[1.25rem] border border-white/8 bg-white/[0.03] p-4">
-                <p className="font-medium text-foreground">Видимость профиля</p>
-                <p className="mt-1">{data.profile.privacy.profileVisibility}</p>
-              </div>
-              <div className="rounded-[1.25rem] border border-white/8 bg-white/[0.03] p-4">
-                <p className="font-medium text-foreground">Последний онлайн</p>
-                <p className="mt-1">{data.profile.privacy.lastSeenVisibility}</p>
-              </div>
-              <div className="rounded-[1.25rem] border border-white/8 bg-white/[0.03] p-4">
-                <p className="font-medium text-foreground">Онлайн-статус</p>
-                <p className="mt-1">{data.profile.privacy.showOnlineStatus ? "Виден разрешенным людям" : "Скрыт"}</p>
-              </div>
-            </div>
-            <Button asChild variant="outline" className="mt-5 w-full">
-              <Link href="/settings/privacy">Настроить приватность</Link>
-            </Button>
-          </Card>
-        </div>
+        <aside className="hidden xl:block">
+          <Recommendations />
+        </aside>
       </div>
     </div>
   );
