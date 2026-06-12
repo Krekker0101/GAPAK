@@ -22,6 +22,35 @@ export type PostResponse = {
   oneTimeViewLimit?: number | null;
   audienceUserIds?: string[];
   mediaFileIds?: string[];
+  mediaFileIDs?: string[];
+  likeCount?: number;
+  commentCount?: number;
+  isLiked?: boolean;
   publishedAt: string;
   editedAt?: string | null;
+};
+
+
+export type CreateCommentRequest = {
+  content: string;
+  parentCommentId?: string | null;
+};
+
+export type CommentResponse = {
+  id: string;
+  postId: string;
+  authorId: string;
+  parentCommentId?: string | null;
+  content: string;
+  likeCount: number;
+  replyCount: number;
+  isLiked: boolean;
+  replies?: CommentResponse[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type LikesListResponse = {
+  userId: string;
+  username: string;
 };
