@@ -1,25 +1,25 @@
 "use client";
 
-import type { ComponentType } from "react";
+import { useState, type ComponentType } from "react";
 import { usePathname } from "next/navigation";
 import {
+  Bell,
+  Bookmark,
   CirclePlus,
-  Clapperboard,
+  ChevronLeft,
+  ChevronRight,
+  FolderKanban,
   Home,
-  LayoutDashboard,
-  Lock,
   MessageSquare,
-  Monitor,
+  Search,
+  Settings,
   ShieldCheck,
-  Sparkles,
   UserRound,
   Users,
 } from "lucide-react";
 
-import { useAuthStore } from "@/features/auth/store/auth-store";
 import { LocaleLink } from "@/shared/i18n/locale-link";
 import { stripLocaleFromPath } from "@/shared/i18n/config";
-import { useI18n } from "@/shared/i18n/provider";
 import { cn } from "@/shared/lib/utils";
 
 type NavigationItem = {
@@ -28,102 +28,89 @@ type NavigationItem = {
   icon: ComponentType<{ className?: string }>;
 };
 
-const adminRoles = new Set(["ADMIN", "MODERATOR", "SECURITY_ANALYST"]);
-
 function useCleanPathname() {
   const pathname = usePathname();
   return stripLocaleFromPath(pathname);
 }
 
 function isActivePath(pathname: string, href: string) {
-  return pathname === href || pathname.startsWith(`${href}/`);
+  return pathname === href || (href !== "/feed" && pathname.startsWith(`${href}/`));
 }
 
-function NavSection({ title, items }: { title: string; items: NavigationItem[] }) {
+function NavItem({ item, collapsed }: { item: NavigationItem; collapsed: boolean }) {
   const cleanPathname = useCleanPathname();
+  const active = isActivePath(cleanPathname, item.href);
 
   return (
-    <div className="space-y-2">
-      <p className="px-3 text-[11px] uppercase tracking-[0.3em] text-muted-foreground">{title}</p>
-      <div className="space-y-2">
-        {items.map((item) => {
-          const active = isActivePath(cleanPathname, item.href);
-          return (
-            <LocaleLink
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "group relative flex items-center gap-3 overflow-hidden rounded-[1.4rem] px-3 py-3 text-sm transition duration-300",
-                active ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground",
-              )}
-            >
-              <span
-                className={cn(
-                  "absolute inset-y-0 left-0 w-1 rounded-r-full transition-all",
-                  active ? "bg-primary" : "bg-transparent group-hover:bg-primary/40",
-                )}
-              />
-              <item.icon className="relative h-4 w-4" />
-              <span className="relative">{item.label}</span>
-            </LocaleLink>
-          );
-        })}
-      </div>
-    </div>
+    <LocaleLink
+      href={item.href}
+      title={collapsed ? item.label : undefined}
+      className={cn(
+        "group relative flex items-center gap-3 overflow-hidden rounded-[1.35rem] px-3 py-3 text-sm transition duration-300",
+        collapsed && "justify-center",
+        active ? "bg-primary/15 text-primary shadow-[inset_0_0_0_1px_rgba(102,244,255,0.16)]" : "text-muted-foreground hover:bg-white/[0.055] hover:text-foreground",
+      )}
+    >
+      <span className={cn("absolute inset-y-2 left-0 w-1 rounded-r-full transition-all", active ? "bg-primary" : "bg-transparent group-hover:bg-primary/40")} />
+      <item.icon className="relative h-5 w-5 shrink-0" />
+      <span className={cn("relative truncate transition", collapsed && "sr-only")}>{item.label}</span>
+    </LocaleLink>
   );
 }
 
 export function AppSidebar() {
-  const { t } = useI18n();
-  const userRole = useAuthStore((state) => state.user?.role);
-  const canSeeAdmin = Boolean(userRole && adminRoles.has(userRole));
-  const primaryNavigation: NavigationItem[] = [
-    { href: "/feed", label: t("nav.feed"), icon: LayoutDashboard },
-    { href: "/clips", label: t("nav.clips"), icon: Clapperboard },
-    { href: "/chats", label: t("nav.chats"), icon: MessageSquare },
-    { href: "/rooms", label: t("nav.rooms"), icon: Users },
-    { href: "/profile", label: t("nav.profile"), icon: UserRound },
-    { href: "/posts/new", label: t("nav.createPost"), icon: CirclePlus },
-  ];
-  const settingsNavigation: NavigationItem[] = [
-    { href: "/settings/privacy", label: t("nav.privacy"), icon: Lock },
-    { href: "/settings/security", label: t("nav.security"), icon: ShieldCheck },
-    { href: "/settings/sessions", label: t("nav.sessions"), icon: Monitor },
-  ];
-  const adminNavigation: NavigationItem[] = [
-    { href: "/admin", label: t("nav.dashboard"), icon: LayoutDashboard },
-    { href: "/admin/builder", label: t("nav.builder"), icon: Sparkles },
+  const [collapsed, setCollapsed] = useState(false);
+  const navigation: NavigationItem[] = [
+    { href: "/feed", label: "Главная", icon: Home },
+    { href: "/feed", label: "Поиск", icon: Search },
+    { href: "/chats", label: "Чаты", icon: MessageSquare },
+    { href: "/settings/security", label: "Уведомления", icon: Bell },
+    { href: "/profile", label: "Профиль", icon: UserRound },
+    { href: "/rooms", label: "Мои группы", icon: Users },
+    { href: "/admin/builder", label: "Мои проекты", icon: FolderKanban },
+    { href: "/rooms", label: "Друзья", icon: Users },
+    { href: "/profile", label: "Закладки", icon: Bookmark },
+    { href: "/settings/privacy", label: "Настройки", icon: Settings },
   ];
 
   return (
-    <aside className="glass-panel hidden h-[calc(100vh-2rem)] w-[280px] shrink-0 rounded-[2rem] p-5 lg:flex lg:flex-col">
-      <div className="mb-8 flex items-center gap-3">
-        <div className="flex h-12 w-12 items-center justify-center rounded-[1.1rem] bg-primary/15 font-display text-lg font-semibold text-primary shadow-glow">
+    <aside className={cn("glass-panel sticky top-4 hidden h-[calc(100vh-2rem)] shrink-0 rounded-[2rem] p-4 transition-all duration-300 lg:flex lg:flex-col", collapsed ? "w-[92px]" : "w-[280px]") }>
+      <div className={cn("mb-7 flex items-center gap-3", collapsed && "justify-center")}>
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.1rem] bg-[linear-gradient(135deg,rgba(102,244,255,0.22),rgba(138,125,255,0.24))] font-display text-lg font-semibold text-primary shadow-glow">
           G
         </div>
-        <div>
+        <div className={cn("min-w-0 transition", collapsed && "sr-only")}>
           <p className="font-display text-lg font-semibold">Gapak</p>
-          <p className="text-sm text-muted-foreground">Private social app</p>
+          <p className="truncate text-sm text-muted-foreground">Premium social</p>
         </div>
       </div>
-      <div className="flex-1 space-y-6 overflow-y-auto pr-1">
-        <NavSection title={t("nav.workspace")} items={primaryNavigation} />
-        <NavSection title={t("nav.protection")} items={settingsNavigation} />
-        {canSeeAdmin ? <NavSection title={t("nav.administration")} items={adminNavigation} /> : null}
+
+      <div className="flex-1 space-y-2 overflow-y-auto pr-1">
+        {navigation.map((item) => <NavItem key={`${item.label}-${item.href}`} item={item} collapsed={collapsed} />)}
+      </div>
+
+      <div className="mt-4 space-y-2">
+        <LocaleLink href="/settings/security" className={cn("flex items-center gap-3 rounded-[1.35rem] border border-emerald-300/15 bg-emerald-300/10 px-3 py-3 text-sm text-emerald-100 transition hover:bg-emerald-300/15", collapsed && "justify-center")}>
+          <ShieldCheck className="h-5 w-5" />
+          <span className={cn(collapsed && "sr-only")}>Защита активна</span>
+        </LocaleLink>
+        <button type="button" onClick={() => setCollapsed((current) => !current)} className="flex w-full items-center justify-center gap-2 rounded-[1.35rem] border border-white/10 bg-white/[0.04] px-3 py-3 text-sm text-muted-foreground transition hover:bg-white/[0.07] hover:text-foreground" aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}>
+          {collapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
+          <span className={cn(collapsed && "sr-only")}>Свернуть</span>
+        </button>
       </div>
     </aside>
   );
 }
 
 export function AppMobileNav() {
-  const { t } = useI18n();
   const cleanPathname = useCleanPathname();
   const items: NavigationItem[] = [
-    { href: "/feed", label: t("nav.feed"), icon: Home },
-    { href: "/chats", label: t("nav.chats"), icon: MessageSquare },
-    { href: "/posts/new", label: t("nav.createPost"), icon: CirclePlus },
-    { href: "/rooms", label: t("nav.rooms"), icon: Users },
-    { href: "/profile", label: t("nav.profile"), icon: UserRound },
+    { href: "/feed", label: "Главная", icon: Home },
+    { href: "/chats", label: "Чаты", icon: MessageSquare },
+    { href: "/posts/new", label: "Создать", icon: CirclePlus },
+    { href: "/rooms", label: "Группы", icon: Users },
+    { href: "/profile", label: "Профиль", icon: UserRound },
   ];
 
   return (
@@ -132,15 +119,7 @@ export function AppMobileNav() {
         {items.map((item) => {
           const active = isActivePath(cleanPathname, item.href);
           return (
-            <LocaleLink
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "flex min-h-12 flex-col items-center justify-center gap-1 rounded-[1.1rem] px-1 text-[10px] font-medium transition",
-                active ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground",
-              )}
-              aria-label={item.label}
-            >
+            <LocaleLink key={item.href} href={item.href} className={cn("flex min-h-12 flex-col items-center justify-center gap-1 rounded-[1.1rem] px-1 text-[10px] font-medium transition", active ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground")} aria-label={item.label}>
               <item.icon className="h-4 w-4" />
               <span className="max-w-full truncate">{item.label}</span>
             </LocaleLink>
