@@ -142,7 +142,7 @@ func Load() (Config, error) {
 			Name:        getEnv("APP_NAME", "Gapak API"),
 			Environment: getEnv("APP_ENV", "development"),
 			BaseURL:     getEnv("APP_BASE_URL", "http://localhost:8080"),
-			CORSOrigins: getEnvSlice("CORS_ORIGINS", []string{"http://localhost:3000"}),
+			CORSOrigins: getEnvSlice("CORS_ORIGINS", []string{"http://localhost:3000", "http://localhost:3002", "https://gapak-backend.vercel.app"}),
 		},
 		HTTP: HTTPConfig{
 			Host:         getEnv("APP_HOST", "0.0.0.0"),
