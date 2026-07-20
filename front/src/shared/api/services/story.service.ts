@@ -34,4 +34,17 @@ export const storyService = {
       body: payload,
     });
   },
+  delete(storyId: string) {
+    return apiClient<AcceptedResponse>({
+      path: `/stories/${storyId}`,
+      method: "DELETE",
+    });
+  },
+  highlight(storyId: string, title: string) {
+    return apiClient<AcceptedResponse>({
+      path: `/stories/${storyId}/highlight`,
+      method: "POST",
+      body: { title },
+    });
+  },
 };

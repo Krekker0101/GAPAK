@@ -1,6 +1,7 @@
 import type { PostPrivacy } from "@/shared/types/user";
 
 export type StoryReactionType = "LIKE" | "FIRE" | "SUPPORT";
+export type StoryMediaType = "IMAGE" | "VIDEO" | "TEXT";
 
 export type CreateStoryRequest = {
   mediaFileId: string;
@@ -34,6 +35,9 @@ export type StoryResponse = {
   viewerCount: number;
   expiresAt: string;
   publishedAt: string;
+  // Enhanced fields
+  isViewed?: boolean;
+  myReaction?: StoryReactionType | null;
 };
 
 export type StoryViewerResponse = {
@@ -41,4 +45,10 @@ export type StoryViewerResponse = {
   reactionType?: StoryReactionType | null;
   viewedAt: string;
   reactedAt?: string | null;
+};
+
+export type StoryViewerCountResponse = {
+  userId: string;
+  displayName: string;
+  reaction?: StoryReactionType | null;
 };

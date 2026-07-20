@@ -46,6 +46,15 @@ export function toSentenceCase(value: string) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+export function initials(value: string) {
+  return value
+    .split(" ")
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+}
+
 export function buildQueryString(query?: Record<string, string | number | boolean | undefined | null>) {
   if (!query) {
     return "";

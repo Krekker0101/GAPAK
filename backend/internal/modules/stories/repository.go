@@ -263,6 +263,21 @@ func (r *Repository) ListViewers(ctx context.Context, authorID, storyID string) 
 	return items, rows.Err()
 }
 
+func (r *Repository) Delete(ctx context.Context, authorID, storyID string) error {
+	const query = `
+		UPDATE stories
+		SET deleted_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL`
+	tag, err := r.db.Exec(ctx, query, storyID, authorID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
 func (r *Repository) replaceAudience(ctx context.Context, tx pgx.Tx, storyID string, audience []string, privacy enums.PostPrivacy, expiresAt time.Time) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM story_audience_grants WHERE story_id = $1`, storyID); err != nil {
 		return err

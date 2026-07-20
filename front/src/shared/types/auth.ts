@@ -6,6 +6,8 @@ export type AuthUser = {
   role: string;
   isAnonymous: boolean;
   twoFactorEnabled: boolean;
+  // legacy/backwards-compatible
+  login?: string;
 };
 
 export type AuthSession = {

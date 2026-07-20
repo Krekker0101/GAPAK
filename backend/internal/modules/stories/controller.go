@@ -25,6 +25,7 @@ func (ctl *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Han
 	group.Post("/", ctl.create)
 	group.Post("/:storyId/reactions", ctl.react)
 	group.Post("/:storyId/highlight", ctl.highlight)
+	group.Delete("/:storyId", ctl.delete)
 }
 
 func (ctl *Controller) feed(c *fiber.Ctx) error {
@@ -107,6 +108,19 @@ func (ctl *Controller) highlight(c *fiber.Ctx) error {
 	}
 	claims := middleware.ClaimsFromContext(c)
 	response, err := ctl.service.Highlight(c.UserContext(), claims.UserID, storyID, payload)
+	if err != nil {
+		return err
+	}
+	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+}
+
+func (ctl *Controller) delete(c *fiber.Ctx) error {
+	storyID, err := httpx.UUIDParam(c, "storyId")
+	if err != nil {
+		return err
+	}
+	claims := middleware.ClaimsFromContext(c)
+	response, err := ctl.service.Delete(c.UserContext(), claims.UserID, storyID)
 	if err != nil {
 		return err
 	}

@@ -114,7 +114,7 @@ if (($dbExists | Out-String).Trim() -ne "1") {
 $env:DATABASE_URL = "postgresql://gapak@127.0.0.1:$PostgresPort/gapak?sslmode=disable"
 $env:APP_PORT = "$ApiPort"
 $env:GAPAK_BACKEND_URL = "http://127.0.0.1:$ApiPort"
-$env:NEXT_PUBLIC_API_BASE_URL = "/api/v1"
+$env:VITE_PUBLIC_API_BASE_URL = "/api/v1"
 
 Write-Host "Running backend migrations"
 Push-Location $backend
@@ -154,7 +154,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $front "node_modules"))) {
 }
 
 if (-not (Test-PortListening $FrontendPort)) {
-    Write-Host "Starting Next.js frontend on port $FrontendPort"
+    Write-Host "Starting frontend (Vite) on port $FrontendPort"
     $frontStdout = Join-Path $logs "front-$timestamp.out.log"
     $frontStderr = Join-Path $logs "front-$timestamp.err.log"
     $frontProcess = Start-Process `

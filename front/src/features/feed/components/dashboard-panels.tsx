@@ -1,12 +1,17 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Bell, Bot, ChevronRight, ShieldAlert, ShieldCheck, Sparkles, Verified, WandSparkles } from "lucide-react";
 
 import { calculateTrustScore, initials, shortId } from "@/features/feed/lib/home-dashboard";
 import type { HomeDashboardViewModel } from "@/features/feed/types/home-dashboard";
-import { formatRelativeTime } from "@/shared/lib/utils";
+import type { ProfileVisibility } from "@/shared/types/user";
+import { userService } from "@/shared/api/services/user.service";
+import { cn, formatRelativeTime } from "@/shared/lib/utils";
 import { Avatar, AvatarFallback } from "@/shared/ui/avatar";
+import { Badge } from "@/shared/ui/badge";
+import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 
 export function MiniProfile({ dashboard }: { dashboard: HomeDashboardViewModel }) {
@@ -28,11 +33,11 @@ export function MiniProfile({ dashboard }: { dashboard: HomeDashboardViewModel }
         </div>
       </div>
       <div className="mt-5 grid grid-cols-2 gap-3">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+        <div className="rounded-2xl border border-white/8 bg-background/35 p-3">
           <p className="text-xs text-muted-foreground">Trust Score</p>
           <p className="mt-1 text-2xl font-semibold text-primary">{score}</p>
         </div>
-        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+        <div className="rounded-2xl border border-white/8 bg-background/35 p-3">
           <p className="text-xs text-muted-foreground">Репутация</p>
           <p className="mt-1 text-2xl font-semibold">{dashboard.connections.filter((item) => item.status === "ACCEPTED").length}</p>
         </div>
@@ -54,19 +59,19 @@ export function ActivityPanel({ dashboard }: { dashboard: HomeDashboardViewModel
         <Bell className="h-5 w-5 text-primary" />
       </div>
       <div className="mt-4 grid gap-2">
-        <div className="flex items-center justify-between rounded-2xl bg-white/[0.035] p-3 text-sm">
+        <div className="flex items-center justify-between rounded-2xl bg-background/35 p-3 text-sm">
           <span>Новые сообщения</span>
           <span>{latestChat ? formatRelativeTime(latestChat.lastMessageAt ?? latestChat.createdAt) : "0"}</span>
         </div>
-        <div className="flex items-center justify-between rounded-2xl bg-white/[0.035] p-3 text-sm">
+        <div className="flex items-center justify-between rounded-2xl bg-background/35 p-3 text-sm">
           <span>Заявки</span>
           <span>{pendingConnections}</span>
         </div>
-        <div className="flex items-center justify-between rounded-2xl bg-white/[0.035] p-3 text-sm">
+        <div className="flex items-center justify-between rounded-2xl bg-background/35 p-3 text-sm">
           <span>Реакции</span>
           <span>{reactions}</span>
         </div>
-        <div className="flex items-center justify-between rounded-2xl bg-white/[0.035] p-3 text-sm">
+        <div className="flex items-center justify-between rounded-2xl bg-background/35 p-3 text-sm">
           <span>Просмотры историй</span>
           <span>{views}</span>
         </div>
@@ -104,7 +109,7 @@ export function SecurityPanel({ dashboard }: { dashboard: HomeDashboardViewModel
         </div>
       </div>
       {dashboard.auditEvents[0] ? (
-        <p className="mt-4 rounded-2xl border border-white/10 bg-white/[0.035] p-3 text-xs text-muted-foreground">
+        <p className="mt-4 rounded-2xl border border-white/8 bg-background/35 p-3 text-xs text-muted-foreground">
           Последний аудит: {dashboard.auditEvents[0].action} · {formatRelativeTime(dashboard.auditEvents[0].createdAt)}
         </p>
       ) : null}
@@ -127,19 +132,19 @@ export function RecommendationsPanel({ dashboard }: { dashboard: HomeDashboardVi
       <div className="mt-4 space-y-4">
         <section>
           <p className="mb-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">Люди</p>
-          {people.length ? people.map((item) => <p key={item.id} className="rounded-2xl bg-white/[0.035] p-3 text-sm">Связь {shortId(item.id)} · {item.status}</p>) : <p className="text-sm text-muted-foreground">Backend не вернул новых людей.</p>}
+          {people.length ? people.map((item) => <p key={item.id} className="rounded-2xl bg-background/35 p-3 text-sm">Связь {shortId(item.id)} · {item.status}</p>) : <p className="text-sm text-muted-foreground">Backend не вернул новых людей.</p>}
         </section>
         <section>
           <p className="mb-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">Сообщества</p>
-          {rooms.length ? rooms.map((room) => <Link key={room.id} href="/rooms" className="mb-2 flex items-center justify-between rounded-2xl bg-white/[0.035] p-3 text-sm transition hover:bg-white/[0.06]"><span>{room.name}</span><ChevronRight className="h-4 w-4" /></Link>) : <p className="text-sm text-muted-foreground">Backend не вернул комнаты.</p>}
+          {rooms.length ? rooms.map((room) => <Link key={room.id} href={`/rooms/${room.id}`} className="mb-2 flex items-center justify-between rounded-2xl bg-background/35 p-3 text-sm transition hover:bg-background/50"><span>{room.name}</span><ChevronRight className="h-4 w-4" /></Link>) : <p className="text-sm text-muted-foreground">Backend не вернул комнаты.</p>}
         </section>
         <section>
           <p className="mb-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">События</p>
-          {events.length ? events.map((event) => <p key={event.id} className="rounded-2xl bg-white/[0.035] p-3 text-sm">{event.action} · {formatRelativeTime(event.createdAt)}</p>) : <p className="text-sm text-muted-foreground">Backend не вернул событий.</p>}
+          {events.length ? events.map((event) => <p key={event.id} className="rounded-2xl bg-background/35 p-3 text-sm">{event.action} · {formatRelativeTime(event.createdAt)}</p>) : <p className="text-sm text-muted-foreground">Backend не вернул событий.</p>}
         </section>
         <section>
           <p className="mb-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">Проекты</p>
-          {projects.length ? projects.map((post) => <p key={post.id} className="rounded-2xl bg-white/[0.035] p-3 text-sm">Пост {shortId(post.id)} · {post.privacy}</p>) : <p className="text-sm text-muted-foreground">Backend не вернул временные проекты.</p>}
+          {projects.length ? projects.map((post) => <p key={post.id} className="rounded-2xl bg-background/35 p-3 text-sm">Пост {shortId(post.id)} · {post.privacy}</p>) : <p className="text-sm text-muted-foreground">Backend не вернул временные проекты.</p>}
         </section>
       </div>
     </Card>
@@ -162,9 +167,108 @@ export function AssistantWidget({ dashboard }: { dashboard: HomeDashboardViewMod
         </div>
       </div>
       <div className="relative mt-4 space-y-2 text-sm text-muted-foreground">
-        <p className="rounded-2xl bg-white/[0.04] p-3">Профиль: Trust Score {score}. {dashboard.profile.twoFactorEnabled ? "Защита выглядит устойчиво." : "Включите 2FA для усиления профиля."}</p>
-        <Link href="/rooms" className="flex items-center justify-between rounded-2xl bg-white/[0.04] p-3 transition hover:bg-white/[0.06]"><span>Подобрать сообщества</span><WandSparkles className="h-4 w-4" /></Link>
-        <Link href="/posts/new" className="flex items-center justify-between rounded-2xl bg-white/[0.04] p-3 transition hover:bg-white/[0.06]"><span>Сгенерировать пост</span><WandSparkles className="h-4 w-4" /></Link>
+        <p className="rounded-2xl bg-background/35 p-3">Профиль: Trust Score {score}. {dashboard.profile.twoFactorEnabled ? "Защита выглядит устойчиво." : "Включите 2FA для усиления профиля."}</p>
+        <Link href="/rooms" className="flex items-center justify-between rounded-2xl bg-background/35 p-3 transition hover:bg-background/50"><span>Подобрать сообщества</span><WandSparkles className="h-4 w-4" /></Link>
+        <Link href="/posts/new" className="flex items-center justify-between rounded-2xl bg-background/35 p-3 transition hover:bg-background/50"><span>Сгенерировать пост</span><WandSparkles className="h-4 w-4" /></Link>
+      </div>
+    </Card>
+  );
+}
+
+
+
+export function AccessControlPanel({ dashboard }: { dashboard: HomeDashboardViewModel }) {
+  const [visibility, setVisibility] = useState<ProfileVisibility>(dashboard.profile.privacy.profileVisibility);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setVisibility(dashboard.profile.privacy.profileVisibility);
+  }, [dashboard.profile.privacy.profileVisibility]);
+
+  const updateVisibility = async (nextVisibility: ProfileVisibility) => {
+    if (saving || nextVisibility === visibility) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await userService.updatePrivacy({
+        ...dashboard.profile.privacy,
+        profileVisibility: nextVisibility,
+      });
+      setVisibility(nextVisibility);
+    } catch {
+      // Keep the current visibility if the backend rejects the update.
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const options: Array<{ value: ProfileVisibility; label: string; detail: string }> = [
+    { value: "PUBLIC", label: "Public", detail: "Visible to everyone" },
+    { value: "CONNECTIONS", label: "Connections", detail: "Visible to your connections" },
+    { value: "TRUSTED_ONLY", label: "Trusted", detail: "Visible to trusted circle" },
+    { value: "PRIVATE", label: "Private", detail: "Visible only to you" },
+  ];
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="font-display text-lg font-semibold">Timed access</h3>
+          <p className="text-xs text-muted-foreground">Profile access is controlled through live API settings.</p>
+        </div>
+        <Badge variant="primary">Live API</Badge>
+      </div>
+
+      <div className="mt-4 grid gap-2">
+        <div className="rounded-2xl bg-background/35 p-3 text-sm">
+          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Current profile access</p>
+          <p className="mt-1 font-medium">{visibility.replace(/_/g, " ")}</p>
+        </div>
+        <div className="rounded-2xl bg-background/35 p-3 text-sm">
+          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Default post privacy</p>
+          <p className="mt-1 font-medium">{dashboard.profile.privacy.postDefaultPrivacy.replace(/_/g, " ")}</p>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-2">
+        {options.map((option) => {
+          const active = option.value === visibility;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => void updateVisibility(option.value)}
+              disabled={saving}
+              className={cn(
+                "flex items-start justify-between gap-3 rounded-2xl border px-3 py-3 text-left text-sm transition",
+                active
+                  ? "border-primary/40 bg-primary/10 text-foreground"
+                  : "border-white/8 bg-background/30 text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <span>
+                <span className="block font-medium">{option.label}</span>
+                <span className="mt-1 block text-xs leading-5 text-muted-foreground">{option.detail}</span>
+              </span>
+              {active ? <Badge variant="primary">Active</Badge> : null}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-white/8 bg-background/30 p-3 text-xs leading-6 text-muted-foreground">
+        Need a timed post or room? Create it from the composer or the temporary room widget and the backend will handle expiry.
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button asChild variant="outline" size="sm">
+          <Link href="/posts/new">New timed post</Link>
+        </Button>
+        <Button asChild variant="ghost" size="sm">
+          <Link href="/settings/privacy">Privacy settings</Link>
+        </Button>
       </div>
     </Card>
   );
@@ -177,6 +281,7 @@ export function DashboardAside({ dashboard }: { dashboard: HomeDashboardViewMode
         <MiniProfile dashboard={dashboard} />
         <ActivityPanel dashboard={dashboard} />
         <SecurityPanel dashboard={dashboard} />
+        <AccessControlPanel dashboard={dashboard} />
         <RecommendationsPanel dashboard={dashboard} />
         <AssistantWidget dashboard={dashboard} />
       </div>

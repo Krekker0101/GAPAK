@@ -1,0 +1,966 @@
+syntax = "proto3";
+
+package messaging.v1;
+
+option go_package = "github.com/gapak/backend/api/protobuf/messaging/v1;messagingv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+// ============================================
+// Common Types
+// ============================================
+
+message Empty {}
+
+message Error {
+  string code = 1;
+  string message = 2;
+  repeated string details = 3;
+}
+
+message Pagination {
+  int32 page = 1;
+  int32 limit = 2;
+  string cursor = 3;
+}
+
+message UserReference {
+  string user_id = 1;
+  string username = 2;
+  string display_name = 3;
+}
+
+// ============================================
+// Message Service
+// ============================================
+
+message SendMessageRequest {
+  string chat_id = 1;
+  string sender_id = 2;
+  string client_message_id = 3; // For deduplication
+  bytes ciphertext = 4;
+  string nonce = 5;
+  string sender_key_id = 6;
+  repeated MessageAttachment attachments = 7;
+  map<string, string> metadata = 8;
+  int64 ttl_seconds = 9; // Time-to-live for ephemeral messages
+}
+
+message SendMessageResponse {
+  string message_id = 1;
+  google.protobuf.Timestamp sent_at = 2;
+  int64 sequence_number = 3;
+}
+
+message GetMessageRequest {
+  string message_id = 1;
+}
+
+message GetMessageResponse {
+  Message message = 1;
+}
+
+message GetMessagesRequest {
+  string chat_id = 1;
+  Pagination pagination = 2;
+  google.protobuf.Timestamp since = 3;
+  google.protobuf.Timestamp before = 4;
+  int64 limit = 5;
+}
+
+message GetMessagesResponse {
+  repeated Message messages = 1;
+  string next_cursor = 2;
+  bool has_more = 3;
+}
+
+message EditMessageRequest {
+  string message_id = 1;
+  bytes new_ciphertext = 2;
+  string new_nonce = 3;
+  map<string, string> updated_metadata = 4;
+}
+
+message EditMessageResponse {
+  string message_id = 1;
+  google.protobuf.Timestamp edited_at = 2;
+}
+
+message DeleteMessageRequest {
+  string message_id = 1;
+  bool delete_for_everyone = 2;
+}
+
+message DeleteMessageResponse {
+  string message_id = 1;
+  google.protobuf.Timestamp deleted_at = 2;
+}
+
+message SearchMessagesRequest {
+  string query = 1;
+  repeated string chat_ids = 2;
+  google.protobuf.Timestamp from = 3;
+  google.protobuf.Timestamp to = 4;
+  Pagination pagination = 5;
+}
+
+message SearchMessagesResponse {
+  repeated Message messages = 1;
+  int32 total_count = 2;
+}
+
+message Message {
+  string id = 1;
+  string chat_id = 2;
+  string sender_id = 3;
+  EnvelopeType envelope_type = 4;
+  bytes ciphertext = 5;
+  string nonce = 6;
+  string sender_key_id = 7;
+  repeated MessageAttachment attachments = 8;
+  map<string, string> metadata = 9;
+  string client_message_id = 10;
+  google.protobuf.Timestamp sent_at = 11;
+  google.protobuf.Timestamp edited_at = 12;
+  google.protobuf.Timestamp deleted_at = 13;
+  int64 sequence_number = 14;
+  DeliveryStatus delivery_status = 15;
+}
+
+message MessageAttachment {
+  string media_id = 1;
+  string mime_type = 2;
+  int64 size_bytes = 3;
+  string thumbnail_id = 4;
+  map<string, string> metadata = 5;
+}
+
+enum EnvelopeType {
+  ENVELOPE_TYPE_UNSPECIFIED = 0;
+  ENVELOPE_TYPE_SIGNAL = 1; // Signal Protocol
+  ENVELOPE_TYPE_PLAIN = 2; // For debugging/testing only
+}
+
+enum DeliveryStatus {
+  DELIVERY_STATUS_UNSPECIFIED = 0;
+  DELIVERY_STATUS_PENDING = 1;
+  DELIVERY_STATUS_DELIVERED = 2;
+  DELIVERY_STATUS_READ = 3;
+  DELIVERY_STATUS_FAILED = 4;
+}
+
+// ============================================
+// Chat Service
+// ============================================
+
+message CreateChatRequest {
+  ChatType type = 1;
+  repeated string member_ids = 2;
+  string name = 3;
+  string description = 4;
+  map<string, string> metadata = 5;
+}
+
+message CreateChatResponse {
+  Chat chat = 1;
+}
+
+message GetChatRequest {
+  string chat_id = 1;
+}
+
+message GetChatResponse {
+  Chat chat = 1;
+}
+
+message GetUserChatsRequest {
+  string user_id = 1;
+  Pagination pagination = 2;
+}
+
+message GetUserChatsResponse {
+  repeated Chat chats = 1;
+  string next_cursor = 2;
+}
+
+message AddMemberRequest {
+  string chat_id = 1;
+  string user_id = 2;
+  ChatMemberRole role = 3;
+}
+
+message AddMemberResponse {
+  string member_id = 1;
+  google.protobuf.Timestamp joined_at = 2;
+}
+
+message RemoveMemberRequest {
+  string chat_id = 1;
+  string user_id = 2;
+}
+
+message RemoveMemberResponse {
+  bool success = 1;
+}
+
+message UpdateChatRequest {
+  string chat_id = 1;
+  optional string name = 2;
+  optional string description = 3;
+  map<string, string> metadata = 4;
+}
+
+message UpdateChatResponse {
+  Chat chat = 1;
+}
+
+message DeleteChatRequest {
+  string chat_id = 1;
+}
+
+message DeleteChatResponse {
+  bool success = 1;
+}
+
+message Chat {
+  string id = 1;
+  ChatType type = 2;
+  string name = 3;
+  string description = 4;
+  repeated ChatMember members = 5;
+  map<string, string> metadata = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  google.protobuf.Timestamp last_message_at = 9;
+  Message last_message = 10;
+}
+
+message ChatMember {
+  string user_id = 1;
+  ChatMemberRole role = 2;
+  google.protobuf.Timestamp joined_at = 3;
+  google.protobuf.Timestamp last_read_at = 4;
+  google.protobuf.Timestamp muted_until = 5;
+}
+
+enum ChatType {
+  CHAT_TYPE_UNSPECIFIED = 0;
+  CHAT_TYPE_DIRECT = 1;
+  CHAT_TYPE_GROUP = 2;
+  CHAT_TYPE_CHANNEL = 3;
+}
+
+enum ChatMemberRole {
+  CHAT_MEMBER_ROLE_UNSPECIFIED = 0;
+  CHAT_MEMBER_ROLE_OWNER = 1;
+  CHAT_MEMBER_ROLE_ADMIN = 2;
+  CHAT_MEMBER_ROLE_MEMBER = 3;
+}
+
+// ============================================
+// Presence Service
+// ============================================
+
+message SetOnlineRequest {
+  string user_id = 1;
+  string device_id = 2;
+  string status = 3;
+}
+
+message SetOnlineResponse {
+  bool success = 1;
+}
+
+message SetOfflineRequest {
+  string user_id = 1;
+  string device_id = 2;
+}
+
+message SetOfflineResponse {
+  bool success = 1;
+}
+
+message SetTypingRequest {
+  string user_id = 1;
+  string chat_id = 2;
+  bool is_typing = 3;
+}
+
+message SetTypingResponse {
+  bool success = 1;
+}
+
+message GetPresenceRequest {
+  string user_id = 1;
+}
+
+message GetPresenceResponse {
+  PresenceInfo presence = 1;
+}
+
+message GetBulkPresenceRequest {
+  repeated string user_ids = 1;
+}
+
+message GetBulkPresenceResponse {
+  map<string, PresenceInfo> presences = 1;
+}
+
+message PresenceInfo {
+  string user_id = 1;
+  bool is_online = 2;
+  google.protobuf.Timestamp last_seen_at = 3;
+  string status = 4;
+  repeated DevicePresence devices = 5;
+}
+
+message DevicePresence {
+  string device_id = 1;
+  string device_type = 2;
+  bool is_online = 3;
+  google.protobuf.Timestamp last_seen_at = 4;
+}
+
+// ============================================
+// Receipt Service
+// ============================================
+
+message MarkDeliveredRequest {
+  string message_id = 1;
+  string user_id = 2;
+  string device_id = 3;
+}
+
+message MarkDeliveredResponse {
+  bool success = 1;
+}
+
+message MarkReadRequest {
+  string message_id = 1;
+  string user_id = 2;
+  string device_id = 3;
+}
+
+message MarkReadResponse {
+  bool success = 1;
+}
+
+message GetDeliveryStatusRequest {
+  string message_id = 1;
+}
+
+message GetDeliveryStatusResponse {
+  repeated DeliveryInfo delivery_info = 1;
+}
+
+message GetReadStatusRequest {
+  string message_id = 1;
+}
+
+message GetReadStatusResponse {
+  repeated ReadInfo read_info = 1;
+}
+
+message DeliveryInfo {
+  string user_id = 1;
+  string device_id = 2;
+  google.protobuf.Timestamp delivered_at = 3;
+}
+
+message ReadInfo {
+  string user_id = 1;
+  string device_id = 2;
+  google.protobuf.Timestamp read_at = 3;
+}
+
+// ============================================
+// Device Service
+// ============================================
+
+message RegisterDeviceRequest {
+  string user_id = 1;
+  DeviceInfo device_info = 2;
+  repeated DeviceKey keys = 3;
+}
+
+message RegisterDeviceResponse {
+  string device_id = 1;
+  google.protobuf.Timestamp registered_at = 2;
+}
+
+message UnregisterDeviceRequest {
+  string device_id = 1;
+}
+
+message UnregisterDeviceResponse {
+  bool success = 1;
+}
+
+message GetUserDevicesRequest {
+  string user_id = 1;
+}
+
+message GetUserDevicesResponse {
+  repeated Device devices = 1;
+}
+
+message SyncDeviceRequest {
+  string device_id = 1;
+  google.protobuf.Timestamp since = 2;
+  int64 limit = 3;
+}
+
+message SyncDeviceResponse {
+  repeated SyncMessage messages = 1;
+  string next_cursor = 2;
+}
+
+message RevokeDeviceRequest {
+  string device_id = 1;
+}
+
+message RevokeDeviceResponse {
+  bool success = 1;
+}
+
+message UpdateDeviceKeysRequest {
+  string device_id = 1;
+  repeated DeviceKey keys = 2;
+}
+
+message UpdateDeviceKeysResponse {
+  bool success = 1;
+}
+
+message Device {
+  string id = 1;
+  string user_id = 2;
+  DeviceInfo info = 3;
+  repeated DeviceKey keys = 4;
+  bool is_active = 5;
+  google.protobuf.Timestamp last_synced_at = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message DeviceInfo {
+  string name = 1;
+  string type = 2; // mobile, desktop, web, etc.
+  string os = 3;
+  string app_version = 4;
+  string user_agent = 5;
+}
+
+message DeviceKey {
+  string key_id = 1;
+  KeyType key_type = 2;
+  bytes public_key = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message SyncMessage {
+  string message_id = 1;
+  string chat_id = 2;
+  bytes ciphertext = 3;
+  string nonce = 4;
+  google.protobuf.Timestamp sent_at = 5;
+  int64 sequence_number = 6;
+  SyncOperation operation = 7;
+}
+
+enum KeyType {
+  KEY_TYPE_UNSPECIFIED = 0;
+  KEY_TYPE_IDENTITY = 1;
+  KEY_TYPE_SIGNED_PREKEY = 2;
+  KEY_TYPE_ONE_TIME_PREKEY = 3;
+}
+
+enum SyncOperation {
+  SYNC_OPERATION_UNSPECIFIED = 0;
+  SYNC_OPERATION_ADD = 1;
+  SYNC_OPERATION_UPDATE = 2;
+  SYNC_OPERATION_DELETE = 3;
+}
+
+// ============================================
+// Security Service
+// ============================================
+
+message GenerateKeyPairRequest {
+  KeyType key_type = 1;
+}
+
+message GenerateKeyPairResponse {
+  string key_id = 1;
+  bytes public_key = 2;
+  bytes private_key = 3; // Encrypted
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message PerformX3DHRequest {
+  string recipient_user_id = 1;
+  bytes recipient_identity_key = 2;
+  bytes recipient_signed_prekey = 3;
+  bytes recipient_one_time_prekey = 4;
+  bytes sender_identity_key = 5;
+  bytes sender_ephemeral_key = 6;
+}
+
+message PerformX3DHResponse {
+  bytes shared_secret = 1;
+  string session_id = 2;
+}
+
+message EncryptMessageRequest {
+  bytes plaintext = 1;
+  string key_id = 2;
+  string recipient_user_id = 3;
+}
+
+message EncryptMessageResponse {
+  bytes ciphertext = 1;
+  string nonce = 2;
+  string sender_key_id = 3;
+}
+
+message DecryptMessageRequest {
+  bytes ciphertext = 1;
+  string nonce = 2;
+  string sender_key_id = 3;
+  string recipient_user_id = 4;
+}
+
+message DecryptMessageResponse {
+  bytes plaintext = 1;
+}
+
+message RotateKeysRequest {
+  string user_id = 1;
+}
+
+message RotateKeysResponse {
+  repeated DeviceKey new_keys = 1;
+  google.protobuf.Timestamp rotated_at = 2;
+}
+
+message VerifySignatureRequest {
+  bytes message = 1;
+  bytes signature = 2;
+  bytes public_key = 3;
+}
+
+message VerifySignatureResponse {
+  bool is_valid = 1;
+}
+
+// ============================================
+// Push Service
+// ============================================
+
+message SendPushRequest {
+  string user_id = 1;
+  PushPayload payload = 2;
+  repeated string platforms = 3; // apns, fcm, web
+}
+
+message SendPushResponse {
+  string push_id = 1;
+  google.protobuf.Timestamp sent_at = 2;
+}
+
+message RegisterPushTokenRequest {
+  string user_id = 1;
+  string device_id = 2;
+  string token = 3;
+  PushPlatform platform = 4;
+}
+
+message RegisterPushTokenResponse {
+  bool success = 1;
+}
+
+message UnregisterPushTokenRequest {
+  string user_id = 1;
+  string token = 2;
+}
+
+message UnregisterPushTokenResponse {
+  bool success = 1;
+}
+
+message GetPushStatusRequest {
+  string push_id = 1;
+}
+
+message GetPushStatusResponse {
+  PushStatus status = 1;
+  repeated DeliveryAttempt attempts = 2;
+}
+
+message PushPayload {
+  string title = 1;
+  string body = 2;
+  map<string, string> data = 3;
+  string sound = 4;
+  int32 badge = 5;
+}
+
+message DeliveryAttempt {
+  string platform = 1;
+  google.protobuf.Timestamp attempted_at = 2;
+  bool success = 3;
+  string error_message = 4;
+}
+
+enum PushPlatform {
+  PUSH_PLATFORM_UNSPECIFIED = 0;
+  PUSH_PLATFORM_APNS = 1;
+  PUSH_PLATFORM_FCM = 2;
+  PUSH_PLATFORM_WEB = 3;
+}
+
+enum PushStatus {
+  PUSH_STATUS_UNSPECIFIED = 0;
+  PUSH_STATUS_PENDING = 1;
+  PUSH_STATUS_SENT = 2;
+  PUSH_STATUS_DELIVERED = 3;
+  PUSH_STATUS_FAILED = 4;
+}
+
+// ============================================
+// Media Service
+// ============================================
+
+message UploadMediaRequest {
+  bytes file_data = 1;
+  string file_name = 2;
+  string mime_type = 3;
+  int64 size_bytes = 4;
+  map<string, string> metadata = 5;
+}
+
+message UploadMediaResponse {
+  string media_id = 1;
+  string storage_url = 2;
+  google.protobuf.Timestamp uploaded_at = 3;
+}
+
+message GetMediaRequest {
+  string media_id = 1;
+}
+
+message GetMediaResponse {
+  Media media = 1;
+  string signed_url = 2;
+}
+
+message DeleteMediaRequest {
+  string media_id = 1;
+}
+
+message DeleteMediaResponse {
+  bool success = 1;
+}
+
+message GenerateThumbnailRequest {
+  string media_id = 1;
+  int32 width = 2;
+  int32 height = 3;
+}
+
+message GenerateThumbnailResponse {
+  string thumbnail_id = 1;
+  string thumbnail_url = 2;
+}
+
+message TranscodeVideoRequest {
+  string media_id = 1;
+  string output_format = 2;
+  repeated VideoQuality qualities = 3;
+}
+
+message TranscodeVideoResponse {
+  string video_asset_id = 1;
+  repeated VideoVariant variants = 2;
+}
+
+message Media {
+  string id = 1;
+  string owner_id = 2;
+  MediaKind kind = 3;
+  string storage_url = 4;
+  string original_name = 5;
+  string mime_type = 6;
+  int64 size_bytes = 7;
+  map<string, string> metadata = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+message VideoQuality {
+  string label = 1;
+  int32 width = 2;
+  int32 height = 3;
+  int32 bitrate_kbps = 4;
+}
+
+message VideoVariant {
+  string id = 1;
+  string label = 2;
+  string playlist_url = 3;
+  int32 width = 4;
+  int32 height = 5;
+  int32 bitrate_kbps = 6;
+}
+
+enum MediaKind {
+  MEDIA_KIND_UNSPECIFIED = 0;
+  MEDIA_KIND_IMAGE = 1;
+  MEDIA_KIND_VIDEO = 2;
+  MEDIA_KIND_AUDIO = 3;
+  MEDIA_KIND_DOCUMENT = 4;
+}
+
+// ============================================
+// Search Service
+// ============================================
+
+message SearchMessagesRequest {
+  string query = 1;
+  repeated string chat_ids = 2;
+  google.protobuf.Timestamp from = 3;
+  google.protobuf.Timestamp to = 4;
+  Pagination pagination = 5;
+  repeated string filters = 6;
+}
+
+message SearchMessagesResponse {
+  repeated SearchResult results = 1;
+  int32 total_count = 2;
+  string next_cursor = 3;
+}
+
+message SearchUsersRequest {
+  string query = 1;
+  Pagination pagination = 2;
+  repeated string filters = 3;
+}
+
+message SearchUsersResponse {
+  repeated UserSearchResult results = 1;
+  int32 total_count = 2;
+}
+
+message SearchChatsRequest {
+  string query = 1;
+  string user_id = 2;
+  Pagination pagination = 3;
+}
+
+message SearchChatsResponse {
+  repeated ChatSearchResult results = 1;
+  int32 total_count = 2;
+}
+
+message GetSuggestionsRequest {
+  string query = 1;
+  string context = 2; // chat, user, etc.
+  int32 limit = 3;
+}
+
+message GetSuggestionsResponse {
+  repeated Suggestion suggestions = 1;
+}
+
+message IndexMessageRequest {
+  Message message = 1;
+}
+
+message IndexMessageResponse {
+  bool success = 1;
+}
+
+message SearchResult {
+  Message message = 1;
+  float score = 2;
+  repeated string highlights = 3;
+}
+
+message UserSearchResult {
+  string user_id = 1;
+  string username = 2;
+  string display_name = 3;
+  float score = 4;
+}
+
+message ChatSearchResult {
+  Chat chat = 1;
+  float score = 2;
+}
+
+message Suggestion {
+  string id = 1;
+  string text = 2;
+  string type = 3;
+  float score = 4;
+}
+
+// ============================================
+// Audit Service
+// ============================================
+
+message LogAuditEventRequest {
+  string actor_user_id = 1;
+  string actor_session_id = 2;
+  string target_user_id = 3;
+  string action = 4;
+  string resource_type = 5;
+  string resource_id = 6;
+  SecuritySeverity severity = 7;
+  string ip_address = 8;
+  string user_agent = 9;
+  map<string, string> metadata = 10;
+}
+
+message LogAuditEventResponse {
+  string event_id = 1;
+  google.protobuf.Timestamp logged_at = 2;
+}
+
+message GetAuditLogsRequest {
+  repeated string user_ids = 1;
+  google.protobuf.Timestamp from = 2;
+  google.protobuf.Timestamp to = 3;
+  repeated string actions = 4;
+  repeated string resource_types = 5;
+  Pagination pagination = 6;
+}
+
+message GetAuditLogsResponse {
+  repeated AuditEvent events = 1;
+  int32 total_count = 2;
+  string next_cursor = 3;
+}
+
+message GetSecurityReportRequest {
+  string user_id = 1;
+  google.protobuf.Timestamp from = 2;
+  google.protobuf.Timestamp to = 3;
+}
+
+message GetSecurityReportResponse {
+  SecurityReport report = 1;
+}
+
+message DetectSuspiciousActivityRequest {
+  string user_id = 1;
+  google.protobuf.Timestamp from = 2;
+  google.protobuf.Timestamp to = 3;
+}
+
+message DetectSuspiciousActivityResponse {
+  repeated SuspiciousActivityFlag flags = 1;
+}
+
+message AuditEvent {
+  string id = 1;
+  string actor_user_id = 2;
+  string actor_session_id = 3;
+  string target_user_id = 4;
+  string action = 5;
+  string resource_type = 6;
+  string resource_id = 7;
+  SecuritySeverity severity = 8;
+  string ip_address = 9;
+  string user_agent = 10;
+  map<string, string> metadata = 11;
+  google.protobuf.Timestamp created_at = 12;
+}
+
+message SecurityReport {
+  string user_id = 1;
+  google.protobuf.Timestamp from = 2;
+  google.protobuf.Timestamp to = 3;
+  repeated AuditEvent events = 4;
+  repeated SuspiciousActivityFlag flags = 5;
+  map<string, int32> action_counts = 6;
+  map<string, int32> resource_type_counts = 7;
+}
+
+message SuspiciousActivityFlag {
+  string id = 1;
+  string user_id = 2;
+  string reason = 3;
+  SecuritySeverity severity = 4;
+  string status = 5;
+  map<string, string> metadata = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp reviewed_at = 8;
+}
+
+enum SecuritySeverity {
+  SECURITY_SEVERITY_UNSPECIFIED = 0;
+  SECURITY_SEVERITY_LOW = 1;
+  SECURITY_SEVERITY_MEDIUM = 2;
+  SECURITY_SEVERITY_HIGH = 3;
+  SECURITY_SEVERITY_CRITICAL = 4;
+}
+
+// ============================================
+// Kafka Event Messages
+// ============================================
+
+message MessageEvent {
+  string event_id = 1;
+  string event_type = 2; // created, updated, deleted
+  Message message = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  string source_service = 5;
+}
+
+message PresenceEvent {
+  string event_id = 1;
+  string event_type = 2; // online, offline, typing
+  string user_id = 3;
+  string device_id = 4;
+  PresenceInfo presence = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+message ReceiptEvent {
+  string event_id = 1;
+  string event_type = 2; // delivered, read
+  string message_id = 3;
+  string user_id = 4;
+  string device_id = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+message PushEvent {
+  string event_id = 1;
+  string user_id = 2;
+  PushPayload payload = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message ChatEvent {
+  string event_id = 1;
+  string event_type = 2; // created, updated, deleted, member_added, member_removed
+  Chat chat = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message DeviceEvent {
+  string event_id = 1;
+  string event_type = 2; // registered, unregistered, synced, revoked
+  Device device = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message SecurityEvent {
+  string event_id = 1;
+  string event_type = 2; // key_rotated, key_exchanged, signature_verified
+  string user_id = 3;
+  map<string, string> metadata = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}

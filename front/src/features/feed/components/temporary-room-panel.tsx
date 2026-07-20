@@ -16,6 +16,12 @@ const durationOptions: Array<{ value: RoomDuration; label: string; retentionDays
   { value: "7d", label: "Неделя", retentionDays: 7 },
 ];
 
+const durationToMs: Record<RoomDuration, number> = {
+  "1h": 60 * 60 * 1000,
+  "24h": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+};
+
 export function TemporaryRoomPanel({ onCreated }: { onCreated: (room: TrustRoomResponse) => void }) {
   const [name, setName] = useState("");
   const [duration, setDuration] = useState<RoomDuration>("24h");
@@ -34,6 +40,7 @@ export function TemporaryRoomPanel({ onCreated }: { onCreated: (room: TrustRoomR
     setSubmitting(true);
     setError(null);
     try {
+      const expiresAt = new Date(Date.now() + durationToMs[duration]).toISOString();
       const room = await roomService.create({
         name: roomName,
         description: `Temporary access window: ${selected.label}`,
@@ -42,6 +49,7 @@ export function TemporaryRoomPanel({ onCreated }: { onCreated: (room: TrustRoomR
         requireTwoFactor: true,
         minAccountAgeDays: 0,
         messageRetentionDays: selected.retentionDays,
+        expiresAt,
       });
       setName("");
       onCreated(room);
@@ -66,7 +74,7 @@ export function TemporaryRoomPanel({ onCreated }: { onCreated: (room: TrustRoomR
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="Название комнаты"
-          className="h-11 w-full rounded-2xl border border-white/10 bg-black/20 px-4 text-sm outline-none transition focus:border-primary/50"
+          className="h-11 w-full rounded-2xl border border-white/8 bg-background/40 px-4 text-sm outline-none transition focus:border-primary/50"
         />
         <div className="grid grid-cols-3 gap-2">
           {durationOptions.map((item) => (
@@ -74,7 +82,7 @@ export function TemporaryRoomPanel({ onCreated }: { onCreated: (room: TrustRoomR
               key={item.value}
               type="button"
               onClick={() => setDuration(item.value)}
-              className={`rounded-2xl border px-3 py-2 text-xs transition ${duration === item.value ? "border-primary/50 bg-primary/15 text-primary" : "border-white/10 bg-white/[0.03] text-muted-foreground hover:text-foreground"}`}
+              className={`rounded-2xl border px-3 py-2 text-xs transition ${duration === item.value ? "border-primary/50 bg-primary/15 text-primary" : "border-white/8 bg-background/30 text-muted-foreground hover:text-foreground"}`}
             >
               {item.label}
             </button>

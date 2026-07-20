@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Go](https://img.shields.io/badge/Go-1.20+-00ADD8?logo=go)](https://go.dev) [![Node](https://img.shields.io/badge/Node-18+-3C873A?logo=node.js)](https://nodejs.org) [![Status](https://img.shields.io/badge/status-dev-brightgreen)]()
 
-Коротко: GAPAK — современное приложение с авторизацией, пример best-practices на Go (backend) и React/Next (frontend). Предназначено как стартовый шаблон для безопасных веб-приложений.
+Коротко: GAPAK — современное приложение с авторизацией, пример best-practices на Go (backend) и React (Vite) (frontend). Предназначено как стартовый шаблон для безопасных веб-приложений.
 
 ---
 
@@ -60,12 +60,13 @@ npm run dev
 - Хеширование паролей (Argon2/безопасное хранение)
 - Разделение frontend / backend для удобной разработки и деплоя
 - Миграции базы данных и утилиты для быстрого старта (quick-register)
+- **Система чатов**: Прямые сообщения с поддержкой вложений и реального времени
 
 ---
 
 ## 🧰 Стек технологий
 - Backend: Go, chi (или аналог), PostgreSQL
-- Frontend: React / Next.js, Vite (или соответствующий сборщик)
+- Frontend: React (Vite)
 - Инструменты: Docker (опционально), make / ps1-скрипты для удобства
 
 ---
@@ -84,7 +85,7 @@ COOKIE_DOMAIN=localhost
 Пример для frontend (`front/.env.local`):
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8080
+VITE_PUBLIC_API_BASE_URL=http://localhost:8080
 ```
 
 ---
@@ -105,7 +106,7 @@ Backend:
 
 ```powershell
 cd backend
-go test ./... 
+go test ./...
 ```
 
 Frontend (если есть тесты):
@@ -114,6 +115,40 @@ Frontend (если есть тесты):
 cd front
 npm test
 ```
+
+---
+
+## 💬 Система чатов
+
+### Обзор
+Система чатов обеспечивает безопасную прямую переписку между пользователями с поддержкой:
+- Прямых сообщений (direct messaging)
+- Вложений файлов (изображения, документы)
+- Реального времени через event polling
+- End-to-end шифрования (поддержка ciphertext, nonce, senderKeyId)
+- Отслеживания присутствия участников (presence)
+
+### API Эндпоинты
+
+Все эндпоинты требуют JWT-аутентификацию:
+
+- `GET /chats` — Список чатов пользователя
+- `POST /chats/direct` — Создание прямого чата
+- `GET /chats/:chatId/messages` — Получение сообщений (с пагинацией)
+- `POST /chats/:chatId/messages` — Отправка сообщения
+- `GET /chats/:chatId/events` — Получение событий реального времени
+
+### Документация API
+Пол документации по API чатов: `backend/docs/CHAT_API_DOCUMENTATION.md`
+
+### Интеграция Frontend
+- Компоненты: `ChatList`, `MessageThread`, `MessageAttachment`
+- Сервисы: `chat.service.ts` (API клиент)
+- Страницы: `/chats` (список чатов), `/chats/[chatId]` (детали чата)
+- Все данные загружаются динамически из базы данных (без статических шаблонов)
+
+### Отчёт об интеграции
+Подробный отчёт о интеграции системы чатов: `CHAT_INTEGRATION_REPORT.md`
 
 ---
 
@@ -131,7 +166,7 @@ taskkill /PID <PID> /F
 
 `PostgreSQL connection error` — проверьте DATABASE_URL, пароль, что DB слушает на нужном порту
 
-`Frontend не видит backend` — проверьте `NEXT_PUBLIC_API_BASE_URL` в `front/.env.local` и что backend отвечает на /health/ready
+`Frontend не видит backend` — проверьте `VITE_PUBLIC_API_BASE_URL` в `front/.env.local` и что backend отвечает на /health/ready
 
 ---
 

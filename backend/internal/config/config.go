@@ -158,7 +158,7 @@ func Load() (Config, error) {
 			MaxConnLifetime: getEnvDuration("DATABASE_MAX_CONN_LIFETIME", 30*time.Minute),
 		},
 		Redis: RedisConfig{
-			URL: requireEnv("REDIS_URL"),
+			URL: getEnv("REDIS_URL", ""),
 		},
 		Security: SecurityConfig{
 			JWTIssuer:         getEnv("JWT_ISSUER", "gapak.api"),
@@ -336,7 +336,6 @@ func getEnvSlice(key string, fallback []string) []string {
 func validate(cfg Config) error {
 	required := map[string]string{
 		"DATABASE_URL":           cfg.Database.URL,
-		"REDIS_URL":              cfg.Redis.URL,
 		"JWT_ACCESS_SECRET":      cfg.Security.JWTAccessSecret,
 		"JWT_REFRESH_SECRET":     cfg.Security.JWTRefreshSecret,
 		"PASSWORD_PEPPER":        cfg.Security.PasswordPepper,

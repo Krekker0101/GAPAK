@@ -6,12 +6,13 @@ import Link from "next/link";
 import { EmptyState } from "@/components/common/empty-state";
 import { StateCard } from "@/components/common/state-card";
 import { PostCard } from "@/components/feed/post-card";
+import { StoryCreator } from "@/components/feed/story-creator";
+import { PremiumStoriesRail } from "@/components/feed/premium-stories-rail";
 import { loadHomeDashboard } from "@/features/feed/api/home-dashboard.service";
 import { DashboardAside } from "@/features/feed/components/dashboard-panels";
 import { FeedOverview } from "@/features/feed/components/feed-overview";
 import { FeedSkeleton } from "@/features/feed/components/feed-skeleton";
 import { QuickComposer } from "@/features/feed/components/quick-composer";
-import { StoriesRail } from "@/features/feed/components/stories-rail";
 import { TemporaryRoomPanel } from "@/features/feed/components/temporary-room-panel";
 import { useInfiniteFeed } from "@/features/feed/hooks/use-infinite-feed";
 import type { HomeDashboardViewModel } from "@/features/feed/types/home-dashboard";
@@ -23,12 +24,18 @@ export function FeedHomePage() {
   const { data, isLoading, isError, error, reload } = useAsyncResource(loadHomeDashboard, []);
   const { posts, loadingMore, hasMore, loadMoreRef } = useInfiniteFeed(data?.posts);
   const [rooms, setRooms] = useState<TrustRoomResponse[]>([]);
+  const [showStoryCreator, setShowStoryCreator] = useState(false);
 
   useEffect(() => {
     if (data) {
       setRooms(data.rooms);
     }
   }, [data]);
+
+  const handleStoryCreated = () => {
+    setShowStoryCreator(false);
+    reload(); // Reload to fetch new stories
+  };
 
   if (isError) {
     return (
@@ -54,9 +61,13 @@ export function FeedHomePage() {
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,680px)_360px] xl:justify-center 2xl:grid-cols-[minmax(0,720px)_380px]">
       <div className="min-w-0 space-y-5">
-        <FeedOverview dashboard={dashboard} />
-        <StoriesRail profile={data.profile} stories={data.stories} />
+        <PremiumStoriesRail 
+          profile={data.profile} 
+          stories={data.stories} 
+          onCreateClick={() => setShowStoryCreator(true)}
+        />
         <QuickComposer profile={data.profile} />
+        <FeedOverview dashboard={dashboard} />
         <TemporaryRoomPanel onCreated={(room) => setRooms((current) => [room, ...current])} />
 
         <div className="space-y-4">
@@ -80,6 +91,14 @@ export function FeedHomePage() {
       </div>
 
       <DashboardAside dashboard={dashboard} />
+
+      {/* Story Creator Modal */}
+      {showStoryCreator && (
+        <StoryCreator 
+          onClose={() => setShowStoryCreator(false)} 
+          onSuccess={handleStoryCreated}
+        />
+      )}
     </div>
   );
 }

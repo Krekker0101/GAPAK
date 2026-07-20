@@ -1,6 +1,6 @@
 @echo off
 REM Gapak Full Stack Startup Script (Windows CMD)
-REM This script starts Backend (Go/Fiber) + Frontend (Next.js) + PostgreSQL
+REM This script starts Backend (Go/Fiber) + Frontend (React + Vite) + PostgreSQL
 
 setlocal enabledelayedexpansion
 

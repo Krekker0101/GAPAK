@@ -4,6 +4,7 @@ import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import type { z } from "zod";
+import { ArrowRight, Plus, ShieldCheck, Timer } from "lucide-react";
 
 import { EmptyState } from "@/components/common/empty-state";
 import { FormField } from "@/components/common/form-field";
@@ -13,6 +14,7 @@ import { TrustRoomCard } from "@/components/rooms/trust-room-card";
 import { createRoomSchema } from "@/features/rooms/schemas/room.schemas";
 import { roomService } from "@/shared/api/services/room.service";
 import { useAsyncResource } from "@/shared/lib/hooks/use-async-resource";
+import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { Input } from "@/shared/ui/input";
@@ -85,26 +87,63 @@ export default function RoomsPage() {
     return <StateCard title="Loading trust rooms" description="Opening the spaces available to your current identity layer." />;
   }
 
+  const rooms = data;
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <PageHeader
         eyebrow="Trust rooms"
-        title="Build high-trust spaces with their own rules"
-        description="Rooms carry their own visibility mode, approval flow, 2FA posture, and retention horizon."
+        title="High-trust spaces with a premium entry flow"
+        description="Rooms are loaded from Backend API only. Open any room to inspect members, security posture, and administrative controls."
       />
 
-      <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card className="p-5">
+          <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Accessible rooms</p>
+          <div className="mt-3 flex items-end justify-between gap-3">
+            <div>
+              <p className="text-3xl font-semibold">{rooms.length}</p>
+              <p className="mt-1 text-sm text-muted-foreground">Loaded from your membership scope</p>
+            </div>
+            <Badge variant="primary">Live API</Badge>
+          </div>
+        </Card>
+        <Card className="p-5">
+          <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Security posture</p>
+          <div className="mt-3 flex items-center gap-3">
+            <ShieldCheck className="h-5 w-5 text-primary" />
+            <p className="text-sm text-muted-foreground">2FA and access-mode enforcement are visible per room.</p>
+          </div>
+        </Card>
+        <Card className="p-5">
+          <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Retention model</p>
+          <div className="mt-3 flex items-center gap-3">
+            <Timer className="h-5 w-5 text-primary" />
+            <p className="text-sm text-muted-foreground">Room and message retention are controlled through API policy.</p>
+          </div>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-4">
-          {data.length === 0 ? (
+          {rooms.length === 0 ? (
             <EmptyState title="No trust rooms yet" description="Create your first private or secret room." />
           ) : (
-            data.map((room) => <TrustRoomCard key={room.id} room={room} />)
+            rooms.map((room) => <TrustRoomCard key={room.id} room={room} />)
           )}
         </div>
 
         <Card className="p-6">
-          <p className="text-xs uppercase tracking-[0.28em] text-primary">Create room</p>
-          <h2 className="mt-4 font-display text-3xl font-semibold">Launch a trusted environment</h2>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.28em] text-primary">Create room</p>
+              <h2 className="mt-3 font-display text-3xl font-semibold">Launch a trusted environment</h2>
+            </div>
+            <div className="rounded-2xl bg-primary/10 p-3 text-primary">
+              <Plus className="h-5 w-5" />
+            </div>
+          </div>
+
           <form className="mt-6 space-y-4" onSubmit={onSubmit}>
             <FormField label="Room name" error={form.formState.errors.name?.message}>
               <Input {...form.register("name")} />
@@ -112,6 +151,7 @@ export default function RoomsPage() {
             <FormField label="Description" error={form.formState.errors.description?.message}>
               <Textarea rows={4} {...form.register("description")} />
             </FormField>
+
             <div className="grid gap-4 md:grid-cols-2">
               <FormField label="Visibility">
                 <Select value={form.watch("visibility")} onValueChange={(value) => form.setValue("visibility", value as CreateRoomValues["visibility"])}>
@@ -137,6 +177,7 @@ export default function RoomsPage() {
                 </Select>
               </FormField>
             </div>
+
             <div className="grid gap-4 md:grid-cols-2">
               <FormField label="Minimum account age (days)">
                 <Input
@@ -155,17 +196,28 @@ export default function RoomsPage() {
                 />
               </FormField>
             </div>
-            <div className="flex items-center justify-between rounded-[1.5rem] border border-white/8 bg-black/20 px-4 py-3">
+
+            <div className="flex items-center justify-between rounded-[1.5rem] border border-white/8 bg-background/45 px-4 py-3">
               <div>
                 <p className="text-sm font-medium">Require 2FA</p>
                 <p className="text-xs leading-6 text-muted-foreground">Harden room membership posture from day one.</p>
               </div>
               <Switch checked={form.watch("requireTwoFactor")} onCheckedChange={(checked) => form.setValue("requireTwoFactor", checked)} />
             </div>
-            {submitError ? <p className="text-sm text-red-300">{submitError}</p> : null}
-            <Button type="submit" disabled={form.formState.isSubmitting}>
-              {form.formState.isSubmitting ? "Creating..." : "Create room"}
-            </Button>
+
+            {submitError ? <p className="text-sm text-red-500">{submitError}</p> : null}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="submit" disabled={form.formState.isSubmitting}>
+                {form.formState.isSubmitting ? "Creating..." : "Create room"}
+              </Button>
+              <Button asChild variant="outline">
+                <a href="/feed">
+                  Back to feed
+                  <ArrowRight className="h-4 w-4" />
+                </a>
+              </Button>
+            </div>
           </form>
         </Card>
       </div>

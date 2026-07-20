@@ -10,6 +10,13 @@ type PostPrivacy string
 type ConnectionStatus string
 type ChatMemberRole string
 type MessageEnvelopeType string
+type ChatType string
+type MessageType string
+type MessageStatus string
+type ReactionType string
+type AttachmentKind string
+type EncryptionProtocol string
+type TypingStatus string
 type TrustRoomVisibility string
 type TrustRoomAccessMode string
 type TrustRoomRole string
@@ -94,8 +101,10 @@ const (
 )
 
 const (
-	ChatRoleOwner  ChatMemberRole = "OWNER"
-	ChatRoleMember ChatMemberRole = "MEMBER"
+	ChatRoleOwner     ChatMemberRole = "OWNER"
+	ChatRoleAdmin     ChatMemberRole = "ADMIN"
+	ChatRoleModerator ChatMemberRole = "MODERATOR"
+	ChatRoleMember    ChatMemberRole = "MEMBER"
 )
 
 const (
@@ -103,6 +112,70 @@ const (
 	MessageEnvelopeAttachment  MessageEnvelopeType = "ATTACHMENT"
 	MessageEnvelopeKeyExchange MessageEnvelopeType = "KEY_EXCHANGE"
 	MessageEnvelopeSystem      MessageEnvelopeType = "SYSTEM"
+)
+
+// New chat system enums
+const (
+	ChatTypeDirect    ChatType = "DIRECT"
+	ChatTypeGroup     ChatType = "GROUP"
+	ChatTypeChannel   ChatType = "CHANNEL"
+	ChatTypeBroadcast ChatType = "BROADCAST"
+)
+
+const (
+	MessageTypeText     MessageType = "TEXT"
+	MessageTypeImage    MessageType = "IMAGE"
+	MessageTypeVideo    MessageType = "VIDEO"
+	MessageTypeAudio    MessageType = "AUDIO"
+	MessageTypeDocument MessageType = "DOCUMENT"
+	MessageTypeVoice    MessageType = "VOICE"
+	MessageTypeSticker  MessageType = "STICKER"
+	MessageTypeSystem   MessageType = "SYSTEM"
+	MessageTypeLocation MessageType = "LOCATION"
+	MessageTypeContact  MessageType = "CONTACT"
+)
+
+const (
+	MessageStatusSending   MessageStatus = "SENDING"
+	MessageStatusSent      MessageStatus = "SENT"
+	MessageStatusDelivered MessageStatus = "DELIVERED"
+	MessageStatusRead      MessageStatus = "READ"
+	MessageStatusFailed    MessageStatus = "FAILED"
+)
+
+const (
+	ReactionTypeLike       ReactionType = "LIKE"
+	ReactionTypeLove       ReactionType = "LOVE"
+	ReactionTypeLaugh      ReactionType = "LAUGH"
+	ReactionTypeSurprise   ReactionType = "SURPRISE"
+	ReactionTypeSad        ReactionType = "SAD"
+	ReactionTypeAngry      ReactionType = "ANGRY"
+	ReactionTypeFire       ReactionType = "FIRE"
+	ReactionTypeThumbsUp   ReactionType = "THUMBS_UP"
+	ReactionTypeThumbsDown ReactionType = "THUMBS_DOWN"
+)
+
+const (
+	AttachmentKindImage    AttachmentKind = "IMAGE"
+	AttachmentKindVideo    AttachmentKind = "VIDEO"
+	AttachmentKindAudio    AttachmentKind = "AUDIO"
+	AttachmentKindDocument AttachmentKind = "DOCUMENT"
+	AttachmentKindVoice    AttachmentKind = "VOICE"
+	AttachmentKindSticker  AttachmentKind = "STICKER"
+	AttachmentKindLocation AttachmentKind = "LOCATION"
+	AttachmentKindContact  AttachmentKind = "CONTACT"
+)
+
+const (
+	EncryptionProtocolSignal      EncryptionProtocol = "SIGNAL"
+	EncryptionProtocolOmemo       EncryptionProtocol = "OMEMO"
+	EncryptionProtocolTrustedChat EncryptionProtocol = "TRUSTED_CHAT"
+	EncryptionProtocolNone        EncryptionProtocol = "NONE"
+)
+
+const (
+	TypingStatusTyping  TypingStatus = "TYPING"
+	TypingStatusStopped TypingStatus = "STOPPED"
 )
 
 const (

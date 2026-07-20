@@ -109,6 +109,205 @@ type PostAudienceGrant struct {
 	CreatedAt     time.Time
 }
 
+// ============================================================================
+// NEW CHAT SYSTEM MODELS
+// ============================================================================
+
+type Chat struct {
+	ID                 string
+	Type               enums.ChatType
+	Title              *string
+	Description        *string
+	AvatarFileID       *string
+	CreatedByID        string
+	EncryptionProtocol enums.EncryptionProtocol
+	MessageTTLSeconds  *int
+	IsMuted            bool
+	IsPinned           bool
+	LastMessageID      *string
+	LastMessageAt      *time.Time
+	LastSequenceNumber int64
+	MemberCount        int
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	DeletedAt          *time.Time
+}
+
+type ChatMember struct {
+	ID                string
+	ChatID            string
+	UserID            string
+	Role              enums.ChatMemberRole
+	Nickname          *string
+	JoinedAt          time.Time
+	LeftAt            *time.Time
+	IsMuted           bool
+	MuteUntil         *time.Time
+	LastReadMessageID *string
+	LastReadAt        *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	DeletedAt         *time.Time
+}
+
+type Message struct {
+	ID              string
+	ChatID          string
+	SenderID        string
+	ClientMessageID string
+	SenderDeviceID  *string
+	SequenceNumber  int64
+	Type            enums.MessageType
+	Status          enums.MessageStatus
+	// End-to-End Encryption fields
+	Ciphertext          string
+	Nonce               string
+	SenderKeyID         string
+	EncryptionProtocol  enums.EncryptionProtocol
+	EncryptionAlgorithm string
+	AssociatedData      *string
+	RatchetCounter      *int64
+	AuthenticationTag   *string
+	// Optional content for non-encrypted messages
+	Content  *string
+	Metadata []byte
+	// Reply and forward
+	ReplyToMessageID       *string
+	ForwardedFromMessageID *string
+	ForwardedFromChatID    *string
+	// Expiration
+	ExpiresAt *time.Time
+	// Timestamps
+	SentAt      time.Time
+	EditedAt    *time.Time
+	DeletedAt   *time.Time
+	DeletedByID *string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type MessageVersion struct {
+	ID            string
+	MessageID     string
+	VersionNumber int
+	Ciphertext    string
+	Nonce         string
+	Content       *string
+	Metadata      []byte
+	EditedAt      time.Time
+	EditedByID    string
+}
+
+type Attachment struct {
+	ID              string
+	MessageID       string
+	MediaFileID     string
+	Kind            enums.AttachmentKind
+	FileName        *string
+	MimeType        *string
+	SizeBytes       int64
+	Width           *int
+	Height          *int
+	DurationSeconds *int
+	ThumbnailFileID *string
+	Metadata        []byte
+	CreatedAt       time.Time
+}
+
+type Reaction struct {
+	ID           string
+	MessageID    string
+	UserID       string
+	ReactionType enums.ReactionType
+	CreatedAt    time.Time
+}
+
+type ReadReceipt struct {
+	ID        string
+	MessageID string
+	UserID    string
+	ReadAt    time.Time
+}
+
+type DeliveryReceipt struct {
+	ID          string
+	MessageID   string
+	UserID      string
+	DeliveredAt time.Time
+}
+
+type PinnedMessage struct {
+	ID         string
+	ChatID     string
+	MessageID  string
+	PinnedByID string
+	PinnedAt   time.Time
+}
+
+type TypingSession struct {
+	ID        string
+	ChatID    string
+	UserID    string
+	Status    enums.TypingStatus
+	ExpiresAt time.Time
+	CreatedAt time.Time
+}
+
+type ChatSettings struct {
+	ID                string
+	ChatID            string
+	UserID            string
+	NotificationLevel string
+	Theme             *string
+	CustomSettings    []byte
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type MessageKey struct {
+	ID                string
+	MessageID         string
+	RecipientID       string
+	RecipientDeviceID string
+	SenderDeviceID    string
+	KeyID             string
+	Algorithm         string
+	EncryptedKey      string
+	Nonce             *string
+	KeyVersion        int
+	CreatedAt         time.Time
+}
+
+type TrustedDevice struct {
+	ID                string
+	UserID            string
+	DeviceName        *string
+	IdentityKeyPublic string
+	SigningKeyPublic  *string
+	Fingerprint       string
+	TrustStatus       string
+	CreatedAt         time.Time
+	LastSeenAt        *time.Time
+	RevokedAt         *time.Time
+}
+
+type DevicePreKey struct {
+	ID        string
+	DeviceID  string
+	UserID    string
+	KeyID     string
+	PublicKey string
+	Signature *string
+	OneTime   bool
+	UsedAt    *time.Time
+	CreatedAt time.Time
+	ExpiresAt *time.Time
+}
+
+// ============================================================================
+// LEGACY MODELS (kept for backward compatibility during migration)
+// ============================================================================
+
 type DirectChat struct {
 	ID            string
 	CreatedByID   string
@@ -128,22 +327,6 @@ type DirectChatMember struct {
 	DeletedAt  *time.Time
 }
 
-type Message struct {
-	ID                 string
-	ChatID             string
-	SenderID           string
-	EnvelopeType       enums.MessageEnvelopeType
-	Ciphertext         []byte
-	Nonce              string
-	SenderKeyID        string
-	AttachmentManifest []byte
-	MetadataJSON       []byte
-	ClientMessageID    string
-	SentAt             time.Time
-	EditedAt           *time.Time
-	DeletedAt          *time.Time
-}
-
 type MessageMediaAttachment struct {
 	ID          string
 	MessageID   string
@@ -161,6 +344,7 @@ type TrustRoom struct {
 	RequireTwoFactor     bool
 	MinAccountAgeDays    int
 	MessageRetentionDays *int
+	ExpiresAt            *time.Time
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 	DeletedAt            *time.Time

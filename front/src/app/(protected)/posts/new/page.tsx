@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Film, ImagePlus, LockKeyhole, MessageSquareText, UploadCloud } from "lucide-react";
+import { Film, ImagePlus, LockKeyhole, MessageSquareText, UploadCloud, Send, X } from "lucide-react";
 import { useForm } from "react-hook-form";
 import type { z } from "zod";
 
 import { FormField } from "@/components/common/form-field";
 import { PageHeader } from "@/components/common/page-header";
+import { MentionAutocomplete } from "@/components/ui/mention-autocomplete";
+import { Tooltip } from "@/shared/ui/tooltip";
 import { createPostSchema } from "@/features/posts/schemas/post.schemas";
 import { mediaService } from "@/shared/api/services/media.service";
 import { postService } from "@/shared/api/services/post.service";
@@ -33,6 +35,8 @@ export default function CreatePostPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
+  const [cursorPosition, setCursorPosition] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const form = useForm<CreatePostValues>({
     resolver: zodResolver(createPostSchema),
@@ -130,11 +134,38 @@ export default function CreatePostPage() {
             </div>
 
             <FormField label={isClip ? "Подпись к клипсу" : "Что хотите рассказать?"} error={form.formState.errors.body?.message}>
-              <Textarea
-                rows={isClip ? 4 : 7}
-                placeholder={isClip ? "Напишите короткую подпись к видео..." : "Напишите простым языком, что хотите показать друзьям..."}
-                {...form.register("body")}
-              />
+              <div className="relative">
+                <Textarea
+                  ref={(e) => {
+                    textareaRef.current = e;
+                    form.register("body").ref(e);
+                  }}
+                  rows={isClip ? 4 : 7}
+                  placeholder={isClip ? "Напишите короткую подпись к видео..." : "Напишите простым языком, что хотите показать друзьям..."}
+                  onSelect={(e) => setCursorPosition(e.currentTarget.selectionStart)}
+                  onKeyUp={(e) => setCursorPosition(e.currentTarget.selectionStart)}
+                  onClick={(e) => setCursorPosition(e.currentTarget.selectionStart)}
+                />
+                <MentionAutocomplete
+                  text={form.watch("body") || ""}
+                  cursorPosition={cursorPosition}
+                  containerRef={textareaRef as React.RefObject<HTMLElement>}
+                  onSelect={(username, displayName) => {
+                    const currentText = form.watch("body") || "";
+                    const beforeCursor = currentText.slice(0, cursorPosition);
+                    const afterCursor = currentText.slice(cursorPosition);
+                    const lastAtIndex = beforeCursor.lastIndexOf("@");
+                    const newText = beforeCursor.slice(0, lastAtIndex) + `@${username} ` + afterCursor;
+                    form.setValue("body", newText);
+                    setCursorPosition(lastAtIndex + username.length + 2);
+                    setTimeout(() => {
+                      textareaRef.current?.focus();
+                      textareaRef.current?.setSelectionRange(lastAtIndex + username.length + 2, lastAtIndex + username.length + 2);
+                    }, 0);
+                  }}
+                  onClose={() => {}}
+                />
+              </div>
             </FormField>
 
             <div className="grid gap-4 md:grid-cols-[1fr_0.8fr]">
@@ -196,13 +227,21 @@ export default function CreatePostPage() {
             </details>
 
             {submitError ? <p className="rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200">{submitError}</p> : null}
-            <div className="flex flex-wrap gap-3">
-              <Button type="submit" disabled={form.formState.isSubmitting || uploading}>
-                {uploading || form.formState.isSubmitting ? "Публикуем..." : isClip ? "Опубликовать клипс" : "Опубликовать"}
-              </Button>
-              <Button type="button" variant="outline" onClick={() => router.replace("/feed")}>
-                Отмена
-              </Button>
+            <div className="flex flex-wrap gap-2">
+              <Tooltip content={uploading || form.formState.isSubmitting ? "Publishing..." : isClip ? "Publish clip" : "Publish post"} side="top">
+                <Button type="submit" disabled={form.formState.isSubmitting || uploading} className="h-10 w-10 p-0 rounded-full">
+                  {uploading || form.formState.isSubmitting ? (
+                    <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                </Button>
+              </Tooltip>
+              <Tooltip content="Cancel" side="top">
+                <Button type="button" variant="outline" onClick={() => router.replace("/feed")} className="h-10 w-10 p-0 rounded-full">
+                  <X className="h-4 w-4" />
+                </Button>
+              </Tooltip>
             </div>
           </form>
         </Card>

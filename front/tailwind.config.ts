@@ -38,6 +38,18 @@ const config: Config = {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))",
         },
+        success: {
+          DEFAULT: "hsl(var(--success))",
+          foreground: "#ffffff",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning))",
+          foreground: "#1e293b",
+        },
+        info: {
+          DEFAULT: "hsl(var(--info))",
+          foreground: "#ffffff",
+        },
       },
       borderRadius: {
         xl: "1rem",
@@ -63,10 +75,30 @@ const config: Config = {
           "0%, 100%": { opacity: "0.35" },
           "50%": { opacity: "0.85" },
         },
+        spin: {
+          "0%": { transform: "rotate(0deg)" },
+          "100%": { transform: "rotate(360deg)" },
+        },
+        fadeIn: {
+          "0%": { opacity: "0" },
+          "100%": { opacity: "1" },
+        },
+        slideIn: {
+          "0%": { transform: "translateY(10px)", opacity: "0" },
+          "100%": { transform: "translateY(0)", opacity: "1" },
+        },
+        pulse: {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.5" },
+        },
       },
       animation: {
         float: "float 9s ease-in-out infinite",
         "pulse-line": "pulseLine 4s ease-in-out infinite",
+        spin: "spin 1s linear infinite",
+        "fade-in": "fadeIn 0.3s ease-in",
+        "slide-in": "slideIn 0.3s ease-out",
+        pulse: "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite",
       },
     },
   },

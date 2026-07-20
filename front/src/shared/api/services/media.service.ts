@@ -41,52 +41,59 @@ export const mediaService = {
     return grant.request.url;
   },
   async uploadFile(file: File, purpose: CreateUploadSessionRequest["purpose"]) {
-    const session = await this.createUploadSession({
-      purpose,
-      fileName: file.name,
-      mimeType: file.type || "application/octet-stream",
-      sizeBytes: file.size,
-      multipart: false,
-    });
+    try {
+      const session = await this.createUploadSession({
+        purpose,
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+        multipart: false,
+      });
 
-    const grant = session.partGrants?.[0];
-    if (!grant) {
-      throw new Error("Upload session is missing the first signed upload grant");
-    }
+      const grant = session.partGrants?.[0];
+      if (!grant) {
+        throw new Error("Upload session is missing the first signed upload grant");
+      }
 
-    const uploadResponse = await fetch(grant.request.url, {
-      method: grant.request.method,
-      headers: {
-        ...grant.request.headers,
-        "Content-Type": file.type || grant.request.headers["Content-Type"] || "application/octet-stream",
-      },
-      body: file,
-      credentials: "include",
-      cache: "no-store",
-    });
-
-    if (!uploadResponse.ok) {
-      throw new Error("File upload request failed");
-    }
-
-    const etag =
-      uploadResponse.headers.get("etag") ||
-      uploadResponse.headers.get("ETag") ||
-      `uploaded-${file.size}-${Date.now()}`;
-
-    const completed = await this.completeUploadSession(session.id, {
-      parts: [
-        {
-          partNumber: grant.partNumber,
-          etag,
-          sizeBytes: file.size,
+      const uploadResponse = await fetch(grant.request.url, {
+        method: grant.request.method,
+        headers: {
+          ...grant.request.headers,
+          "Content-Type": file.type || grant.request.headers["Content-Type"] || "application/octet-stream",
         },
-      ],
-    });
+        body: file,
+        credentials: "include",
+        cache: "no-store",
+      });
 
-    return {
-      session: completed,
-      mediaFileId: completed.mediaFileId,
-    };
+      if (!uploadResponse.ok) {
+        const errorText = await uploadResponse.text();
+        console.error("File upload failed:", uploadResponse.status, errorText);
+        throw new Error(`File upload request failed: ${uploadResponse.status} ${errorText}`);
+      }
+
+      const etag =
+        uploadResponse.headers.get("etag") ||
+        uploadResponse.headers.get("ETag") ||
+        `uploaded-${file.size}-${Date.now()}`;
+
+      const completed = await this.completeUploadSession(session.id, {
+        parts: [
+          {
+            partNumber: grant.partNumber,
+            etag,
+            sizeBytes: file.size,
+          },
+        ],
+      });
+
+      return {
+        session: completed,
+        mediaFileId: completed.mediaFileId,
+      };
+    } catch (error) {
+      console.error("Media upload error:", error);
+      throw error;
+    }
   },
 };

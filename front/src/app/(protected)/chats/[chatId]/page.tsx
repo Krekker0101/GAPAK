@@ -85,7 +85,7 @@ export default function ChatDetailsPage() {
 
   const { data, isLoading, isError, error, reload } = useAsyncResource(async () => {
     const [loadedMessages, chats] = await Promise.all([
-      chatService.getMessages(chatId, { page: 1, limit: 50 }),
+      chatService.getMessages(chatId as string, { page: 1, limit: 50 }),
       chatService.listChats(),
     ]);
 
@@ -169,7 +169,7 @@ export default function ChatDetailsPage() {
 
     const pollEvents = async () => {
       try {
-        const events = await chatService.getEvents(chatId, {
+        const events = await chatService.getEvents(chatId as string, {
           after: lastSequenceRef.current,
           limit: 25,
         });
@@ -228,7 +228,7 @@ export default function ChatDetailsPage() {
         envelopeType = "ATTACHMENT";
       }
 
-      const response = await chatService.sendMessage(chatId, {
+      const response = await chatService.sendMessage(chatId as string, {
         clientMessageId: createClientMessageId(),
         envelopeType,
         ciphertext: body || "",

@@ -1,9 +1,11 @@
 # Dependencies
 node_modules/
 
-# Next.js
+# Build outputs
 .next/
 out/
+dist/
+build/
 
 # Go build output
 bin/

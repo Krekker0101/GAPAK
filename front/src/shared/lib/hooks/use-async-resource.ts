@@ -1,5 +1,3 @@
-"use client";
-
 import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/shared/types/api";
