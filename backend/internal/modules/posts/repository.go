@@ -301,6 +301,112 @@ func (r *Repository) MediaFileIDs(ctx context.Context, postID string) ([]string,
 	return items, rows.Err()
 }
 
+func (r *Repository) AudienceUserIDsBatch(ctx context.Context, postIDs []string) (map[string][]string, error) {
+	result := make(map[string][]string, len(postIDs))
+	if len(postIDs) == 0 {
+		return result, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT post_id, subject_user_id
+		FROM post_audience_grants
+		WHERE post_id = ANY($1::text[])
+		ORDER BY post_id, created_at ASC
+	`, postIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var postID, userID string
+		if err := rows.Scan(&postID, &userID); err != nil {
+			return nil, err
+		}
+		result[postID] = append(result[postID], userID)
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) MediaFileIDsBatch(ctx context.Context, postIDs []string) (map[string][]string, error) {
+	result := make(map[string][]string, len(postIDs))
+	if len(postIDs) == 0 {
+		return result, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT post_id, media_file_id
+		FROM post_media_attachments
+		WHERE post_id = ANY($1::text[])
+		ORDER BY post_id, created_at ASC
+	`, postIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var postID, mediaID string
+		if err := rows.Scan(&postID, &mediaID); err != nil {
+			return nil, err
+		}
+		result[postID] = append(result[postID], mediaID)
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) CommentCountsBatch(ctx context.Context, postIDs []string) (map[string]int, error) {
+	result := make(map[string]int, len(postIDs))
+	for _, id := range postIDs {
+		result[id] = 0
+	}
+	if len(postIDs) == 0 {
+		return result, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT post_id, COALESCE(COUNT(*), 0) AS cnt
+		FROM comments
+		WHERE post_id = ANY($1::text[]) AND deleted_at IS NULL
+		GROUP BY post_id
+	`, postIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var postID string
+		var count int
+		if err := rows.Scan(&postID, &count); err != nil {
+			return nil, err
+		}
+		result[postID] = count
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) IsPostLikedBatch(ctx context.Context, userID string, postIDs []string) (map[string]bool, error) {
+	result := make(map[string]bool, len(postIDs))
+	for _, id := range postIDs {
+		result[id] = false
+	}
+	if len(postIDs) == 0 || userID == "" {
+		return result, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT post_id
+		FROM post_likes
+		WHERE user_id = $1 AND post_id = ANY($2::text[])
+	`, userID, postIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var postID string
+		if err := rows.Scan(&postID); err != nil {
+			return nil, err
+		}
+		result[postID] = true
+	}
+	return result, rows.Err()
+}
+
 func (r *Repository) MediaAttachmentSummaries(ctx context.Context, ownerID string, mediaIDs []string) ([]MediaAttachmentSummary, error) {
 	if len(mediaIDs) == 0 {
 		return nil, nil
@@ -333,18 +439,33 @@ func (r *Repository) MediaAttachmentSummaries(ctx context.Context, ownerID strin
 }
 
 func (r *Repository) EnsureOwnedMedia(ctx context.Context, ownerID string, mediaIDs []string) error {
-	for _, mediaID := range mediaIDs {
-		var exists bool
-		if err := r.db.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1
-				FROM media_files
-				WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL
-			)
-		`, mediaID, ownerID).Scan(&exists); err != nil {
+	if len(mediaIDs) == 0 {
+		return nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT DISTINCT id
+		FROM media_files
+		WHERE id = ANY($1::text[]) AND owner_id = $2 AND deleted_at IS NULL
+	`, mediaIDs, ownerID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	found := make(map[string]struct{}, len(mediaIDs))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return err
 		}
-		if !exists {
+		found[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, mediaID := range mediaIDs {
+		if _, ok := found[mediaID]; !ok {
 			return apperrors.New(403, "posts.media_not_owned", "One or more media files do not belong to the current user")
 		}
 	}
