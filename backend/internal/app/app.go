@@ -111,6 +111,9 @@ func New(ctx context.Context) (*App, error) {
 		AccessTTL:     cfg.Security.AccessTokenTTL,
 		RefreshTTL:    cfg.Security.RefreshTokenTTL,
 	})
+	if redisClient != nil {
+		jwtManager.SetRevocationChecker(authplatform.NewRedisRevocationChecker(redisClient))
+	}
 	storageSigner := storage.NewGatewaySigner(cfg.Storage)
 	redisQueue := queue.NewRedisQueue(redisClient)
 	privacyService := privacy.NewService(cfg.Anonymity)

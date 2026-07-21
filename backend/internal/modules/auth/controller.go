@@ -147,6 +147,14 @@ func (ctl *Controller) logout(c *fiber.Ctx) error {
 	if err := ctl.service.Logout(c.UserContext(), claims.UserID, claims.SessionID, payload.AllDevices); err != nil {
 		return err
 	}
+
+	// Revoke the current access token (or all access tokens for the user).
+	if payload.AllDevices {
+		_ = ctl.service.RevokeUserTokens(c.UserContext(), claims.UserID)
+	} else {
+		_ = ctl.service.RevokeAccessToken(c.UserContext(), claims.ID)
+	}
+
 	authplatform.ClearAuthCookies(c, ctl.config)
 	return c.JSON(httpx.OK(AcceptedResponse{Accepted: true}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }

@@ -237,6 +237,7 @@ func (s *Service) ResetPassword(ctx context.Context, req ResetPasswordRequest) (
 
 	// Revoke all sessions on password reset for security
 	_ = s.repo.RevokeAllSessions(ctx, resetToken.UserID)
+	_ = s.jwt.RevokeUserTokens(ctx, resetToken.UserID)
 
 	return AcceptedResponse{Accepted: true}, nil
 }
@@ -426,6 +427,14 @@ func ensureUserActive(user *model.User) error {
 		return apperrors.New(403, "auth.account_suspended", "Account is suspended")
 	}
 	return nil
+}
+
+func (s *Service) RevokeAccessToken(ctx context.Context, jti string) error {
+	return s.jwt.RevokeAccessToken(ctx, jti)
+}
+
+func (s *Service) RevokeUserTokens(ctx context.Context, userID string) error {
+	return s.jwt.RevokeUserTokens(ctx, userID)
 }
 
 const targetLoginLatency = 400 * time.Millisecond
