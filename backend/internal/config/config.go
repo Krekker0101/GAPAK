@@ -49,7 +49,8 @@ type DatabaseConfig struct {
 }
 
 type RedisConfig struct {
-	URL string
+	Enabled bool
+	URL     string
 }
 
 type SecurityConfig struct {
@@ -158,7 +159,8 @@ func Load() (Config, error) {
 			MaxConnLifetime: getEnvDuration("DATABASE_MAX_CONN_LIFETIME", 30*time.Minute),
 		},
 		Redis: RedisConfig{
-			URL: getEnv("REDIS_URL", ""),
+			Enabled: getEnvBool("REDIS_ENABLED", true),
+			URL:     getEnv("REDIS_URL", ""),
 		},
 		Security: SecurityConfig{
 			JWTIssuer:         getEnv("JWT_ISSUER", "gapak.api"),
