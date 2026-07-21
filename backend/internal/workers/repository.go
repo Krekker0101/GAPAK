@@ -289,6 +289,77 @@ func (r *Repository) EnsureDefaultVideoVariants(ctx context.Context, videoAssetI
 	return nil
 }
 
+type CreateVideoVariantParams struct {
+	VideoAssetID      string
+	Label             string
+	PlaylistObjectKey string
+	SegmentPrefix     string
+	Container         string
+	VideoCodec        string
+	AudioCodec        string
+	Width             int
+	Height            int
+	BitrateKbps       int
+	FrameRate         float64
+	DurationMillis    int
+	SizeBytes         int64
+}
+
+func (r *Repository) CreateVideoVariant(ctx context.Context, p CreateVideoVariantParams) error {
+	const query = `
+		INSERT INTO video_variants (
+			id, video_asset_id, label, status, playlist_object_key, init_segment_key, segment_prefix,
+			container, video_codec, audio_codec, width, height, bitrate_kbps, frame_rate, duration_millis, size_bytes, updated_at
+		)
+		VALUES ($1, $2, $3, 'READY', $4, NULL, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+		ON CONFLICT (video_asset_id, label) DO UPDATE SET
+			status = EXCLUDED.status,
+			playlist_object_key = EXCLUDED.playlist_object_key,
+			segment_prefix = EXCLUDED.segment_prefix,
+			container = EXCLUDED.container,
+			video_codec = EXCLUDED.video_codec,
+			audio_codec = EXCLUDED.audio_codec,
+			width = EXCLUDED.width,
+			height = EXCLUDED.height,
+			bitrate_kbps = EXCLUDED.bitrate_kbps,
+			frame_rate = EXCLUDED.frame_rate,
+			duration_millis = EXCLUDED.duration_millis,
+			size_bytes = EXCLUDED.size_bytes,
+			updated_at = NOW()`
+	_, err := r.db.Exec(ctx, query,
+		uuid.NewString(),
+		p.VideoAssetID,
+		p.Label,
+		p.PlaylistObjectKey,
+		p.SegmentPrefix,
+		p.Container,
+		p.VideoCodec,
+		p.AudioCodec,
+		p.Width,
+		p.Height,
+		p.BitrateKbps,
+		p.FrameRate,
+		p.DurationMillis,
+		p.SizeBytes,
+	)
+	return err
+}
+
+func (r *Repository) UpdateVideoAsset(ctx context.Context, videoAssetID string, width, height, durationMillis int, videoCodec, audioCodec string) error {
+	const query = `
+		UPDATE video_assets
+		SET width = $2, height = $3, duration_millis = $4, video_codec = $5, audio_codec = $6, updated_at = NOW()
+		WHERE id = $1`
+	_, err := r.db.Exec(ctx, query, videoAssetID, width, height, durationMillis, videoCodec, audioCodec)
+	return err
+}
+
+func (r *Repository) SetVideoAssetMasterPlaylist(ctx context.Context, videoAssetID, masterPlaylistKey string) error {
+	const query = `UPDATE video_assets SET master_playlist_key = $2, updated_at = NOW() WHERE id = $1`
+	_, err := r.db.Exec(ctx, query, videoAssetID, masterPlaylistKey)
+	return err
+}
+
 func (r *Repository) FinalizeUploadSession(ctx context.Context, sessionID string) error {
 	const query = `
 		UPDATE upload_sessions
