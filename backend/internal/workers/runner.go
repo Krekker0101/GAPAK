@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -277,19 +278,44 @@ func (r *Runner) processAdaptiveVideo(ctx context.Context, media *model.MediaFil
 	}
 
 	baseKey := strings.TrimSuffix(media.ObjectKey, filepathExt(media.ObjectKey))
-	for _, variant := range videoVariants() {
-		outputPath, err := r.resolveObjectPath(media.Bucket, filepath.ToSlash(filepath.Join(baseKey, "variants", variant.label+".mp4")))
+	info, _ := r.probeVideo(ctx, inputPath)
+	if info.width == 0 || info.height == 0 {
+		info.width = 1920
+		info.height = 1080
+	}
+	if info.videoCodec == "" {
+		info.videoCodec = "h264"
+	}
+	if info.audioCodec == "" {
+		info.audioCodec = "aac"
+	}
+	if info.durationMillis == 0 {
+		info.durationMillis = 15000
+	}
+
+	if err := r.repo.UpdateVideoAsset(ctx, videoAssetID, info.width, info.height, info.durationMillis, info.videoCodec, info.audioCodec); err != nil {
+		return err
+	}
+
+	variants := selectVideoVariants(videoVariants(), info.height)
+	if len(variants) == 0 {
+		return r.repo.MarkVideoAssetReady(ctx, videoAssetID)
+	}
+
+	for _, variant := range variants {
+		variantDir, err := r.resolveObjectPath(media.Bucket, filepath.ToSlash(filepath.Join(baseKey, "variants", variant.label)))
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		if err := os.MkdirAll(variantDir, 0o755); err != nil {
 			return err
 		}
+
+		playlistFile := filepath.Join(variantDir, "index.m3u8")
+		segmentPattern := filepath.Join(variantDir, "segment_%03d.ts")
 		transcodeCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-		cmd := exec.CommandContext(transcodeCtx,
-			"ffmpeg",
-			"-y",
-			"-i", inputPath,
+		args := []string{
+			"-y", "-i", inputPath,
 			"-map", "0:v:0",
 			"-map", "0:a?",
 			"-sn",
@@ -302,17 +328,57 @@ func (r *Runner) processAdaptiveVideo(ctx context.Context, media *model.MediaFil
 			"-bufsize", fmt.Sprintf("%dk", variant.bitrate*2),
 			"-c:a", "aac",
 			"-b:a", "128k",
-			"-movflags", "+faststart",
-			outputPath,
-		)
+			"-f", "hls",
+			"-hls_time", "4",
+			"-hls_playlist_type", "vod",
+			"-hls_segment_filename", segmentPattern,
+			"-hls_flags", "independent_segments",
+			playlistFile,
+		}
+		cmd := exec.CommandContext(transcodeCtx, "ffmpeg", args...)
 		output, runErr := cmd.CombinedOutput()
 		cancel()
 		if runErr != nil {
-			return fmt.Errorf("ffmpeg transcode %s: %w: %s", variant.label, runErr, strings.TrimSpace(string(output)))
+			return fmt.Errorf("ffmpeg hls %s: %w: %s", variant.label, runErr, strings.TrimSpace(string(output)))
+		}
+
+		playlistKey := filepath.ToSlash(filepath.Join(baseKey, "variants", variant.label, "index.m3u8"))
+		segmentPrefix := filepath.ToSlash(filepath.Join(baseKey, "variants", variant.label, "segment_"))
+		var variantSize int64
+		entries, _ := os.ReadDir(variantDir)
+		for _, entry := range entries {
+			if fi, err := entry.Info(); err == nil {
+				variantSize += fi.Size()
+			}
+		}
+
+		if err := r.repo.CreateVideoVariant(ctx, CreateVideoVariantParams{
+			VideoAssetID:      videoAssetID,
+			Label:             variant.label,
+			PlaylistObjectKey: playlistKey,
+			SegmentPrefix:     segmentPrefix,
+			Container:         "hls",
+			VideoCodec:        "h264",
+			AudioCodec:        "aac",
+			Width:             variant.width,
+			Height:            variant.height,
+			BitrateKbps:       variant.bitrate,
+			FrameRate:         30,
+			DurationMillis:    info.durationMillis,
+			SizeBytes:         variantSize,
+		}); err != nil {
+			return err
 		}
 	}
 
-	if err := r.repo.EnsureDefaultVideoVariants(ctx, videoAssetID, media.ObjectKey); err != nil {
+	masterPath, err := r.resolveObjectPath(media.Bucket, baseKey+".m3u8")
+	if err != nil {
+		return err
+	}
+	if err := r.writeMasterPlaylist(masterPath, baseKey, variants); err != nil {
+		return err
+	}
+	if err := r.repo.SetVideoAssetMasterPlaylist(ctx, videoAssetID, baseKey+".m3u8"); err != nil {
 		return err
 	}
 	return r.repo.MarkVideoAssetReady(ctx, videoAssetID)
@@ -333,6 +399,107 @@ func videoVariants() []videoVariantSpec {
 		{label: "720p", width: 1280, height: 720, bitrate: 2500},
 		{label: "1080p", width: 1920, height: 1080, bitrate: 4500},
 	}
+}
+
+func selectVideoVariants(all []videoVariantSpec, sourceHeight int) []videoVariantSpec {
+	var out []videoVariantSpec
+	for _, v := range all {
+		if v.height <= sourceHeight {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return all[:1]
+	}
+	return out
+}
+
+func (r *Runner) writeMasterPlaylist(path, baseKey string, variants []videoVariantSpec) error {
+	var buf strings.Builder
+	buf.WriteString("#EXTM3U\n")
+	buf.WriteString("#EXT-X-VERSION:4\n")
+	for _, v := range variants {
+		bandwidth := v.bitrate * 1000
+		if v.label != "" {
+			bandwidth += 128000
+		}
+		buf.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d,CODECS=\"avc1.42c01e,mp4a.40.2\"\n", bandwidth, v.width, v.height))
+		buf.WriteString(filepath.ToSlash(filepath.Join(baseKey, "variants", v.label, "index.m3u8")) + "\n")
+	}
+	return os.WriteFile(path, []byte(buf.String()), 0o644)
+}
+
+type ffprobeStream struct {
+	Index      int    `json:"index"`
+	CodecName  string `json:"codec_name"`
+	CodecType  string `json:"codec_type"`
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
+	Duration   string `json:"duration"`
+	RFrameRate string `json:"r_frame_rate"`
+}
+
+type ffprobeFormat struct {
+	Duration string `json:"duration"`
+}
+
+type ffprobeOutput struct {
+	Streams []ffprobeStream `json:"streams"`
+	Format  ffprobeFormat   `json:"format"`
+}
+
+type videoInfo struct {
+	width          int
+	height         int
+	durationMillis int
+	videoCodec     string
+	audioCodec     string
+}
+
+func (r *Runner) probeVideo(ctx context.Context, inputPath string) (videoInfo, error) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		return videoInfo{}, nil
+	}
+
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error",
+		"-print_format", "json",
+		"-show_streams",
+		"-show_format",
+		inputPath,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return videoInfo{}, err
+	}
+
+	var parsed ffprobeOutput
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return videoInfo{}, err
+	}
+
+	info := videoInfo{}
+	for _, s := range parsed.Streams {
+		switch s.CodecType {
+		case "video":
+			info.width = s.Width
+			info.height = s.Height
+			info.videoCodec = s.CodecName
+			if s.Duration != "" {
+				if sec, err := strconv.ParseFloat(s.Duration, 64); err == nil {
+					info.durationMillis = int(sec * 1000)
+				}
+			}
+		case "audio":
+			info.audioCodec = s.CodecName
+		}
+	}
+	if info.durationMillis == 0 && parsed.Format.Duration != "" {
+		if sec, err := strconv.ParseFloat(parsed.Format.Duration, 64); err == nil {
+			info.durationMillis = int(sec * 1000)
+		}
+	}
+	return info, nil
 }
 
 func (r *Runner) resolveObjectPath(bucket, objectKey string) (string, error) {
