@@ -104,6 +104,24 @@ func (r *Repository) Disconnect(ctx context.Context, userID, sessionID string, r
 	return tx.Commit(ctx)
 }
 
+func (r *Repository) IsUserOnline(ctx context.Context, userID string, activeSince time.Time) (bool, error) {
+	var exists bool
+	const query = `
+		SELECT EXISTS(
+			SELECT 1
+			FROM user_presence_connections
+			WHERE user_id = $1
+			  AND state = 'ACTIVE'
+			  AND disconnected_at IS NULL
+			  AND last_heartbeat_at >= $2
+		)
+	`
+	if err := r.db.QueryRow(ctx, query, userID, activeSince).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 func (r *Repository) FindStatus(ctx context.Context, viewerID, targetUserID string, activeSince time.Time) (*PresenceStatusRecord, error) {
 	const query = `
 		SELECT u.id,

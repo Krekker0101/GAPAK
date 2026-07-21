@@ -5,37 +5,36 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
+	fastws "github.com/fasthttp/websocket"
+	fiberws "github.com/gofiber/websocket/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 )
 
-// Service handles WebSocket connections and real-time messaging
+// Service handles WebSocket connections and real-time messaging.
 type Service struct {
-	upgrader        websocket.Upgrader
 	connections     *ConnectionRegistry
 	redis           *redis.Client
 	messageService  MessageService
 	presenceService PresenceService
 	authService     AuthService
-	logger          *zerolog.Logger
+	logger          zerolog.Logger
 }
 
-// ConnectionRegistry manages active WebSocket connections
+// ConnectionRegistry manages active WebSocket connections keyed by device ID.
 type ConnectionRegistry struct {
-	connections map[string]*Connection // user_id -> Connection
+	connections map[string]*Connection // device_id -> Connection
 	mu          sync.RWMutex
 }
 
-// Connection represents a WebSocket connection
+// Connection represents a WebSocket connection.
 type Connection struct {
 	UserID        string
 	DeviceID      string
-	Conn          *websocket.Conn
+	Conn          *fiberws.Conn
 	Send          chan []byte
 	Subscriptions map[string]bool // chat_id -> subscribed
 	CreatedAt     time.Time
@@ -43,46 +42,39 @@ type Connection struct {
 	mu            sync.Mutex
 }
 
-// MessageService interface for message operations
+// MessageService interface for message operations.
 type MessageService interface {
-	GetMessage(ctx context.Context, id string) (interface{}, error)
-	GetMessages(ctx context.Context, chatID string, limit int, before *time.Time) ([]interface{}, error)
+	GetMessage(ctx context.Context, userID, id string) (interface{}, error)
+	GetMessages(ctx context.Context, userID, chatID string, limit int, before *time.Time) ([]interface{}, error)
 }
 
-// PresenceService interface for presence operations
+// PresenceService interface for presence operations.
 type PresenceService interface {
 	SetOnline(ctx context.Context, userID, deviceID string) error
 	SetOffline(ctx context.Context, userID, deviceID string) error
 	IsOnline(ctx context.Context, userID string) (bool, error)
 }
 
-// AuthService interface for authentication
+// AuthService interface for authentication.
 type AuthService interface {
 	ValidateToken(ctx context.Context, token string) (string, error)
 }
 
-// WebSocketMessage represents a WebSocket message
+// WebSocketMessage represents a WebSocket message.
 type WebSocketMessage struct {
 	Type string      `json:"type"`
 	Data interface{} `json:"data"`
 }
 
-// NewService creates a new WebSocket service
+// NewService creates a new WebSocket service.
 func NewService(
 	redis *redis.Client,
 	messageService MessageService,
 	presenceService PresenceService,
 	authService AuthService,
-	logger *zerolog.Logger,
+	logger zerolog.Logger,
 ) *Service {
 	return &Service{
-		upgrader: websocket.Upgrader{
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
-			CheckOrigin: func(r *http.Request) bool {
-				return r.Header.Get("Origin") == ""
-			},
-		},
 		connections:     &ConnectionRegistry{connections: make(map[string]*Connection)},
 		redis:           redis,
 		messageService:  messageService,
@@ -92,46 +84,40 @@ func NewService(
 	}
 }
 
-// HandleConnection handles a new WebSocket connection
-func (s *Service) HandleConnection(w http.ResponseWriter, r *http.Request) {
-	// Upgrade HTTP connection to WebSocket
-	conn, err := s.upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		s.logger.Error().Err(err).Msg("failed to upgrade connection")
-		return
-	}
-	defer conn.Close()
+// HandleConnection handles a new WebSocket connection.
+func (s *Service) HandleConnection(c *fiberws.Conn) {
+	ctx := context.Background()
+	defer c.Close()
 
-	// Wait for authentication message
+	// Wait for authentication message.
 	var authMsg WebSocketMessage
-	if err := conn.ReadJSON(&authMsg); err != nil {
+	if err := c.ReadJSON(&authMsg); err != nil {
 		s.logger.Error().Err(err).Msg("failed to read auth message")
 		return
 	}
 
 	if authMsg.Type != "auth" {
 		s.logger.Warn().Str("type", authMsg.Type).Msg("expected auth message first")
-		conn.WriteJSON(WebSocketMessage{Type: "error", Data: "authentication required"})
+		_ = c.WriteJSON(WebSocketMessage{Type: "error", Data: "authentication required"})
 		return
 	}
 
-	// Validate token
 	authData, ok := authMsg.Data.(map[string]interface{})
 	if !ok {
-		conn.WriteJSON(WebSocketMessage{Type: "error", Data: "invalid auth data"})
+		_ = c.WriteJSON(WebSocketMessage{Type: "error", Data: "invalid auth data"})
 		return
 	}
 
 	token, ok := authData["token"].(string)
 	if !ok {
-		conn.WriteJSON(WebSocketMessage{Type: "error", Data: "token required"})
+		_ = c.WriteJSON(WebSocketMessage{Type: "error", Data: "token required"})
 		return
 	}
 
-	userID, err := s.authService.ValidateToken(r.Context(), token)
+	userID, err := s.authService.ValidateToken(ctx, token)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("authentication failed")
-		conn.WriteJSON(WebSocketMessage{Type: "error", Data: "authentication failed"})
+		_ = c.WriteJSON(WebSocketMessage{Type: "error", Data: "authentication failed"})
 		return
 	}
 
@@ -140,35 +126,32 @@ func (s *Service) HandleConnection(w http.ResponseWriter, r *http.Request) {
 		deviceID = generateDeviceID()
 	}
 
-	// Create connection
 	connection := &Connection{
 		UserID:        userID,
 		DeviceID:      deviceID,
-		Conn:          conn,
+		Conn:          c,
 		Send:          make(chan []byte, 256),
 		Subscriptions: make(map[string]bool),
 		CreatedAt:     time.Now(),
 		LastPing:      time.Now(),
 	}
 
-	// Register connection
-	s.connections.Register(userID, connection)
-	defer s.connections.Unregister(userID)
+	s.connections.Register(connection)
+	defer s.connections.Unregister(connection.DeviceID)
 
-	// Set user online
-	if err := s.presenceService.SetOnline(r.Context(), userID, deviceID); err != nil {
+	if err := s.presenceService.SetOnline(ctx, userID, deviceID); err != nil {
 		s.logger.Error().Err(err).Str("user_id", userID).Msg("failed to set online")
 	}
 	defer func() {
-		s.presenceService.SetOffline(r.Context(), userID, deviceID)
+		if err := s.presenceService.SetOffline(ctx, userID, deviceID); err != nil {
+			s.logger.Error().Err(err).Str("user_id", userID).Msg("failed to set offline")
+		}
 	}()
 
-	// Start read/write pumps
 	go s.writePump(connection)
-	s.readPump(r.Context(), connection)
+	s.readPump(ctx, connection)
 }
 
-// readPump reads messages from the WebSocket connection
 func (s *Service) readPump(ctx context.Context, conn *Connection) {
 	defer conn.Conn.Close()
 
@@ -182,7 +165,7 @@ func (s *Service) readPump(ctx context.Context, conn *Connection) {
 	for {
 		_, message, err := conn.Conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+			if fastws.IsUnexpectedCloseError(err, fastws.CloseGoingAway, fastws.CloseAbnormalClosure) {
 				s.logger.Error().Err(err).Str("user_id", conn.UserID).Msg("unexpected close error")
 			}
 			break
@@ -194,7 +177,6 @@ func (s *Service) readPump(ctx context.Context, conn *Connection) {
 			continue
 		}
 
-		// Handle message
 		if err := s.handleMessage(ctx, conn, &wsMsg); err != nil {
 			s.logger.Error().Err(err).Str("type", wsMsg.Type).Msg("failed to handle message")
 			conn.Send <- []byte(fmt.Sprintf(`{"type":"error","data":"%s"}`, err.Error()))
@@ -202,7 +184,6 @@ func (s *Service) readPump(ctx context.Context, conn *Connection) {
 	}
 }
 
-// writePump writes messages to the WebSocket connection
 func (s *Service) writePump(conn *Connection) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
@@ -215,25 +196,24 @@ func (s *Service) writePump(conn *Connection) {
 		case message, ok := <-conn.Send:
 			conn.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if !ok {
-				conn.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				_ = conn.Conn.WriteMessage(fiberws.CloseMessage, []byte{})
 				return
 			}
 
-			if err := conn.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			if err := conn.Conn.WriteMessage(fiberws.TextMessage, message); err != nil {
 				s.logger.Error().Err(err).Str("user_id", conn.UserID).Msg("failed to write message")
 				return
 			}
 
 		case <-ticker.C:
 			conn.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := conn.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if err := conn.Conn.WriteMessage(fiberws.PingMessage, nil); err != nil {
 				return
 			}
 		}
 	}
 }
 
-// handleMessage handles incoming WebSocket messages
 func (s *Service) handleMessage(ctx context.Context, conn *Connection, msg *WebSocketMessage) error {
 	switch msg.Type {
 	case "subscribe":
@@ -251,7 +231,6 @@ func (s *Service) handleMessage(ctx context.Context, conn *Connection, msg *WebS
 	}
 }
 
-// handleSubscribe handles subscription to a chat
 func (s *Service) handleSubscribe(ctx context.Context, conn *Connection, msg *WebSocketMessage) error {
 	data, ok := msg.Data.(map[string]interface{})
 	if !ok {
@@ -263,13 +242,11 @@ func (s *Service) handleSubscribe(ctx context.Context, conn *Connection, msg *We
 		return errors.New("chat_id required")
 	}
 
-	// Add subscription
 	conn.mu.Lock()
 	conn.Subscriptions[chatID] = true
 	conn.mu.Unlock()
 
-	// Send recent messages
-	messages, err := s.messageService.GetMessages(ctx, chatID, 50, nil)
+	messages, err := s.messageService.GetMessages(ctx, conn.UserID, chatID, 50, nil)
 	if err != nil {
 		s.logger.Error().Err(err).Str("chat_id", chatID).Msg("failed to get messages")
 		return err
@@ -295,7 +272,6 @@ func (s *Service) handleSubscribe(ctx context.Context, conn *Connection, msg *We
 	return nil
 }
 
-// handleUnsubscribe handles unsubscription from a chat
 func (s *Service) handleUnsubscribe(ctx context.Context, conn *Connection, msg *WebSocketMessage) error {
 	data, ok := msg.Data.(map[string]interface{})
 	if !ok {
@@ -307,7 +283,6 @@ func (s *Service) handleUnsubscribe(ctx context.Context, conn *Connection, msg *
 		return errors.New("chat_id required")
 	}
 
-	// Remove subscription
 	conn.mu.Lock()
 	delete(conn.Subscriptions, chatID)
 	conn.mu.Unlock()
@@ -320,10 +295,9 @@ func (s *Service) handleUnsubscribe(ctx context.Context, conn *Connection, msg *
 	return nil
 }
 
-// handleSendMessage handles sending a message
 func (s *Service) handleSendMessage(ctx context.Context, conn *Connection, msg *WebSocketMessage) error {
-	// This would delegate to the message service
-	// For now, just acknowledge
+	// For now, just acknowledge. Sending messages through WebSocket will be
+	// wired to the chat service in a follow-up.
 	response := WebSocketMessage{
 		Type: "ack",
 		Data: map[string]string{"status": "received"},
@@ -338,7 +312,6 @@ func (s *Service) handleSendMessage(ctx context.Context, conn *Connection, msg *
 	return nil
 }
 
-// handleReadReceipt handles read receipts
 func (s *Service) handleReadReceipt(ctx context.Context, conn *Connection, msg *WebSocketMessage) error {
 	data, ok := msg.Data.(map[string]interface{})
 	if !ok {
@@ -358,7 +331,6 @@ func (s *Service) handleReadReceipt(ctx context.Context, conn *Connection, msg *
 	return nil
 }
 
-// handleTyping handles typing indicators
 func (s *Service) handleTyping(ctx context.Context, conn *Connection, msg *WebSocketMessage) error {
 	data, ok := msg.Data.(map[string]interface{})
 	if !ok {
@@ -375,7 +347,6 @@ func (s *Service) handleTyping(ctx context.Context, conn *Connection, msg *WebSo
 		return errors.New("is_typing required")
 	}
 
-	// Broadcast typing indicator to other chat members
 	s.broadcastToChat(ctx, chatID, WebSocketMessage{
 		Type: "typing",
 		Data: map[string]interface{}{
@@ -388,7 +359,6 @@ func (s *Service) handleTyping(ctx context.Context, conn *Connection, msg *WebSo
 	return nil
 }
 
-// broadcastToChat broadcasts a message to all subscribers of a chat
 func (s *Service) broadcastToChat(ctx context.Context, chatID string, msg WebSocketMessage, excludeUserID string) {
 	dataBytes, err := json.Marshal(msg)
 	if err != nil {
@@ -396,12 +366,11 @@ func (s *Service) broadcastToChat(ctx context.Context, chatID string, msg WebSoc
 		return
 	}
 
-	// Get all connections subscribed to this chat
 	s.connections.mu.RLock()
 	defer s.connections.mu.RUnlock()
 
-	for userID, conn := range s.connections.connections {
-		if userID == excludeUserID {
+	for _, conn := range s.connections.connections {
+		if conn.UserID == excludeUserID {
 			continue
 		}
 
@@ -413,38 +382,34 @@ func (s *Service) broadcastToChat(ctx context.Context, chatID string, msg WebSoc
 			select {
 			case conn.Send <- dataBytes:
 			default:
-				s.logger.Warn().Str("user_id", userID).Msg("connection send buffer full")
+				s.logger.Warn().Str("user_id", conn.UserID).Msg("connection send buffer full")
 			}
 		}
 	}
 }
 
-// Register registers a connection
-func (cr *ConnectionRegistry) Register(userID string, conn *Connection) {
+func (cr *ConnectionRegistry) Register(conn *Connection) {
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
-	cr.connections[userID] = conn
+	cr.connections[conn.DeviceID] = conn
 }
 
-// Unregister unregisters a connection
-func (cr *ConnectionRegistry) Unregister(userID string) {
+func (cr *ConnectionRegistry) Unregister(deviceID string) {
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
-	if conn, ok := cr.connections[userID]; ok {
+	if conn, ok := cr.connections[deviceID]; ok {
 		close(conn.Send)
-		delete(cr.connections, userID)
+		delete(cr.connections, deviceID)
 	}
 }
 
-// Get retrieves a connection
-func (cr *ConnectionRegistry) Get(userID string) (*Connection, bool) {
+func (cr *ConnectionRegistry) Get(deviceID string) (*Connection, bool) {
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
-	conn, ok := cr.connections[userID]
+	conn, ok := cr.connections[deviceID]
 	return conn, ok
 }
 
-// generateDeviceID generates a unique device ID
 func generateDeviceID() string {
 	return fmt.Sprintf("device_%d", time.Now().UnixNano())
 }
