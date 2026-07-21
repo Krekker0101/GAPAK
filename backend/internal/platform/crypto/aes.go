@@ -21,6 +21,10 @@ func NewEncryptor(base64Key string) (*Encryptor, error) {
 }
 
 func (e *Encryptor) Encrypt(plaintext string) (string, string, error) {
+	return e.EncryptWithAAD(plaintext, "")
+}
+
+func (e *Encryptor) EncryptWithAAD(plaintext, aad string) (string, string, error) {
 	block, err := aes.NewCipher(e.key)
 	if err != nil {
 		return "", "", err
@@ -33,11 +37,15 @@ func (e *Encryptor) Encrypt(plaintext string) (string, string, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", "", err
 	}
-	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), nil)
+	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), []byte(aad))
 	return base64.StdEncoding.EncodeToString(ciphertext), base64.StdEncoding.EncodeToString(nonce), nil
 }
 
 func (e *Encryptor) Decrypt(ciphertext, nonce string) (string, error) {
+	return e.DecryptWithAAD(ciphertext, nonce, "")
+}
+
+func (e *Encryptor) DecryptWithAAD(ciphertext, nonce, aad string) (string, error) {
 	block, err := aes.NewCipher(e.key)
 	if err != nil {
 		return "", err
@@ -54,7 +62,7 @@ func (e *Encryptor) Decrypt(ciphertext, nonce string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	plaintext, err := gcm.Open(nil, rawNonce, rawCiphertext, nil)
+	plaintext, err := gcm.Open(nil, rawNonce, rawCiphertext, []byte(aad))
 	if err != nil {
 		return "", err
 	}

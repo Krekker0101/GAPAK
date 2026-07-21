@@ -104,7 +104,7 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, meta common.Reque
 		if strings.TrimSpace(req.TOTPCode) == "" {
 			return AuthResponse{}, "", apperrors.New(401, "auth.two_factor_required", "Two-factor code is required")
 		}
-		secret, err := s.encryptor.Decrypt(pointerValue(user.TwoFactorSecretCiphertext), pointerValue(user.TwoFactorSecretNonce))
+		secret, err := s.decryptTOTPSecret(user)
 		if err != nil {
 			return AuthResponse{}, "", apperrors.ErrInternal
 		}
@@ -185,6 +185,17 @@ func (s *Service) Logout(ctx context.Context, userID, currentSessionID string, a
 	return s.repo.RevokeSession(ctx, currentSessionID)
 }
 
+func (s *Service) decryptTOTPSecret(user *model.User) (string, error) {
+	ciphertext := pointerValue(user.TwoFactorSecretCiphertext)
+	nonce := pointerValue(user.TwoFactorSecretNonce)
+	secret, err := s.encryptor.DecryptWithAAD(ciphertext, nonce, user.ID)
+	if err == nil {
+		return secret, nil
+	}
+	// Fallback to legacy ciphertexts without AAD.
+	return s.encryptor.Decrypt(ciphertext, nonce)
+}
+
 func (s *Service) ForgotPassword(ctx context.Context, req ForgotPasswordRequest) (AcceptedResponse, error) {
 	// Normalize timing to prevent distinguishing between non-existent users,
 	// anonymous accounts, and real recoverable accounts.
@@ -259,7 +270,7 @@ func (s *Service) SetupTwoFactor(ctx context.Context, userID, sessionID string) 
 		return TwoFactorSetupResponse{}, err
 	}
 
-	challengeCiphertext, challengeNonce, err := s.encryptor.Encrypt(key.Secret())
+	challengeCiphertext, challengeNonce, err := s.encryptor.EncryptWithAAD(key.Secret(), userID)
 	if err != nil {
 		return TwoFactorSetupResponse{}, err
 	}
@@ -313,7 +324,10 @@ func (s *Service) VerifyTwoFactor(ctx context.Context, userID, sessionID string,
 		return AcceptedResponse{}, apperrors.New(403, "auth.two_factor_session_mismatch", "2FA setup must be completed from the same session")
 	}
 
-	secret, err := s.encryptor.Decrypt(challenge.SecretCiphertext, challenge.SecretNonce)
+	secret, err := s.encryptor.DecryptWithAAD(challenge.SecretCiphertext, challenge.SecretNonce, userID)
+	if err != nil {
+		secret, err = s.encryptor.Decrypt(challenge.SecretCiphertext, challenge.SecretNonce)
+	}
 	if err != nil {
 		return AcceptedResponse{}, apperrors.ErrInternal
 	}
@@ -335,7 +349,7 @@ func (s *Service) VerifyTwoFactor(ctx context.Context, userID, sessionID string,
 		})
 	}
 
-	ciphertext, nonce, err := s.encryptor.Encrypt(secret)
+	ciphertext, nonce, err := s.encryptor.EncryptWithAAD(secret, userID)
 	if err != nil {
 		return AcceptedResponse{}, err
 	}
