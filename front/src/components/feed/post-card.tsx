@@ -52,6 +52,8 @@ const PostAttachment = memo(function PostAttachment({ mediaId }: { mediaId: stri
 type PostCardProps = {
   post: PostResponse;
   mode?: "feed" | "clip";
+  currentUserId?: string;
+  currentUserName?: string;
 };
 
 export const PostCard = memo(function PostCard({ post, mode = "feed" }: PostCardProps) {
@@ -114,6 +116,10 @@ export const PostCard = memo(function PostCard({ post, mode = "feed" }: PostCard
   }, []);
 
   if (mode === "clip") {
+    if (!mediaIds[0]) {
+      return null;
+    }
+
     return (
       <Card className="group relative mx-auto w-full max-w-[420px] overflow-hidden p-3 transition-transform duration-500 hover:-translate-y-1">
         <div className="relative overflow-hidden rounded-2xl bg-black">
@@ -166,6 +172,10 @@ export const PostCard = memo(function PostCard({ post, mode = "feed" }: PostCard
             <p className="truncate text-sm font-semibold text-foreground">{shortId(post.authorId)}</p>
             <p className="text-xs text-muted-foreground">{formatRelativeTime(post.publishedAt)}</p>
           </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-muted-foreground">
+          {post.privacy === "TIMED" ? <Timer className="h-3.5 w-3.5 text-primary" /> : <LockKeyhole className="h-3.5 w-3.5 text-primary" />}
+          {accessBadge}
         </div>
       </div>
 
