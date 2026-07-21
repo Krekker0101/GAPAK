@@ -1,7 +1,10 @@
 package media
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"strconv"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
@@ -9,6 +12,8 @@ import (
 
 	"github.com/gapak/backend/internal/platform/httpx"
 	"github.com/gapak/backend/internal/platform/middleware"
+
+	apperrors "github.com/gapak/backend/internal/platform/errors"
 )
 
 type Controller struct {
@@ -191,7 +196,18 @@ func (ctl *Controller) gatewayUpload(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	etag, err := ctl.service.UploadPart(c.UserContext(), query, c.Body(), c.Get(fiber.HeaderContentType))
+
+	partSize, err := strconv.ParseInt(strings.TrimSpace(c.Get(fiber.HeaderContentLength)), 10, 64)
+	if err != nil || partSize <= 0 {
+		return apperrors.New(400, "media.content_length_required", "Content-Length header is required and must be a positive integer")
+	}
+
+	var body io.Reader = c.Request().BodyStream()
+	if body == nil {
+		body = bytes.NewReader(c.Body())
+	}
+
+	etag, err := ctl.service.UploadPart(c.UserContext(), query, body, partSize, c.Get(fiber.HeaderContentType))
 	if err != nil {
 		return err
 	}

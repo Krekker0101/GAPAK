@@ -43,7 +43,7 @@ type ProtectedObject struct {
 	FileName string
 }
 
-func (s *Service) UploadPart(ctx context.Context, query SignedUploadQuery, body []byte, requestContentType string) (string, error) {
+func (s *Service) UploadPart(ctx context.Context, query SignedUploadQuery, body io.Reader, partSize int64, requestContentType string) (string, error) {
 	expiresAt, err := parseSignedExpiry(query.ExpiresAt)
 	if err != nil {
 		return "", err
@@ -83,7 +83,6 @@ func (s *Service) UploadPart(ctx context.Context, query SignedUploadQuery, body 
 		return "", apperrors.New(400, "media.content_type_mismatch", "Uploaded part content type does not match the signed request")
 	}
 
-	partSize := int64(len(body))
 	if partSize == 0 {
 		return "", apperrors.New(400, "media.empty_upload_body", "Uploaded part body cannot be empty")
 	}
@@ -105,12 +104,25 @@ func (s *Service) UploadPart(ctx context.Context, query SignedUploadQuery, body 
 	if err := os.MkdirAll(filepath.Dir(partPath), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(partPath, body, 0o600); err != nil {
+
+	file, err := os.Create(partPath)
+	if err != nil {
 		return "", err
 	}
+	defer file.Close()
 
-	sum := sha256.Sum256(body)
-	etag := hex.EncodeToString(sum[:])
+	hash := sha256.New()
+	written, err := io.CopyN(io.MultiWriter(file, hash), body, partSize)
+	if err != nil && err != io.EOF {
+		_ = os.Remove(partPath)
+		return "", apperrors.New(400, "media.upload_body_read_failed", "Failed to read upload body")
+	}
+	if written != partSize {
+		_ = os.Remove(partPath)
+		return "", apperrors.New(400, "media.upload_incomplete", "Upload body size does not match Content-Length")
+	}
+
+	etag := hex.EncodeToString(hash.Sum(nil))
 	if err := s.repo.UpsertUploadPartBySession(ctx, session.ID, CompletedUploadPart{
 		PartNumber: query.PartNumber,
 		ETag:       etag,
