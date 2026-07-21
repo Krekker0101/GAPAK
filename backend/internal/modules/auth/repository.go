@@ -41,15 +41,15 @@ func (r *Repository) FindUserByLogin(ctx context.Context, login string) (*model.
 
 func (r *Repository) FindUserByID(ctx context.Context, userID string) (*model.User, error) {
 	const query = `
-		SELECT id, email, username, display_name, password_hash, role, account_status,
-		       is_anonymous, two_factor_enabled, two_factor_secret_ciphertext, two_factor_secret_nonce,
+		SELECT id, email, username, display_name, role, account_status,
+		       is_anonymous, two_factor_enabled,
 		       created_at, updated_at, deleted_at
 		FROM users
 		WHERE deleted_at IS NULL AND id = $1
 		LIMIT 1`
 
 	row := r.db.QueryRow(ctx, query, userID)
-	return scanUser(row)
+	return scanUserPublic(row)
 }
 
 func (r *Repository) CreateUser(ctx context.Context, req RegisterRequest, email *string, passwordHash string, isAnonymous bool, defaults privacy.PrivacyDefaults) (*model.User, error) {
@@ -343,6 +343,37 @@ func (r *Repository) CreateDeviceLoginAlert(ctx context.Context, userID, session
 		VALUES ($1, $2, $3, 'IN_APP', 'PENDING')`
 	_, err := r.db.Exec(ctx, query, uuid.NewString(), userID, sessionID)
 	return err
+}
+
+func scanUserPublic(row pgx.Row) (*model.User, error) {
+	var user model.User
+	var role string
+	var accountStatus string
+	var email sql.NullString
+	if err := row.Scan(
+		&user.ID,
+		&email,
+		&user.Username,
+		&user.DisplayName,
+		&role,
+		&accountStatus,
+		&user.IsAnonymous,
+		&user.TwoFactorEnabled,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+		&user.DeletedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	user.Role = enums.UserRole(role)
+	user.AccountStatus = enums.AccountStatus(accountStatus)
+	if email.Valid {
+		user.Email = &email.String
+	}
+	return &user, nil
 }
 
 func scanUser(row pgx.Row) (*model.User, error) {

@@ -33,6 +33,60 @@ type Repository struct {
 	db dbConn
 }
 
+// allowedUpdateColumns defines which columns can be set via the generic Update* helpers.
+var allowedUpdateColumns = map[string]map[string]struct{}{
+	"chats": {
+		"title":               {},
+		"description":         {},
+		"avatar_file_id":      {},
+		"encryption_protocol": {},
+		"message_ttl_seconds": {},
+		"is_muted":            {},
+		"is_pinned":           {},
+	},
+	"chat_members": {
+		"role":                 {},
+		"nickname":             {},
+		"is_muted":             {},
+		"mute_until":           {},
+		"last_read_message_id": {},
+		"last_read_at":         {},
+	},
+	"messages": {
+		"ciphertext":                {},
+		"nonce":                     {},
+		"content":                   {},
+		"metadata":                  {},
+		"sender_key_id":             {},
+		"encryption_protocol":       {},
+		"encryption_algorithm":      {},
+		"associated_data":           {},
+		"ratchet_counter":           {},
+		"authentication_tag":        {},
+		"reply_to_message_id":       {},
+		"forwarded_from_message_id": {},
+		"forwarded_from_chat_id":    {},
+		"expires_at":                {},
+		"edited_at":                 {},
+		"status":                    {},
+	},
+}
+
+func validateUpdateColumns(table string, updates map[string]interface{}) (map[string]interface{}, error) {
+	allowed, ok := allowedUpdateColumns[table]
+	if !ok {
+		return nil, apperrors.New(500, "chats.unknown_update_table", "Unknown update table: "+table)
+	}
+	filtered := make(map[string]interface{}, len(updates))
+	for key, value := range updates {
+		if _, ok := allowed[key]; !ok {
+			return nil, apperrors.New(400, "chats.invalid_update_field", "Update field not allowed for "+table+": "+key)
+		}
+		filtered[key] = value
+	}
+	return filtered, nil
+}
+
 func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
@@ -132,6 +186,12 @@ func (r *Repository) UpdateChat(ctx context.Context, chatID string, updates map[
 	if len(updates) == 0 {
 		return r.GetChat(ctx, chatID)
 	}
+
+	updates, err := validateUpdateColumns("chats", updates)
+	if err != nil {
+		return nil, err
+	}
+
 	setClauses := make([]string, 0)
 	args := make([]interface{}, 0)
 	argIndex := 1
@@ -260,6 +320,12 @@ func (r *Repository) UpdateChatMember(ctx context.Context, chatID, userID string
 	if len(updates) == 0 {
 		return r.GetChatMember(ctx, chatID, userID)
 	}
+
+	updates, err := validateUpdateColumns("chat_members", updates)
+	if err != nil {
+		return nil, err
+	}
+
 	setClauses := make([]string, 0)
 	args := make([]interface{}, 0)
 	argIndex := 1
@@ -465,6 +531,12 @@ func (r *Repository) UpdateMessage(ctx context.Context, messageID string, update
 	if len(updates) == 0 {
 		return r.GetMessage(ctx, messageID)
 	}
+
+	updates, err := validateUpdateColumns("messages", updates)
+	if err != nil {
+		return nil, err
+	}
+
 	setClauses := make([]string, 0)
 	args := make([]interface{}, 0)
 	argIndex := 1

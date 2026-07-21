@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"html"
 	"strings"
 	"time"
 
@@ -21,8 +20,6 @@ import (
 const (
 	twoFactorSetupTTL         = 10 * time.Minute
 	twoFactorSetupMaxAttempts = 5
-	loginFailDelayBase        = 200 * time.Millisecond
-	loginFailDelayMax         = 2 * time.Second
 )
 
 type Service struct {
@@ -47,7 +44,7 @@ func NewService(repo *Repository, passwords *authplatform.PasswordManager, jwt *
 
 func (s *Service) Register(ctx context.Context, req RegisterRequest, meta common.RequestMeta) (AuthResponse, string, error) {
 	req.Username = strings.ToLower(strings.TrimSpace(req.Username))
-	req.DisplayName = html.EscapeString(strings.TrimSpace(req.DisplayName))
+	req.DisplayName = strings.TrimSpace(req.DisplayName)
 
 	email, isAnonymous, err := s.privacy.NormalizeRegistrationEmail(req.Email)
 	if err != nil {
@@ -84,20 +81,22 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest, meta common
 }
 
 func (s *Service) Login(ctx context.Context, req LoginRequest, meta common.RequestMeta) (AuthResponse, string, error) {
+	// Normalize total login latency to prevent timing side-channels between
+	// invalid-user, invalid-password and successful-with-2FA branches.
+	start := time.Now()
+	defer normalizeLoginTiming(start)
+
 	login := strings.ToLower(strings.TrimSpace(req.Login))
 	user, err := s.repo.FindUserByLogin(ctx, login)
 	if err != nil {
-		applyLoginFailDelay("")
 		return AuthResponse{}, "", apperrors.ErrInvalidCredentials
 	}
 	if err := ensureUserActive(user); err != nil {
-		applyLoginFailDelay("")
 		return AuthResponse{}, "", err
 	}
 
 	ok, err := s.passwords.Compare(req.Password, user.PasswordHash)
 	if err != nil || !ok {
-		applyLoginFailDelay(user.PasswordHash)
 		return AuthResponse{}, "", apperrors.ErrInvalidCredentials
 	}
 
@@ -110,7 +109,6 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, meta common.Reque
 			return AuthResponse{}, "", apperrors.ErrInternal
 		}
 		if !s.totp.ValidateWithWindow(req.TOTPCode, secret) {
-			applyLoginFailDelay(user.PasswordHash)
 			return AuthResponse{}, "", apperrors.New(401, "auth.two_factor_invalid", "Invalid two-factor code")
 		}
 	}
@@ -423,7 +421,10 @@ func ensureUserActive(user *model.User) error {
 	return nil
 }
 
-func applyLoginFailDelay(passwordHashForTiming string) {
-	// Use constant delay to prevent timing side-channels
-	time.Sleep(loginFailDelayBase + 100*time.Millisecond)
+const targetLoginLatency = 400 * time.Millisecond
+
+func normalizeLoginTiming(start time.Time) {
+	if elapsed := time.Since(start); elapsed < targetLoginLatency {
+		time.Sleep(targetLoginLatency - elapsed)
+	}
 }
