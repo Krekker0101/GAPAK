@@ -438,7 +438,7 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		return MessageResponse{}, err
 	}
 
-	return s.toMessageResponse(ctx, createdMessage, userID)
+	return s.toMessageResponse(ctx, createdMessage, userID, nil, nil)
 }
 
 func (s *Service) GetMessage(ctx context.Context, messageID, userID string) (MessageResponse, error) {
@@ -451,7 +451,7 @@ func (s *Service) GetMessage(ctx context.Context, messageID, userID string) (Mes
 		return MessageResponse{}, err
 	}
 
-	return s.toMessageResponse(ctx, message, userID)
+	return s.toMessageResponse(ctx, message, userID, nil, nil)
 }
 
 func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req EditMessageRequest) (MessageResponse, error) {
@@ -540,7 +540,7 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 		return MessageResponse{}, err
 	}
 
-	return s.toMessageResponse(ctx, updatedMessage, userID)
+	return s.toMessageResponse(ctx, updatedMessage, userID, nil, nil)
 }
 
 func (s *Service) DeleteMessage(ctx context.Context, messageID, userID string, req DeleteMessageRequest) error {
@@ -580,9 +580,22 @@ func (s *Service) GetMessages(ctx context.Context, chatID, userID string, query 
 		return nil, nil, err
 	}
 
+	messageIDs := make([]string, len(messages))
+	for i, message := range messages {
+		messageIDs[i] = message.ID
+	}
+	attachmentMap, err := s.repo.GetAttachmentsByMessageIDs(ctx, messageIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	keyEnvelopeMap, err := s.repo.GetMessageKeyEnvelopesForUsers(ctx, messageIDs, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	response := make([]MessageResponse, 0, len(messages))
 	for _, message := range messages {
-		msgResp, err := s.toMessageResponse(ctx, message, userID)
+		msgResp, err := s.toMessageResponse(ctx, message, userID, attachmentMap[message.ID], keyEnvelopeMap[message.ID])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -944,14 +957,19 @@ func (s *Service) toChatResponse(ctx context.Context, chat *model.Chat, userID s
 	}, nil
 }
 
-func (s *Service) toMessageResponse(ctx context.Context, message *model.Message, viewerUserID string) (MessageResponse, error) {
-	attachments, err := s.repo.GetAttachmentsByMessage(ctx, message.ID)
-	if err != nil {
-		attachments = []*model.Attachment{}
+func (s *Service) toMessageResponse(ctx context.Context, message *model.Message, viewerUserID string, attachments []*model.Attachment, keyEnvelopes []*model.MessageKey) (MessageResponse, error) {
+	var err error
+	if attachments == nil {
+		attachments, err = s.repo.GetAttachmentsByMessage(ctx, message.ID)
+		if err != nil {
+			attachments = []*model.Attachment{}
+		}
 	}
-	keyEnvelopes, err := s.repo.GetMessageKeyEnvelopesForUser(ctx, message.ID, viewerUserID)
-	if err != nil {
-		keyEnvelopes = []*model.MessageKey{}
+	if keyEnvelopes == nil {
+		keyEnvelopes, err = s.repo.GetMessageKeyEnvelopesForUser(ctx, message.ID, viewerUserID)
+		if err != nil {
+			keyEnvelopes = []*model.MessageKey{}
+		}
 	}
 
 	attachmentResponses := make([]AttachmentResponse, 0, len(attachments))
