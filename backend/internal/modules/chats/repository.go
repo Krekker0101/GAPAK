@@ -732,6 +732,33 @@ func (r *Repository) GetAttachmentsByMessage(ctx context.Context, messageID stri
 	return attachments, rows.Err()
 }
 
+func (r *Repository) GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []string) (map[string][]*model.Attachment, error) {
+	result := make(map[string][]*model.Attachment, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+	const query = `
+		SELECT id, message_id, media_file_id, kind, file_name, mime_type,
+		       size_bytes, width, height, duration_seconds, thumbnail_file_id, metadata, created_at
+		FROM attachments
+		WHERE message_id = ANY($1::text[])
+		ORDER BY message_id, created_at ASC
+	`
+	rows, err := r.db.Query(ctx, query, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		attachment, err := r.scanAttachment(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[attachment.MessageID] = append(result[attachment.MessageID], attachment)
+	}
+	return result, rows.Err()
+}
+
 // ============================================================================
 // REACTION OPERATIONS
 // ============================================================================
@@ -1305,6 +1332,33 @@ func (r *Repository) GetMessageKeyEnvelopesForUser(ctx context.Context, messageI
 		envelopes = append(envelopes, envelope)
 	}
 	return envelopes, rows.Err()
+}
+
+func (r *Repository) GetMessageKeyEnvelopesForUsers(ctx context.Context, messageIDs []string, userID string) (map[string][]*model.MessageKey, error) {
+	result := make(map[string][]*model.MessageKey, len(messageIDs))
+	if len(messageIDs) == 0 || userID == "" {
+		return result, nil
+	}
+	const query = `
+		SELECT id, message_id, recipient_id, recipient_device_id, sender_device_id,
+		       key_id, algorithm, encrypted_key, nonce, key_version, created_at
+		FROM trusted_chat_message_key_envelopes
+		WHERE message_id = ANY($1::text[]) AND recipient_id = $2
+		ORDER BY message_id, created_at ASC
+	`
+	rows, err := r.db.Query(ctx, query, messageIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		envelope, err := r.scanMessageKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[envelope.MessageID] = append(result[envelope.MessageID], envelope)
+	}
+	return result, rows.Err()
 }
 
 // ============================================================================
