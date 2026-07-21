@@ -34,9 +34,21 @@ export function AuthShell({ title, description, children, footer, aside }: AuthS
     return () => window.removeEventListener("pointermove", onMove);
   }, []);
 
+  // set day/night on root for adaptive pearlescent effect
+  useEffect(() => {
+    const setTime = () => {
+      const h = new Date().getHours();
+      const mode = h >= 7 && h < 19 ? "day" : "night";
+      document.documentElement.setAttribute("data-time", mode);
+    };
+    setTime();
+    const id = setInterval(setTime, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   const heroStyle = useMemo(
     () => ({
-      background: `radial-gradient(circle at ${pointer.x}% ${pointer.y}%, rgba(102,244,255,0.18), transparent 22%), radial-gradient(circle at 82% 18%, rgba(255,178,244,0.15), transparent 18%), linear-gradient(135deg, rgba(3, 6, 10, 0.9), rgba(7, 11, 18, 0.86))`,
+      background: `radial-gradient(circle at ${pointer.x}% ${pointer.y}%, rgba(255,45,149,0.06), transparent 18%), radial-gradient(circle at 82% 18%, rgba(124,58,237,0.05), transparent 20%), linear-gradient(180deg, rgb(var(--background)), rgba(255,255,255,0.6))`,
     }),
     [pointer.x, pointer.y],
   );
@@ -47,87 +59,116 @@ export function AuthShell({ title, description, children, footer, aside }: AuthS
     { icon: Sparkles, title: "Premium UX", description: "Cinematic motion, glass surfaces, and light-responsive interactions across every screen." },
   ];
 
+  // photo assets (use images from front/img) — 4 thumbnails
+  const photoSources = [
+    new URL("../../../../img/1.png", import.meta.url).toString(),
+    new URL("../../../../img/2.png", import.meta.url).toString(),
+    new URL("../../../../img/3.png", import.meta.url).toString(),
+    new URL("../../../../img/4.png", import.meta.url).toString(),
+  ];
+
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#03060b]" style={heroStyle as CSSProperties}>
-      <video
-        className="absolute inset-0 h-full w-full object-cover opacity-45"
-        autoPlay
-        muted
-        loop
-        playsInline
-        preload="auto"
-        disablePictureInPicture
-        controls={false}
-        aria-hidden="true"
-      >
-        <source src={videoSource} type="video/mp4" />
-      </video>
-      <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(3,6,10,0.88),rgba(7,10,16,0.74),rgba(8,12,18,0.9))]" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(102,244,255,0.12),transparent_18%),radial-gradient(circle_at_86%_15%,rgba(255,178,244,0.12),transparent_16%),radial-gradient(circle_at_50%_90%,rgba(160,188,255,0.1),transparent_26%)]" />
-      <div className="absolute inset-0 bg-[linear-gradient(120deg,transparent,rgba(255,255,255,0.03),transparent)] animate-pulse-line" />
-
-      <div className="pointer-events-none absolute inset-x-0 top-12 flex justify-center">
-        <div className="h-40 w-80 rounded-full bg-cyan-300/20 blur-3xl" />
+    <div className="relative min-h-screen overflow-hidden bg-[var(--page-bg)]" style={heroStyle as CSSProperties}>
+      {/* decorative animated orbs */}
+      <div className="orb-wrapper absolute -left-28 -top-16 h-96 w-96 rounded-full filter blur-2xl animate-orb float-slow">
+        <div className="orb-bg h-full w-full rounded-full bg-gradient-to-br from-[rgba(255,45,149,0.18)] to-[rgba(124,58,237,0.12)]" />
+        {/* logo anchored to orb - never detaches visually */}
+        <div className="orb-logo pointer-events-none">
+          <img src={logoSource} alt="Gapak" width={88} height={88} />
+        </div>
       </div>
-      <div className="pointer-events-none absolute inset-x-0 bottom-8 flex justify-center">
-        <div className="h-56 w-96 rounded-full bg-fuchsia-300/10 blur-3xl" />
-      </div>
+      <div className="absolute -right-24 top-12 h-80 w-80 rounded-full bg-gradient-to-br from-[rgba(102,244,255,0.14)] to-[rgba(255,178,244,0.12)] filter blur-2xl animate-orb float-slower" />
 
-      <div className="pointer-events-none absolute left-8 top-8 h-24 w-24 rounded-full border border-white/15 bg-white/[0.03] animate-float" />
-      <div className="pointer-events-none absolute bottom-12 right-10 h-20 w-20 rounded-[1.4rem] border border-cyan-200/20 bg-cyan-300/10 animate-float" style={{ animationDelay: "1.3s" }} />
+      <style>{` 
+        .animated-title{display:block;background:linear-gradient(90deg,var(--primary) 0%,var(--secondary) 100%);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:800;letter-spacing:-0.02em;animation:titleReveal 900ms cubic-bezier(.2,.9,.2,1) both}
+        @keyframes titleReveal{from{transform:translateY(18px) scale(.98);opacity:0}to{transform:translateY(0) scale(1);opacity:1}}
 
-      <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-7xl flex-col justify-center px-4 py-8 sm:px-6 lg:px-8">
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:items-center">
-          <div className="space-y-6">
-            <div className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 backdrop-blur-xl">
-              <Image src={logoSource} alt="Gapak logo" width={32} height={32} className="rounded-xl" />
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-primary">Gapak</p>
-                <p className="text-sm text-muted-foreground">{t("landing.productLine")}</p>
+        .animate-orb{animation:orbMove 7s ease-in-out infinite, orbPulse 6s ease-in-out infinite}
+        @keyframes orbMove{0%{transform:translateY(0) rotate(0deg)}50%{transform:translateY(-30px) rotate(8deg)}100%{transform:translateY(0) rotate(0deg)}}
+        @keyframes orbPulse{0%{filter:brightness(1)}50%{filter:brightness(1.2)}100%{filter:brightness(1)}}
+
+        .float-slow{animation-duration:12s}.float-slower{animation-duration:18s}
+
+        .glass-panel{background:linear-gradient(180deg,rgba(255,255,255,0.9),rgba(245,245,247,0.9));backdrop-filter:blur(10px);box-shadow:0 10px 40px rgba(20,21,30,0.08);border:1px solid rgba(15,15,20,0.04)}
+
+        .auth-cta{display:inline-block;padding:14px 28px;border-radius:999px;background:linear-gradient(90deg,var(--accent),var(--primary));box-shadow:0 8px 30px rgba(255,165,0,0.12);transition:transform .28s ease,box-shadow .28s ease}
+        .auth-cta:hover{transform:translateY(-4px);box-shadow:0 18px 40px rgba(0,0,0,0.12)}
+        .auth-cta:active{transform:translateY(-1px)}
+
+        .sr-only{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap;border:0;padding:0;margin:-1px}
+      `}</style>
+
+      <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-7xl flex-col justify-center px-4 py-12 sm:px-6 lg:px-8">
+        <div className="grid gap-10 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)] lg:items-center">
+          <div className="space-y-6 left-column">
+            <div className="inline-flex items-center gap-6">
+              <div className="h-36 w-36 rounded-full bg-gradient-to-br from-primary to-secondary shadow-2xl animate-orb" aria-hidden="true" />
+              <span className="sr-only">Gapak</span>
+            </div>
+
+            <div className="max-w-2xl space-y-4 left-hero-wrap relative">
+              {/* big rectangular tile (target for photo attachments) */}
+              <div className="hero-tile h-[420px] w-[420px] rounded-2xl bg-gradient-to-br from-white/95 to-gray-100 shadow-2xl relative overflow-visible">
+                {/* attach photo-stack here */}
+                <div className="photo-stack-left" aria-hidden="true">
+                  {photoSources.map((src, i) => (
+                    <img key={i} src={src} alt={`left-preview-${i+1}`} className="photo-left" style={{ ['--i' as any]: i, ['--start' as any]: `${i * 72}deg` }} />
+                  ))}
+                </div>
               </div>
+
+              <span className="sr-only">Gapak — private social OS</span>
             </div>
 
-            <div className="max-w-2xl space-y-4">
-              <p className="text-[11px] uppercase tracking-[0.35em] text-primary">Private social OS</p>
-              <h1 className="font-display text-4xl font-semibold leading-tight text-white sm:text-5xl">
-                A premium social perimeter engineered for calm confidence.
-              </h1>
-              <p className="max-w-xl text-base leading-8 text-muted-foreground">
-                Crafted for fast, secure access with an immersive glass interface, cinematic motion, and a deep premium feel.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2">Live visuals</span>
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2">Premium glass UI</span>
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2">Adaptive auth flow</span>
+            <div className="flex flex-wrap gap-3">
+              {/* minimal UI: visual chips hidden visually, kept for semantics */}
+              <span className="sr-only">Features: Live visuals, Premium UI, Adaptive auth</span>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
               {highlights.map((item) => (
-                <div key={item.title} className="glass-surface p-4">
-                  <item.icon className="h-5 w-5 text-primary" />
-                  <p className="mt-3 font-display text-lg font-semibold text-white">{item.title}</p>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">{item.description}</p>
+                <div key={item.title} className="glass-surface p-4 flex flex-col items-center">
+                  <item.icon className="h-6 w-6 text-primary" />
+                  <span className="sr-only">{item.title}</span>
                 </div>
               ))}
             </div>
           </div>
 
           <div className="relative">
-            <div className="absolute inset-0 rounded-[2.5rem] bg-[radial-gradient(circle_at_30%_20%,rgba(102,244,255,0.18),transparent_18%),radial-gradient(circle_at_80%_80%,rgba(255,178,244,0.16),transparent_18%)] blur-2xl" />
-            <div className="glass-panel relative rounded-[2.5rem] p-5 shadow-glow sm:p-7">
+            <div className="absolute inset-0 rounded-[2.5rem] overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-b from-white/70 to-gray-100/70 pointer-events-none" />
+              <div className="absolute -left-20 -top-20 h-64 w-64 rounded-full bg-gradient-to-tr from-primary/24 to-secondary/20 blur-lg animate-orb float-slow" />
+            </div>
+            <div className="glass-panel relative rounded-[2.5rem] p-5 shadow-glow sm:p-7" style={{ ['--pointer-x' as any]: pointer.x, ['--pointer-y' as any]: pointer.y }}>
+              {/* rim + sheen + micro bubble placeholders */}
+              <div className="rim" />
+              <div className="sheen" />
+              <div className="micro-bubble" />
+
+              {/* photos attached to panel (rotating cluster) */}
+              <div className="photo-stack" aria-hidden="true" tabIndex={-1}>
+                {photoSources.map((src, i) => (
+                  <img
+                    key={i}
+                    src={src}
+                    alt={`preview-${i+1}`}
+                    className="photo"
+                    style={{ ['--i' as any]: i, ['--start' as any]: `${i * 72}deg` }}
+                  />
+                ))}
+              </div>
+
               <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.3em] text-primary">Access vault</p>
-                  <p className="mt-2 text-sm text-muted-foreground">Cinematic sign-in experience</p>
+                  <span className="sr-only">Access vault — Cinematic sign-in experience</span>
                 </div>
                 {aside}
               </div>
 
               <div className="space-y-1">
-                <h2 className="font-display text-3xl font-semibold text-white sm:text-[2rem]">{title}</h2>
-                <p className="text-sm leading-7 text-muted-foreground">{description}</p>
+                <h2 className="sr-only">{title}</h2>
+                <p className="sr-only">{description}</p>
               </div>
 
               <div className="mt-6 space-y-5">{children}</div>

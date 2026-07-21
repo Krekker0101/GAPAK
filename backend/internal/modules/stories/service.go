@@ -112,6 +112,13 @@ func (s *Service) Viewers(ctx context.Context, userID, storyID string) ([]StoryV
 	return response, nil
 }
 
+func (s *Service) Delete(ctx context.Context, userID, storyID string) (AcceptedResponse, error) {
+	if err := s.repo.Delete(ctx, userID, storyID); err != nil {
+		return AcceptedResponse{}, err
+	}
+	return AcceptedResponse{Accepted: true}, nil
+}
+
 func (s *Service) hydrate(ctx context.Context, viewerID string, story *model.Story) (StoryResponse, error) {
 	audience, err := s.repo.AudienceUserIDs(ctx, story.ID)
 	if err != nil {

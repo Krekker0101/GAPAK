@@ -35,6 +35,25 @@ func (s *Service) List(ctx context.Context, userID string) ([]TrustRoomResponse,
 	return response, nil
 }
 
+func (s *Service) Get(ctx context.Context, userID, roomID string) (TrustRoomDetailResponse, error) {
+	room, role, memberCount, err := s.repo.GetByMember(ctx, userID, roomID)
+	if err != nil {
+		return TrustRoomDetailResponse{}, err
+	}
+
+	members, err := s.repo.ListMembers(ctx, roomID)
+	if err != nil {
+		return TrustRoomDetailResponse{}, err
+	}
+
+	return TrustRoomDetailResponse{
+		Room:            toResponse(room),
+		CurrentUserRole: role,
+		MemberCount:     memberCount,
+		Members:         mapMembers(members),
+	}, nil
+}
+
 func (s *Service) AddMember(ctx context.Context, actorUserID, roomID string, req AddMemberRequest) (AcceptedResponse, error) {
 	if err := s.repo.AddMember(ctx, actorUserID, roomID, req); err != nil {
 		return AcceptedResponse{}, err
@@ -53,9 +72,22 @@ func toResponse(room *model.TrustRoom) TrustRoomResponse {
 		RequireTwoFactor:     room.RequireTwoFactor,
 		MinAccountAgeDays:    room.MinAccountAgeDays,
 		MessageRetentionDays: room.MessageRetentionDays,
+		ExpiresAt:            room.ExpiresAt,
 		CreatedAt:            room.CreatedAt,
 		UpdatedAt:            room.UpdatedAt,
 	}
+}
+
+func mapMembers(items []TrustRoomMemberResponse) []TrustRoomMemberResponse {
+	if len(items) == 0 {
+		return []TrustRoomMemberResponse{}
+	}
+	response := make([]TrustRoomMemberResponse, 0, len(items))
+	for _, item := range items {
+		copy := item
+		response = append(response, copy)
+	}
+	return response
 }
 
 func deref(value *string) string {

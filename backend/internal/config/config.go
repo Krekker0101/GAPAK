@@ -142,7 +142,7 @@ func Load() (Config, error) {
 			Name:        getEnv("APP_NAME", "Gapak API"),
 			Environment: getEnv("APP_ENV", "development"),
 			BaseURL:     getEnv("APP_BASE_URL", "http://localhost:8080"),
-			CORSOrigins: getEnvSlice("CORS_ORIGINS", []string{"http://localhost:3000"}),
+			CORSOrigins: getEnvSlice("CORS_ORIGINS", []string{"http://localhost:3000", "http://localhost:3002", "https://gapak-backend.vercel.app"}),
 		},
 		HTTP: HTTPConfig{
 			Host:         getEnv("APP_HOST", "0.0.0.0"),
@@ -158,7 +158,7 @@ func Load() (Config, error) {
 			MaxConnLifetime: getEnvDuration("DATABASE_MAX_CONN_LIFETIME", 30*time.Minute),
 		},
 		Redis: RedisConfig{
-			URL: requireEnv("REDIS_URL"),
+			URL: getEnv("REDIS_URL", ""),
 		},
 		Security: SecurityConfig{
 			JWTIssuer:         getEnv("JWT_ISSUER", "gapak.api"),
@@ -170,8 +170,8 @@ func Load() (Config, error) {
 			PasswordPepper:    getEnv("PASSWORD_PEPPER", ""),
 			EncryptionKey:     requireEnv("ENCRYPTION_KEY_BASE64"),
 			CookieDomain:      getEnv("COOKIE_DOMAIN", "localhost"),
-			CookieSecure:      getEnvBool("COOKIE_SECURE", false),
-			CookieSameSite:    getEnv("COOKIE_SAME_SITE", "lax"),
+			CookieSecure:      getEnvBool("COOKIE_SECURE", true),
+			CookieSameSite:    getEnv("COOKIE_SAME_SITE", "strict"),
 			RefreshCookieName: getEnv("REFRESH_COOKIE_NAME", "gapak_rt"),
 			CSRFCookieName:    getEnv("CSRF_COOKIE_NAME", "gapak_csrf"),
 			TOTPWindow:        getEnvInt("TOTP_WINDOW", 1),
@@ -182,7 +182,7 @@ func Load() (Config, error) {
 			AllowAnonymousSignup:      getEnvBool("ANONYMITY_ALLOW_ANONYMOUS_SIGNUP", true),
 			AllowEmailSignup:          getEnvBool("ANONYMITY_ALLOW_EMAIL_SIGNUP", false),
 			AllowPasswordRecovery:     getEnvBool("ANONYMITY_ALLOW_PASSWORD_RECOVERY", false),
-			TrustProxyHeaders:         getEnvBool("ANONYMITY_TRUST_PROXY_HEADERS", true),
+			TrustProxyHeaders:         getEnvBool("ANONYMITY_TRUST_PROXY_HEADERS", false),
 			ProxyHeaders:              getEnvSlice("ANONYMITY_PROXY_HEADERS", []string{"CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP"}),
 			HashSecret:                requireEnv("ANONYMITY_HASH_SECRET"),
 			StoreIP:                   getEnvBool("ANONYMITY_STORE_IP", false),
@@ -336,7 +336,6 @@ func getEnvSlice(key string, fallback []string) []string {
 func validate(cfg Config) error {
 	required := map[string]string{
 		"DATABASE_URL":           cfg.Database.URL,
-		"REDIS_URL":              cfg.Redis.URL,
 		"JWT_ACCESS_SECRET":      cfg.Security.JWTAccessSecret,
 		"JWT_REFRESH_SECRET":     cfg.Security.JWTRefreshSecret,
 		"PASSWORD_PEPPER":        cfg.Security.PasswordPepper,

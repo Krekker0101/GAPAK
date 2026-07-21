@@ -5,6 +5,7 @@ import (
 
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/platform/logger"
+	"github.com/gapak/backend/internal/platform/middleware"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -25,7 +26,7 @@ func NewController(service *Service, validate *validator.Validate) *Controller {
 // Subscribe подписать на пользователя
 // POST /api/v1/subscriptions/:creatorId
 func (c *Controller) Subscribe(ctx *fiber.Ctx) error {
-	userID := ctx.Locals("userID").(string)
+	userID := middleware.ClaimsFromContext(ctx).UserID
 	creatorID := ctx.Params("creatorId")
 
 	if creatorID == "" {
@@ -54,7 +55,7 @@ func (c *Controller) Subscribe(ctx *fiber.Ctx) error {
 // Unsubscribe отписать от пользователя
 // DELETE /api/v1/subscriptions/:creatorId
 func (c *Controller) Unsubscribe(ctx *fiber.Ctx) error {
-	userID := ctx.Locals("userID").(string)
+	userID := middleware.ClaimsFromContext(ctx).UserID
 	creatorID := ctx.Params("creatorId")
 
 	if creatorID == "" {
@@ -77,7 +78,7 @@ func (c *Controller) Unsubscribe(ctx *fiber.Ctx) error {
 // ChangeSubscriptionType изменить тип подписки (VISIBLE или SILENT)
 // PATCH /api/v1/subscriptions/:creatorId/type
 func (c *Controller) ChangeSubscriptionType(ctx *fiber.Ctx) error {
-	userID := ctx.Locals("userID").(string)
+	userID := middleware.ClaimsFromContext(ctx).UserID
 	creatorID := ctx.Params("creatorId")
 
 	var req UpdateSubscriptionTypeRequest
@@ -143,7 +144,7 @@ func (c *Controller) GetSubscribers(ctx *fiber.Ctx) error {
 // GetSubscriptions получить авторов на которых подписан пользователь
 // GET /api/v1/subscriptions/following?page=1&limit=20
 func (c *Controller) GetSubscriptions(ctx *fiber.Ctx) error {
-	userID := ctx.Locals("userID").(string)
+	userID := middleware.ClaimsFromContext(ctx).UserID
 
 	page := ctx.QueryInt("page", 1)
 	limit := ctx.QueryInt("limit", 20)
@@ -178,7 +179,7 @@ func (c *Controller) GetSubscriptions(ctx *fiber.Ctx) error {
 // IsSubscribed проверить подписан ли пользователь
 // GET /api/v1/subscriptions/:creatorId/status
 func (c *Controller) IsSubscribed(ctx *fiber.Ctx) error {
-	userID := ctx.Locals("userID").(string)
+	userID := middleware.ClaimsFromContext(ctx).UserID
 	creatorID := ctx.Params("creatorId")
 
 	isSubscribed, err := c.service.IsSubscribed(ctx.Context(), userID, creatorID)
@@ -197,7 +198,7 @@ func (c *Controller) IsSubscribed(ctx *fiber.Ctx) error {
 // RequestSubscription создать запрос на подписку
 // POST /api/v1/subscriptions/requests
 func (c *Controller) RequestSubscription(ctx *fiber.Ctx) error {
-	userID := ctx.Locals("userID").(string)
+	userID := middleware.ClaimsFromContext(ctx).UserID
 
 	var req CreateSubscriptionRequestRequest
 	if err := ctx.BodyParser(&req); err != nil {
@@ -258,7 +259,7 @@ func (c *Controller) RejectSubscriptionRequest(ctx *fiber.Ctx) error {
 // GetPendingRequests получить ожидающие запросы на подписку
 // GET /api/v1/subscriptions/requests/pending?page=1&limit=20
 func (c *Controller) GetPendingRequests(ctx *fiber.Ctx) error {
-	userID := ctx.Locals("userID").(string)
+	userID := middleware.ClaimsFromContext(ctx).UserID
 
 	page := ctx.QueryInt("page", 1)
 	limit := ctx.QueryInt("limit", 20)
@@ -293,7 +294,7 @@ func (c *Controller) GetPendingRequests(ctx *fiber.Ctx) error {
 // BlockUser заблокировать пользователя
 // POST /api/v1/subscriptions/block
 func (c *Controller) BlockUser(ctx *fiber.Ctx) error {
-	userID := ctx.Locals("userID").(string)
+	userID := middleware.ClaimsFromContext(ctx).UserID
 
 	var req BlockUserRequest
 	if err := ctx.BodyParser(&req); err != nil {
@@ -322,7 +323,7 @@ func (c *Controller) BlockUser(ctx *fiber.Ctx) error {
 // UnblockUser разблокировать пользователя
 // DELETE /api/v1/subscriptions/block/:userId
 func (c *Controller) UnblockUser(ctx *fiber.Ctx) error {
-	userID := ctx.Locals("userID").(string)
+	userID := middleware.ClaimsFromContext(ctx).UserID
 	blockedUserID := ctx.Params("userId")
 
 	err := c.service.UnblockUser(ctx.Context(), userID, blockedUserID)
@@ -339,7 +340,7 @@ func (c *Controller) UnblockUser(ctx *fiber.Ctx) error {
 // SetNotificationPreference установить настройки уведомлений
 // PUT /api/v1/subscriptions/:creatorId/notifications
 func (c *Controller) SetNotificationPreference(ctx *fiber.Ctx) error {
-	userID := ctx.Locals("userID").(string)
+	userID := middleware.ClaimsFromContext(ctx).UserID
 	creatorID := ctx.Params("creatorId")
 
 	var req UpdateSubscriptionNotificationPreferencesRequest
@@ -376,7 +377,7 @@ func (c *Controller) SetNotificationPreference(ctx *fiber.Ctx) error {
 // GetNotificationPreference получить настройки уведомлений
 // GET /api/v1/subscriptions/:creatorId/notifications
 func (c *Controller) GetNotificationPreference(ctx *fiber.Ctx) error {
-	userID := ctx.Locals("userID").(string)
+	userID := middleware.ClaimsFromContext(ctx).UserID
 	creatorID := ctx.Params("creatorId")
 
 	pref, err := c.service.GetNotificationPreference(ctx.Context(), userID, creatorID)
@@ -396,7 +397,7 @@ func (c *Controller) GetSubscriptionStats(ctx *fiber.Ctx) error {
 	userID := ctx.Params("userId")
 
 	if userID == "" {
-		userID = ctx.Locals("userID").(string)
+		userID = middleware.ClaimsFromContext(ctx).UserID
 	}
 
 	stats, err := c.service.GetSubscriptionStats(ctx.Context(), userID)
@@ -414,28 +415,28 @@ func (c *Controller) GetSubscriptionStats(ctx *fiber.Ctx) error {
 func (c *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Handler) {
 	group := router.Group("/subscriptions", requireAuth)
 
+	// Literal (static) routes first to avoid being shadowed by parameter routes.
+	group.Get("/following", c.GetSubscriptions)
+	group.Post("/requests", c.RequestSubscription)
+	group.Get("/requests/pending", c.GetPendingRequests)
+	group.Post("/requests/:requestId/approve", c.ApproveSubscriptionRequest)
+	group.Post("/requests/:requestId/reject", c.RejectSubscriptionRequest)
+	group.Post("/block", c.BlockUser)
+
 	// Основные операции подписки
-	group.Post("/:creatorId", c.Subscribe)                    // Подписаться
-	group.Delete("/:creatorId", c.Unsubscribe)                // Отписаться
-	group.Patch("/:creatorId/type", c.ChangeSubscriptionType) // Изменить тип (VISIBLE/SILENT)
-	group.Get("/:creatorId/status", c.IsSubscribed)           // Проверить подписку
+	group.Post("/:creatorId", c.Subscribe)
+	group.Delete("/:creatorId", c.Unsubscribe)
+	group.Patch("/:creatorId/type", c.ChangeSubscriptionType)
+	group.Get("/:creatorId/status", c.IsSubscribed)
 
 	// Просмотр подписчиков и подписок
-	group.Get("/:userId/subscribers", c.GetSubscribers) // Получить подписчиков пользователя
-	group.Get("/following", c.GetSubscriptions)         // Получить авторов на которых подписан
-	group.Get("/:userId/stats", c.GetSubscriptionStats) // Получить статистику
-
-	// Запросы на подписку (для приватных аккаунтов)
-	group.Post("/requests", c.RequestSubscription)                           // Создать запрос
-	group.Get("/requests/pending", c.GetPendingRequests)                     // Получить ожидающие запросы
-	group.Post("/requests/:requestId/approve", c.ApproveSubscriptionRequest) // Одобрить
-	group.Post("/requests/:requestId/reject", c.RejectSubscriptionRequest)   // Отклонить
+	group.Get("/:userId/subscribers", c.GetSubscribers)
+	group.Get("/:userId/stats", c.GetSubscriptionStats)
 
 	// Блокировка
-	group.Post("/block", c.BlockUser)             // Заблокировать пользователя
-	group.Delete("/block/:userId", c.UnblockUser) // Разблокировать
+	group.Delete("/block/:userId", c.UnblockUser)
 
 	// Настройки уведомлений
-	group.Get("/:creatorId/notifications", c.GetNotificationPreference) // Получить настройки
-	group.Put("/:creatorId/notifications", c.SetNotificationPreference) // Установить настройки
+	group.Get("/:creatorId/notifications", c.GetNotificationPreference)
+	group.Put("/:creatorId/notifications", c.SetNotificationPreference)
 }

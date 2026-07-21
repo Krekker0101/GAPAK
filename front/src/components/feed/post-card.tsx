@@ -1,42 +1,53 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Clock3, FileText, Heart, LockKeyhole, MessageCircle, ShieldCheck, SendHorizonal, Timer } from "lucide-react";
-
+import { useEffect, useMemo, useState, useCallback, memo } from "react";
+import { FileText, Heart, MessageCircle, Repeat2, Send } from "lucide-react";
 import { AdaptiveVideoPlayer } from "@/components/feed/adaptive-video-player";
+import { Tooltip } from "@/shared/ui/tooltip";
 import { postService } from "@/shared/api/services/post.service";
+import { useMediaUrl } from "@/shared/lib/hooks/use-media-url";
 import { formatRelativeTime } from "@/shared/lib/utils";
 import type { CommentResponse, PostResponse } from "@/shared/types/post";
 import { Avatar, AvatarFallback } from "@/shared/ui/avatar";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 
-function compactIdentity(value: string) {
-  return value.length > 12 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
+function shortId(value: string) {
+  return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
 }
 
-function initials(name: string) {
-  return name
-    .split(" ")
+function initials(value: string) {
+  return value
+    .split(/[-_\s]+/)
     .filter(Boolean)
     .map((part) => part[0])
     .join("")
     .slice(0, 2)
-    .toUpperCase();
+    .toUpperCase() || "GP";
 }
 
-function privacyLabel(privacy: PostResponse["privacy"]) {
-  const labels: Record<PostResponse["privacy"], string> = {
-    PUBLIC: "Публично",
-    FRIENDS: "Друзья",
-    TRUSTED_CIRCLE: "Круг доверия",
-    PRIVATE: "Приватно",
-    ONE_TIME: "Один просмотр",
-    TIMED: "По таймеру",
-  };
-
-  return labels[privacy];
+function mediaIds(post: PostResponse) {
+  return post.mediaFileIds ?? post.mediaFileIDs ?? [];
 }
+
+const PostAttachment = memo(function PostAttachment({ mediaId }: { mediaId: string }) {
+  const { url, loading } = useMediaUrl(mediaId, "feed-post-attachment");
+
+  if (loading) {
+    return <div className="h-56 animate-pulse rounded-2xl bg-white/[0.06]" />;
+  }
+
+  if (!url) {
+    return null;
+  }
+
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="group block overflow-hidden rounded-2xl bg-black/20">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={url} alt="Post" loading="lazy" className="max-h-[620px] w-full object-cover transition duration-500 group-hover:scale-[1.015]" />
+    </a>
+  );
+});
 
 type PostCardProps = {
   post: PostResponse;
@@ -45,34 +56,36 @@ type PostCardProps = {
   currentUserName?: string;
 };
 
-export function PostCard({ post, mode = "feed", currentUserId, currentUserName }: PostCardProps) {
-  const [liked, setLiked] = useState(post.isLiked);
-  const [likeCount, setLikeCount] = useState(post.likeCount);
-  const [commentCount, setCommentCount] = useState(post.commentCount);
-  const [comments, setComments] = useState<CommentResponse[] | null>(null);
-  const [draft, setDraft] = useState("");
+export const PostCard = memo(function PostCard({ post, mode = "feed" }: PostCardProps) {
+  const [liked, setLiked] = useState(Boolean(post.isLiked));
+  const [likeCount, setLikeCount] = useState(post.likeCount ?? 0);
+  const [comments, setComments] = useState<CommentResponse[]>([]);
   const [showComments, setShowComments] = useState(false);
-  const [isMutating, setIsMutating] = useState(false);
-  const [commentsError, setCommentsError] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const attachments = useMemo(() => mediaIds(post), [post]);
 
-  const isOwnPost = currentUserId === post.authorId;
-  const authorName = isOwnPost && currentUserName ? currentUserName : `Участник ${compactIdentity(post.authorId)}`;
-  const authorHandle = isOwnPost ? "@me" : `@${compactIdentity(post.authorId).replace("…", "")}`;
-  const mediaIds = post.mediaFileIds ?? [];
-  const expiresAt = post.expiresAt ? new Date(post.expiresAt) : null;
+  useEffect(() => {
+    setLiked(Boolean(post.isLiked));
+    setLikeCount(post.likeCount ?? 0);
+  }, [post.id, post.isLiked, post.likeCount]);
 
-  const accessBadge = useMemo(() => privacyLabel(post.privacy), [post.privacy]);
+  useEffect(() => {
+    if (!showComments) return;
+    let cancelled = false;
+    void postService
+      .getComments(post.id, { page: 1, limit: 20, sortBy: "recent" })
+      .then((items) => {
+        if (!cancelled) setComments(items);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [post.id, showComments]);
 
-  async function toggleLike() {
-    if (isMutating) {
-      return;
-    }
-
-    setIsMutating(true);
+  const handleToggleLike = useCallback(async () => {
     const nextLiked = !liked;
     setLiked(nextLiked);
     setLikeCount((current) => Math.max(0, current + (nextLiked ? 1 : -1)));
-
     try {
       if (nextLiked) {
         await postService.like(post.id);
@@ -82,46 +95,25 @@ export function PostCard({ post, mode = "feed", currentUserId, currentUserName }
     } catch {
       setLiked(!nextLiked);
       setLikeCount((current) => Math.max(0, current + (nextLiked ? -1 : 1)));
-    } finally {
-      setIsMutating(false);
     }
-  }
+  }, [liked, post.id]);
 
-  async function openComments() {
-    const next = !showComments;
-    setShowComments(next);
-    if (!next || comments) {
-      return;
-    }
-
-    setCommentsError(null);
-    try {
-      setComments(await postService.getComments(post.id, { page: 1, limit: 20, sortBy: "recent" }));
-    } catch (error) {
-      setCommentsError(error instanceof Error ? error.message : "Не удалось загрузить комментарии.");
-    }
-  }
-
-  async function handleAddComment(event: React.FormEvent<HTMLFormElement>) {
+  const handleAddComment = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = draft.trim();
-    if (!content || isMutating) {
-      return;
-    }
-
-    setIsMutating(true);
-    setCommentsError(null);
+    if (!content) return;
     try {
       const created = await postService.createComment(post.id, { content });
-      setComments((current) => [created, ...(current ?? [])]);
-      setCommentCount((current) => current + 1);
+      setComments((current) => [created, ...current]);
       setDraft("");
-    } catch (error) {
-      setCommentsError(error instanceof Error ? error.message : "Не удалось отправить комментарий.");
-    } finally {
-      setIsMutating(false);
+    } catch {
+      // ignore
     }
-  }
+  }, [draft, post.id]);
+
+  const handleToggleComments = useCallback(() => {
+    setShowComments((current) => !current);
+  }, []);
 
   if (mode === "clip") {
     if (!mediaIds[0]) {
@@ -130,39 +122,36 @@ export function PostCard({ post, mode = "feed", currentUserId, currentUserName }
 
     return (
       <Card className="group relative mx-auto w-full max-w-[420px] overflow-hidden p-3 transition-transform duration-500 hover:-translate-y-1">
-        <div className="relative overflow-hidden rounded-[1.65rem] bg-black">
-          <AdaptiveVideoPlayer mediaId={mediaIds[0]} />
+        <div className="relative overflow-hidden rounded-2xl bg-black">
+          {attachments[0] ? <AdaptiveVideoPlayer mediaId={attachments[0]} /> : <div className="aspect-[9/16] bg-black" />}
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent" />
-          <div className="absolute inset-x-0 bottom-0 p-5">
-            <div className="flex items-end justify-between gap-4">
-              <div className="min-w-0 space-y-3">
-                <div className="flex items-center gap-3">
-                  <Avatar className="h-10 w-10 rounded-full border border-white/20">
-                    <AvatarFallback className="rounded-full bg-white/15 text-xs text-white">{initials(authorName)}</AvatarFallback>
+          <div className="absolute inset-x-0 bottom-0 p-4">
+            <div className="flex items-end justify-between gap-3">
+              <div className="min-w-0 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Avatar className="h-9 w-9 rounded-full border border-white/20">
+                    <AvatarFallback className="rounded-full bg-white/15 text-xs">{initials(post.authorId)}</AvatarFallback>
                   </Avatar>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-white">{authorName}</p>
-                    <p className="text-xs text-white/60">{formatRelativeTime(post.publishedAt)}</p>
-                  </div>
+                  <p className="truncate text-xs font-semibold text-white">{shortId(post.authorId)}</p>
                 </div>
-                <p className="line-clamp-2 text-sm leading-6 text-white/90">{post.body}</p>
+                <p className="line-clamp-2 text-xs leading-5 text-white/80">{post.body}</p>
               </div>
-              <div className="flex shrink-0 flex-col gap-3">
+              <div className="flex shrink-0 flex-col gap-2">
                 <button
                   type="button"
-                  aria-label="Like clip"
-                  onClick={() => void toggleLike()}
-                  className="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-xl transition hover:bg-white/15"
+                  aria-label="Like"
+                  onClick={() => void handleToggleLike()}
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-xl transition hover:bg-white/10"
                 >
-                  <Heart className={`h-5 w-5 ${liked ? "fill-white" : ""}`} />
+                  <Heart className={`h-4 w-4 ${liked ? "fill-rose-300 text-rose-300" : ""}`} />
                 </button>
                 <button
                   type="button"
-                  aria-label="Comment clip"
-                  onClick={() => void openComments()}
-                  className="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-xl transition hover:bg-white/15"
+                  aria-label="Comment"
+                  onClick={() => setShowComments((current) => !current)}
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-xl transition hover:bg-white/10"
                 >
-                  <MessageCircle className="h-5 w-5" />
+                  <MessageCircle className="h-4 w-4" />
                 </button>
               </div>
             </div>
@@ -173,20 +162,14 @@ export function PostCard({ post, mode = "feed", currentUserId, currentUserName }
   }
 
   return (
-    <Card className="social-card relative overflow-hidden space-y-5 p-5 sm:p-6">
-      <div className="relative flex items-center justify-between gap-3">
+    <Card className="social-card relative space-y-4 overflow-hidden p-5 sm:p-6">
+      <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <Avatar className="h-11 w-11 rounded-full border border-white/10">
-            <AvatarFallback className="rounded-full bg-[linear-gradient(135deg,rgba(102,244,255,0.28),rgba(138,125,255,0.22))] text-xs text-white">
-              {initials(authorName)}
-            </AvatarFallback>
+          <Avatar className="h-11 w-11 rounded-full border border-primary/20">
+            <AvatarFallback className="text-xs font-semibold">{initials(post.authorId)}</AvatarFallback>
           </Avatar>
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <p className="truncate text-sm font-semibold text-foreground">{authorName}</p>
-              <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-              <p className="text-xs text-muted-foreground">{authorHandle}</p>
-            </div>
+            <p className="truncate text-sm font-semibold text-foreground">{shortId(post.authorId)}</p>
             <p className="text-xs text-muted-foreground">{formatRelativeTime(post.publishedAt)}</p>
           </div>
         </div>
@@ -196,78 +179,64 @@ export function PostCard({ post, mode = "feed", currentUserId, currentUserName }
         </div>
       </div>
 
-      <p className="relative whitespace-pre-line text-[15px] leading-7 text-foreground/92">{post.body}</p>
+      <p className="relative text-sm leading-6 text-foreground/90">{post.body}</p>
 
-      {mediaIds.length > 0 ? (
+      {attachments.length > 0 && (
         <div className="relative grid gap-3">
-          {mediaIds.map((mediaId) => (
-            <div key={mediaId} className="overflow-hidden rounded-[1.5rem] border border-white/10 bg-black/20">
-              {post.contentType === "CLIP" ? (
-                <AdaptiveVideoPlayer mediaId={mediaId} />
-              ) : (
-                <div className="flex items-center gap-3 p-4 text-sm text-muted-foreground">
-                  <FileText className="h-4 w-4 text-primary" />
-                  Защищенное вложение: {compactIdentity(mediaId)}
-                </div>
-              )}
-            </div>
-          ))}
+          {post.contentType === "CLIP" ? <AdaptiveVideoPlayer mediaId={attachments[0]} /> : attachments.map((mediaId) => <PostAttachment key={mediaId} mediaId={mediaId} />)}
         </div>
-      ) : null}
+      )}
 
-      <div className="relative flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        {expiresAt ? (
-          <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
-            <Clock3 className="h-3.5 w-3.5" /> Доступ до {expiresAt.toLocaleString("ru-RU")}
-          </span>
-        ) : null}
+      <div className="relative flex items-center gap-1 border-t border-white/8 pt-3">
+        <Tooltip content={liked ? "Unlike" : "Like"} side="top" delay={150}>
+          <button
+            type="button"
+            onClick={() => void handleToggleLike()}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full transition hover:bg-white/[0.06] hover:text-foreground"
+          >
+            <Heart className={`h-5 w-5 ${liked ? "fill-rose-300 text-rose-300" : ""}`} />
+          </button>
+        </Tooltip>
+        <Tooltip content="Comments" side="top" delay={150}>
+          <button
+            type="button"
+            onClick={handleToggleComments}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full transition hover:bg-white/[0.06] hover:text-foreground"
+          >
+            <MessageCircle className="h-5 w-5" />
+          </button>
+        </Tooltip>
+        <Tooltip content="Repost" side="top" delay={150}>
+          <button type="button" className="inline-flex h-9 w-9 items-center justify-center rounded-full transition hover:bg-white/[0.06] hover:text-foreground">
+            <Repeat2 className="h-5 w-5" />
+          </button>
+        </Tooltip>
       </div>
 
-      <div className="relative flex items-center gap-1 border-t border-white/8 pt-3 text-muted-foreground">
-        <button
-          type="button"
-          onClick={() => void toggleLike()}
-          disabled={isMutating}
-          className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm transition hover:bg-white/[0.06] hover:text-foreground disabled:opacity-60"
-        >
-          <Heart className={`h-4 w-4 ${liked ? "fill-rose-300 text-rose-300" : ""}`} />
-          {likeCount}
-        </button>
-        <button
-          type="button"
-          onClick={() => void openComments()}
-          className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm transition hover:bg-white/[0.06] hover:text-foreground"
-        >
-          <MessageCircle className="h-4 w-4" />
-          {commentCount}
-        </button>
-      </div>
-
-      {showComments ? (
-        <div className="relative rounded-[1.25rem] border border-white/8 bg-white/[0.025] p-4">
-          {commentsError ? <p className="mb-3 text-sm text-rose-300">{commentsError}</p> : null}
-          <div className="space-y-3">
-            {comments?.map((comment) => (
-              <div key={comment.id} className="rounded-[1rem] bg-white/[0.04] px-3 py-2">
-                <p className="text-xs text-muted-foreground">Участник {compactIdentity(comment.authorId)}</p>
-                <p className="text-sm text-foreground">{comment.content}</p>
-              </div>
-            ))}
+      {showComments && (
+        <div className="relative rounded-xl border border-white/8 bg-white/[0.025] p-3">
+          <div className="space-y-2 max-h-[300px] overflow-y-auto">
+            {comments.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No comments yet</p>
+            ) : (
+              comments.map((comment) => (
+                <div key={comment.id} className="rounded-lg bg-white/[0.04] px-2 py-1.5">
+                  <p className="text-xs text-muted-foreground">{shortId(comment.authorId)} · {formatRelativeTime(comment.createdAt)}</p>
+                  <p className="text-xs text-foreground">{comment.content}</p>
+                </div>
+              ))
+            )}
           </div>
-
-          <form onSubmit={handleAddComment} className="mt-4 flex flex-col gap-2 sm:flex-row">
-            <input
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="Комментарий"
-              className="w-full rounded-full border border-white/10 bg-black/20 px-4 py-2 text-sm text-foreground outline-none transition focus:border-primary/50"
-            />
-            <Button type="submit" size="sm" variant="outline" disabled={isMutating} aria-label="Send comment">
-              <SendHorizonal className="h-4 w-4" />
-            </Button>
+          <form onSubmit={handleAddComment} className="mt-3 flex gap-2">
+            <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Comment…" className="flex-1 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-foreground outline-none transition focus:border-primary/50" />
+            <Tooltip content="Send comment" side="top" delay={150}>
+              <Button type="submit" size="sm" variant="outline" className="h-8 w-8 p-0 rounded-full">
+                <Send className="h-3 w-3" />
+              </Button>
+            </Tooltip>
           </form>
         </div>
-      ) : null}
+      )}
     </Card>
   );
-}
+});

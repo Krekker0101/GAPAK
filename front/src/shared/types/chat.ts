@@ -19,6 +19,8 @@ export type ChatResponse = {
   participantIds: string[];
   lastMessageAt?: string | null;
   createdAt: string;
+  // optional: may be present depending on backend
+  type?: string;
 };
 
 export type MessageResponse = {

@@ -3,7 +3,7 @@
 
 <#
 .SYNOPSIS
-Gapak Full Stack Startup Script - Starts Backend (Go/Fiber) + Frontend (Next.js)
+Gapak Full Stack Startup Script - Starts Backend (Go/Fiber) + Frontend (React + Vite)
 .DESCRIPTION
 This script sets up environment variables and starts both backend and frontend services.
 #>

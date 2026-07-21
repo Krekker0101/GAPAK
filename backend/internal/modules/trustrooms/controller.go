@@ -20,6 +20,7 @@ func NewController(service *Service, validate *validator.Validate) *Controller {
 func (ctl *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Handler) {
 	group := router.Group("/trust-rooms", requireAuth)
 	group.Get("/", ctl.list)
+	group.Get("/:roomId", ctl.get)
 	group.Post("/", ctl.create)
 	group.Post("/:roomId/members", ctl.addMember)
 }
@@ -27,6 +28,19 @@ func (ctl *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Han
 func (ctl *Controller) list(c *fiber.Ctx) error {
 	claims := middleware.ClaimsFromContext(c)
 	response, err := ctl.service.List(c.UserContext(), claims.UserID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+}
+
+func (ctl *Controller) get(c *fiber.Ctx) error {
+	roomID, err := httpx.UUIDParam(c, "roomId")
+	if err != nil {
+		return err
+	}
+	claims := middleware.ClaimsFromContext(c)
+	response, err := ctl.service.Get(c.UserContext(), claims.UserID, roomID)
 	if err != nil {
 		return err
 	}

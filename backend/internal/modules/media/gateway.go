@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -141,49 +143,77 @@ func (s *Service) FinalizeUploadedObject(session *model.UploadSession, parts []C
 		if err := replaceFile(partPath, objectPath); err != nil {
 			return err
 		}
-		return nil
+	} else {
+		tmpPath := objectPath + ".assembling"
+		output, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		defer output.Close()
+
+		for _, part := range parts {
+			partPath, err := s.resolvePartPath(session.Bucket, session.ObjectKey, part.PartNumber)
+			if err != nil {
+				return err
+			}
+			payload, err := os.ReadFile(partPath)
+			if err != nil {
+				return err
+			}
+			if int64(len(payload)) != part.SizeBytes {
+				return apperrors.New(400, "media.completed_size_invalid", "Uploaded part size does not match the finalized payload")
+			}
+			if _, err := output.Write(payload); err != nil {
+				return err
+			}
+		}
+
+		if err := output.Close(); err != nil {
+			return err
+		}
+		if err := os.Rename(tmpPath, objectPath); err != nil {
+			return err
+		}
+
+		for _, part := range parts {
+			partPath, err := s.resolvePartPath(session.Bucket, session.ObjectKey, part.PartNumber)
+			if err != nil {
+				return err
+			}
+			_ = os.Remove(partPath)
+		}
 	}
 
-	tmpPath := objectPath + ".assembling"
-	output, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	// Validate the finalized file type against the declared MIME type and the allow-list.
+	detected, err := detectFileMIMEType(objectPath)
 	if err != nil {
-		return err
+		_ = os.Remove(objectPath)
+		return apperrors.New(400, "media.mime_detection_failed", "Unable to detect uploaded file type")
 	}
-	defer output.Close()
-
-	for _, part := range parts {
-		partPath, err := s.resolvePartPath(session.Bucket, session.ObjectKey, part.PartNumber)
-		if err != nil {
-			return err
-		}
-		payload, err := os.ReadFile(partPath)
-		if err != nil {
-			return err
-		}
-		if int64(len(payload)) != part.SizeBytes {
-			return apperrors.New(400, "media.completed_size_invalid", "Uploaded part size does not match the finalized payload")
-		}
-		if _, err := output.Write(payload); err != nil {
-			return err
-		}
+	if !strings.EqualFold(detected, session.MimeType) {
+		_ = os.Remove(objectPath)
+		return apperrors.New(400, "media.mime_type_mismatch", "Detected MIME type does not match declared type")
 	}
-
-	if err := output.Close(); err != nil {
-		return err
+	if !s.allowedMimeType(detected) {
+		_ = os.Remove(objectPath)
+		return apperrors.New(400, "media.mime_type_not_allowed", "Detected MIME type is not allowed")
 	}
-	if err := os.Rename(tmpPath, objectPath); err != nil {
-		return err
-	}
-
-	for _, part := range parts {
-		partPath, err := s.resolvePartPath(session.Bucket, session.ObjectKey, part.PartNumber)
-		if err != nil {
-			return err
-		}
-		_ = os.Remove(partPath)
-	}
-
 	return nil
+}
+
+func detectFileMIMEType(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	return http.DetectContentType(buf[:n]), nil
 }
 
 func (s *Service) ResolvePlayback(ctx context.Context, query SignedPlaybackQuery) (*ProtectedObject, error) {
@@ -280,7 +310,7 @@ func (s *Service) gatewaySignature(parts ...string) string {
 }
 
 func parseSignedExpiry(raw string) (time.Time, error) {
-	value, err := time.Parse(time.RFC3339, raw)
+	value, err := time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
 		return time.Time{}, apperrors.New(400, "media.signature_expiry_invalid", "Signed request expiry is invalid")
 	}

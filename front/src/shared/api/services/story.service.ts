@@ -1,13 +1,7 @@
 import { apiClient } from "@/shared/api/client";
 import type { ListQuery } from "@/shared/types/api";
 import type { AcceptedResponse } from "@/shared/types/auth";
-import type {
-  CreateStoryRequest,
-  HighlightStoryRequest,
-  ReactStoryRequest,
-  StoryResponse,
-  StoryViewerResponse,
-} from "@/shared/types/story";
+import type { CreateStoryRequest, ReactStoryRequest, StoryResponse, StoryViewerResponse } from "@/shared/types/story";
 
 export const storyService = {
   getFeed(query?: ListQuery) {
@@ -21,7 +15,7 @@ export const storyService = {
       path: `/stories/${storyId}`,
     });
   },
-  getViewers(storyId: string) {
+  viewers(storyId: string) {
     return apiClient<StoryViewerResponse[]>({
       path: `/stories/${storyId}/viewers`,
     });
@@ -40,11 +34,17 @@ export const storyService = {
       body: payload,
     });
   },
-  highlight(storyId: string, payload: HighlightStoryRequest) {
-    return apiClient<StoryResponse>({
+  delete(storyId: string) {
+    return apiClient<AcceptedResponse>({
+      path: `/stories/${storyId}`,
+      method: "DELETE",
+    });
+  },
+  highlight(storyId: string, title: string) {
+    return apiClient<AcceptedResponse>({
       path: `/stories/${storyId}/highlight`,
       method: "POST",
-      body: payload,
+      body: { title },
     });
   },
 };

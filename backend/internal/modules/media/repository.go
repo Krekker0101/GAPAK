@@ -57,7 +57,7 @@ func (r *Repository) CreateUploadSession(
 			id, owner_id, kind, storage_provider, bucket, object_key, original_name, mime_type,
 			size_bytes, checksum_sha256, status, is_encrypted, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), 'PENDING', true, NOW())`
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), 'PENDING', false, NOW())`
 	if _, err := tx.Exec(ctx, mediaQuery,
 		mediaID,
 		ownerID,
@@ -282,10 +282,13 @@ func (r *Repository) FindAccessibleMedia(ctx context.Context, viewerID, mediaID 
 		    )
 		    OR EXISTS (
 		      SELECT 1
-		      FROM message_media_attachments mma
-		      JOIN messages msg ON msg.id = mma.message_id AND msg.deleted_at IS NULL
-		      JOIN direct_chat_members self ON self.chat_id = msg.chat_id AND self.user_id = $1 AND self.deleted_at IS NULL
-		      WHERE mma.media_file_id = m.id
+		      FROM attachments a
+		      JOIN messages msg ON msg.id = a.message_id AND msg.deleted_at IS NULL
+		      JOIN chat_members self ON self.chat_id = msg.chat_id
+		        AND self.user_id = $1
+		        AND self.deleted_at IS NULL
+		        AND self.left_at IS NULL
+		      WHERE a.media_file_id = m.id
 		    )
 		    OR EXISTS (
 		      SELECT 1

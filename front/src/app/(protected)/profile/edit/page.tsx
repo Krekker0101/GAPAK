@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import type { z } from "zod";
+import { Check, X } from "lucide-react";
 
 import { FormField } from "@/components/common/form-field";
 import { PageHeader } from "@/components/common/page-header";
 import { StateCard } from "@/components/common/state-card";
+import { Tooltip } from "@/shared/ui/tooltip";
 import { updateProfileSchema } from "@/features/profile/schemas/profile.schemas";
 import { mediaService } from "@/shared/api/services/media.service";
 import { useAsyncResource } from "@/shared/lib/hooks/use-async-resource";
@@ -193,13 +195,21 @@ export default function EditProfilePage() {
             </FormField>
             {uploadError ? <p className="text-sm text-red-300">{uploadError}</p> : null}
             {submitError ? <p className="text-sm text-red-300">{submitError}</p> : null}
-            <div className="flex flex-wrap gap-3">
-              <Button type="submit" disabled={form.formState.isSubmitting}>
-                {form.formState.isSubmitting ? "Saving..." : "Save profile"}
-              </Button>
-              <Button type="button" variant="outline" onClick={() => router.replace("/profile")}>
-                Cancel
-              </Button>
+            <div className="flex flex-wrap gap-2">
+              <Tooltip content="Save profile" side="top">
+                <Button type="submit" disabled={form.formState.isSubmitting} className="h-10 w-10 p-0 rounded-full">
+                  {form.formState.isSubmitting ? (
+                    <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Check className="h-4 w-4" />
+                  )}
+                </Button>
+              </Tooltip>
+              <Tooltip content="Cancel" side="top">
+                <Button type="button" variant="outline" onClick={() => router.replace("/profile")} className="h-10 w-10 p-0 rounded-full">
+                  <X className="h-4 w-4" />
+                </Button>
+              </Tooltip>
             </div>
           </form>
         </Card>

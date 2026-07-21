@@ -11,6 +11,19 @@ type FormFieldProps = {
 };
 
 export function FormField({ label, hint, error, children, className }: FormFieldProps) {
+  const floating = className?.includes("floating");
+  if (floating) {
+    return (
+      <label className={cn("form-field-floating", className)}>
+        <div className="relative">
+          {children}
+          <span className="floating-label">{label}</span>
+        </div>
+        {error ? <p className="text-sm text-red-300">{error}</p> : null}
+      </label>
+    );
+  }
+
   return (
     <label className={cn("space-y-2.5", className)}>
       <div className="space-y-1">
