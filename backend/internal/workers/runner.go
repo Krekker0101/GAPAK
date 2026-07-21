@@ -75,8 +75,10 @@ func (r *Runner) runQueue(ctx context.Context, queueName string, workerIndex int
 		log.Warn().Msg("redis queue is unavailable; using database polling fallback")
 	}
 
+	consumerID := fmt.Sprintf("%s-%s-%d", r.consumerPrefix(), queueName, workerIndex)
+
 	for ctx.Err() == nil {
-		job, err := r.nextJob(ctx, queueName, log)
+		job, ack, err := r.nextJob(ctx, queueName, consumerID, log)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -90,6 +92,9 @@ func (r *Runner) runQueue(ctx context.Context, queueName string, workerIndex int
 
 		if err := r.handleJob(ctx, job); err != nil {
 			if errors.Is(err, ErrJobNotReserved) {
+				if ack != nil {
+					_ = ack()
+				}
 				continue
 			}
 			log.Error().Err(err).Str("jobId", job.ID).Str("jobType", string(job.JobType)).Msg("job failed")
@@ -99,6 +104,9 @@ func (r *Runner) runQueue(ctx context.Context, queueName string, workerIndex int
 
 		if err := r.repo.MarkJobSucceeded(ctx, job.ID); err != nil {
 			log.Error().Err(err).Str("jobId", job.ID).Msg("job succeeded but status update failed")
+		}
+		if ack != nil {
+			_ = ack()
 		}
 	}
 }
@@ -151,43 +159,45 @@ func (r *Runner) runRealtimeRelay(ctx context.Context) {
 	}
 }
 
-func (r *Runner) nextJob(ctx context.Context, queueName string, log zerolog.Logger) (*model.ProcessingJob, error) {
+func (r *Runner) nextJob(ctx context.Context, queueName, consumerID string, log zerolog.Logger) (*model.ProcessingJob, func() error, error) {
 	staleBefore := nowUTC().Add(-r.cfg.Queue.ClaimTTL)
 	attemptedRedisConsume := false
 	redisConsumeFailed := false
 
 	if r.queue != nil && r.queue.Available() {
 		attemptedRedisConsume = true
-		envelope, err := r.queue.Consume(ctx, queueName, r.cfg.Worker.PollInterval)
+		delivery, err := r.queue.Consume(ctx, queueName, r.cfg.Worker.PollInterval, consumerID)
 		if err != nil {
 			redisConsumeFailed = true
 			log.Warn().Err(err).Msg("redis queue consume failed; falling back to database polling")
-		} else if envelope != nil {
-			job, claimErr := r.repo.ClaimJobByID(ctx, envelope.ID, staleBefore)
+		} else if delivery != nil {
+			job, claimErr := r.repo.ClaimJobByID(ctx, delivery.ID, staleBefore)
 			if claimErr != nil {
-				return nil, claimErr
+				return nil, delivery.Ack, claimErr
 			}
 			if job != nil {
-				return job, nil
+				return job, delivery.Ack, nil
 			}
+			// Stale notification (e.g. job already running or dead). Ack and fall through to DB polling.
+			_ = delivery.Ack()
 		}
 	}
 
 	job, err := r.repo.ClaimNextProcessingJob(ctx, queueName, staleBefore)
 	if err != nil || job != nil {
-		return job, err
+		return job, nil, err
 	}
 	if attemptedRedisConsume && !redisConsumeFailed {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	timer := time.NewTimer(r.cfg.Worker.PollInterval)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	case <-timer.C:
-		return nil, nil
+		return nil, nil, nil
 	}
 }
 
@@ -356,6 +366,14 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (r *Runner) consumerPrefix() string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "worker"
+	}
+	return hostname
 }
 
 func sleepWithContext(ctx context.Context, duration time.Duration) bool {
