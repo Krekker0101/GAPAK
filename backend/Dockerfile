@@ -14,6 +14,9 @@ FROM alpine:3.21
 
 WORKDIR /app
 
+# ffmpeg (and ffprobe) are required by the worker for adaptive video transcoding.
+RUN apk add --no-cache ffmpeg
+
 RUN addgroup -S gapak && adduser -S gapak -G gapak
 
 COPY --from=builder /gapak-api /usr/local/bin/gapak-api
