@@ -104,7 +104,7 @@ func generateTOTPForTime(secret string, t time.Time) (string, error) {
 	code, err := totp.GenerateCodeCustom(secret, t, totp.ValidateOpts{
 		Period:    30,
 		Digits:    otp.DigitsSix,
-		Algorithm: otp.AlgorithmSHA1,
+		Algorithm: otp.AlgorithmSHA256,
 	})
 	return code, err
 }
