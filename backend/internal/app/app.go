@@ -33,19 +33,20 @@ import (
 )
 
 type App struct {
-	Config    config.Config
-	Logger    zerolog.Logger
-	Fiber     *fiber.App
-	DB        *pgxpool.Pool
-	Redis     *redis.Client
-	Validate  *validator.Validate
-	JWT       *authplatform.Manager
-	Passwords *authplatform.PasswordManager
-	TOTP      *authplatform.TOTPManager
-	Encryptor *appcrypto.Encryptor
-	Privacy   *privacy.Service
-	Storage   storage.Service
-	Queue     *queue.RedisQueue
+	Config      config.Config
+	Logger      zerolog.Logger
+	Fiber       *fiber.App
+	DB          *pgxpool.Pool
+	Redis       *redis.Client
+	Validate    *validator.Validate
+	JWT         *authplatform.Manager
+	Passwords   *authplatform.PasswordManager
+	TOTP        *authplatform.TOTPManager
+	Encryptor   *appcrypto.Encryptor
+	Privacy     *privacy.Service
+	Storage     storage.Service
+	ObjectStore storage.ObjectStore
+	Queue       *queue.RedisQueue
 }
 
 type Dependencies struct {
@@ -60,6 +61,7 @@ type Dependencies struct {
 	Encryptor       *appcrypto.Encryptor
 	Privacy         *privacy.Service
 	Storage         storage.Service
+	ObjectStore     storage.ObjectStore
 	Queue           *queue.RedisQueue
 	RolePermissions map[string][]string
 }
@@ -114,7 +116,14 @@ func New(ctx context.Context) (*App, error) {
 	if redisClient != nil {
 		jwtManager.SetRevocationChecker(authplatform.NewRedisRevocationChecker(redisClient))
 	}
-	storageSigner := storage.NewGatewaySigner(cfg.Storage)
+	storageProvider, objectStore, err := newStorageProvider(cfg.Storage)
+	if err != nil {
+		if redisClient != nil {
+			_ = redisClient.Close()
+		}
+		db.Close()
+		return nil, fmt.Errorf("storage init: %w", err)
+	}
 	redisQueue := queue.NewRedisQueue(redisClient)
 	privacyService := privacy.NewService(cfg.Anonymity)
 
@@ -149,19 +158,20 @@ func New(ctx context.Context) (*App, error) {
 	}.Handler())
 
 	app := &App{
-		Config:    cfg,
-		Logger:    log,
-		Fiber:     fiberApp,
-		DB:        db,
-		Redis:     redisClient,
-		Validate:  validate,
-		JWT:       jwtManager,
-		Passwords: authplatform.NewPasswordManager(cfg.Security.PasswordPepper),
-		TOTP:      authplatform.NewTOTPManager(cfg.App.Name, cfg.Security.TOTPWindow),
-		Encryptor: encryptor,
-		Privacy:   privacyService,
-		Storage:   storageSigner,
-		Queue:     redisQueue,
+		Config:      cfg,
+		Logger:      log,
+		Fiber:       fiberApp,
+		DB:          db,
+		Redis:       redisClient,
+		Validate:    validate,
+		JWT:         jwtManager,
+		Passwords:   authplatform.NewPasswordManager(cfg.Security.PasswordPepper),
+		TOTP:        authplatform.NewTOTPManager(cfg.App.Name, cfg.Security.TOTPWindow),
+		Encryptor:   encryptor,
+		Privacy:     privacyService,
+		Storage:     storageProvider,
+		ObjectStore: objectStore,
+		Queue:       redisQueue,
 	}
 
 	deps := Dependencies{
@@ -175,7 +185,8 @@ func New(ctx context.Context) (*App, error) {
 		TOTP:            app.TOTP,
 		Encryptor:       encryptor,
 		Privacy:         privacyService,
-		Storage:         storageSigner,
+		Storage:         storageProvider,
+		ObjectStore:     objectStore,
 		Queue:           redisQueue,
 		RolePermissions: enums.RolePermissions,
 	}
@@ -224,6 +235,23 @@ func (a *App) Shutdown(ctx context.Context) error {
 		a.DB.Close()
 	}
 	return shutdownErr
+}
+
+func newStorageProvider(cfg config.StorageConfig) (storage.Service, storage.ObjectStore, error) {
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	switch provider {
+	case "", "local":
+		local := storage.NewLocalStorage(cfg)
+		return local, local, nil
+	case "s3", "minio":
+		s3, err := storage.NewS3Storage(cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		return s3, s3, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported storage provider: %s", cfg.Provider)
+	}
 }
 
 func joinOrigins(origins []string) string {

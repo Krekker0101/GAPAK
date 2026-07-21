@@ -232,7 +232,8 @@ func (ctl *Controller) playbackObject(c *fiber.Ctx) error {
 	c.Set(fiber.HeaderContentType, object.MIMEType)
 	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`%s; filename="%s"`, dispositionType, sanitizeDispositionFilename(object.FileName)))
 	c.Set(fiber.HeaderXContentTypeOptions, "nosniff")
-	return c.SendFile(object.Path)
+	defer object.Body.Close()
+	return c.SendStream(object.Body, int(object.Size))
 }
 
 func sanitizeDispositionFilename(fileName string) string {

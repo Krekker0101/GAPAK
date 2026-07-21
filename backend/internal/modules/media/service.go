@@ -17,14 +17,16 @@ import (
 type Service struct {
 	repo    *Repository
 	storage storage.Service
+	store   storage.ObjectStore
 	queue   *queue.RedisQueue
 	config  config.Config
 }
 
-func NewService(repo *Repository, signer storage.Service, q *queue.RedisQueue, cfg config.Config) *Service {
+func NewService(repo *Repository, signer storage.Service, store storage.ObjectStore, q *queue.RedisQueue, cfg config.Config) *Service {
 	return &Service{
 		repo:    repo,
 		storage: signer,
+		store:   store,
 		queue:   q,
 		config:  cfg,
 	}
@@ -108,7 +110,7 @@ func (s *Service) CompleteUploadSession(ctx context.Context, ownerID, sessionID 
 	if err := s.validateCompletedParts(session, req.Parts); err != nil {
 		return UploadSessionResponse{}, err
 	}
-	if err := s.FinalizeUploadedObject(session, req.Parts); err != nil {
+	if err := s.FinalizeUploadedObject(ctx, session, req.Parts); err != nil {
 		return UploadSessionResponse{}, err
 	}
 
@@ -279,11 +281,12 @@ func (s *Service) processingPlan(purpose enums.UploadPurpose) (enums.ProcessingJ
 }
 
 func (s *Service) storageProvider() enums.StorageProvider {
-	switch strings.ToUpper(strings.TrimSpace(s.config.Storage.Provider)) {
-	case string(enums.StorageProviderMinio):
-		return enums.StorageProviderMinio
-	case string(enums.StorageProviderLocal):
+	provider := strings.ToLower(strings.TrimSpace(s.store.Provider()))
+	switch provider {
+	case "local":
 		return enums.StorageProviderLocal
+	case "minio":
+		return enums.StorageProviderMinio
 	default:
 		return enums.StorageProviderS3
 	}
