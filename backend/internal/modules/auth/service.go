@@ -186,6 +186,11 @@ func (s *Service) Logout(ctx context.Context, userID, currentSessionID string, a
 }
 
 func (s *Service) ForgotPassword(ctx context.Context, req ForgotPasswordRequest) (AcceptedResponse, error) {
+	// Normalize timing to prevent distinguishing between non-existent users,
+	// anonymous accounts, and real recoverable accounts.
+	start := time.Now()
+	defer normalizeForgotPasswordTiming(start)
+
 	if !s.privacy.CanUsePasswordRecovery() {
 		return AcceptedResponse{}, privacy.ErrPasswordRecoveryDisabled
 	}
@@ -194,7 +199,9 @@ func (s *Service) ForgotPassword(ctx context.Context, req ForgotPasswordRequest)
 		return AcceptedResponse{Accepted: true}, nil
 	}
 	if user.Email == nil || user.IsAnonymous {
-		return AcceptedResponse{}, privacy.ErrPasswordRecoveryDisabled
+		// Return the same "accepted" response so the endpoint does not leak
+		// whether the account exists or is anonymous.
+		return AcceptedResponse{Accepted: true}, nil
 	}
 
 	rawToken, err := authplatform.RandomToken(48)
@@ -426,5 +433,13 @@ const targetLoginLatency = 400 * time.Millisecond
 func normalizeLoginTiming(start time.Time) {
 	if elapsed := time.Since(start); elapsed < targetLoginLatency {
 		time.Sleep(targetLoginLatency - elapsed)
+	}
+}
+
+const targetForgotPasswordLatency = 150 * time.Millisecond
+
+func normalizeForgotPasswordTiming(start time.Time) {
+	if elapsed := time.Since(start); elapsed < targetForgotPasswordLatency {
+		time.Sleep(targetForgotPasswordLatency - elapsed)
 	}
 }
