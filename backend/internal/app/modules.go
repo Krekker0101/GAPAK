@@ -104,7 +104,7 @@ func registerModules(app *fiber.App, deps Dependencies) {
 	app.Get("/ws", fws.New(wsService.HandleConnection))
 	trustrooms.NewController(trustrooms.NewService(trustrooms.NewRepository(deps.DB)), deps.Validate).
 		RegisterRoutes(api, requireAuth)
-	media.NewController(media.NewService(media.NewRepository(deps.DB), deps.Storage, deps.Queue, deps.Config), deps.Validate).
+	media.NewController(media.NewService(media.NewRepository(deps.DB), deps.Storage, deps.ObjectStore, deps.Queue, deps.Config), deps.Validate).
 		RegisterRoutes(api, requireAuth)
 	live.NewController(live.NewService(live.NewRepository(deps.DB, deps.Config.Queue.LiveEventChannel), deps.Config.Queue.LiveEventChannel), deps.Validate).
 		RegisterRoutes(api, requireAuth)
