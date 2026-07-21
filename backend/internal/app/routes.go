@@ -23,8 +23,6 @@ func registerBaseRoutes(app *fiber.App, deps Dependencies) {
 		ctx, cancel := context.WithTimeout(c.UserContext(), 2*time.Second)
 		defer cancel()
 
-		status := "ready"
-		mode := "full"
 		dependencies := map[string]map[string]any{
 			"postgres": {
 				"status":   "up",
@@ -32,7 +30,7 @@ func registerBaseRoutes(app *fiber.App, deps Dependencies) {
 			},
 			"redis": {
 				"status":   "up",
-				"critical": false,
+				"critical": true,
 			},
 		}
 
@@ -45,24 +43,29 @@ func registerBaseRoutes(app *fiber.App, deps Dependencies) {
 		}
 
 		if deps.Redis == nil {
-			status = "degraded"
-			mode = "database-fallback"
 			dependencies["redis"]["status"] = "down"
-			dependencies["redis"]["optional"] = true
 			dependencies["redis"]["reason"] = "redis client is not configured or unavailable during startup"
-		} else if err := deps.Redis.Ping(ctx).Err(); err != nil {
-			status = "degraded"
-			mode = "database-fallback"
+			return c.Status(fiber.StatusServiceUnavailable).JSON(httpx.OK(map[string]any{
+				"status":       "unavailable",
+				"mode":         "database-fallback",
+				"dependencies": dependencies,
+				"timestamp":    time.Now().UTC(),
+			}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+		}
+		if err := deps.Redis.Ping(ctx).Err(); err != nil {
 			dependencies["redis"]["status"] = "down"
-			dependencies["redis"]["optional"] = true
 			dependencies["redis"]["reason"] = err.Error()
-		} else {
-			dependencies["redis"]["optional"] = true
+			return c.Status(fiber.StatusServiceUnavailable).JSON(httpx.OK(map[string]any{
+				"status":       "unavailable",
+				"mode":         "database-fallback",
+				"dependencies": dependencies,
+				"timestamp":    time.Now().UTC(),
+			}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 		}
 
 		return c.JSON(httpx.OK(map[string]any{
-			"status":       status,
-			"mode":         mode,
+			"status":       "ready",
+			"mode":         "full",
 			"dependencies": dependencies,
 			"timestamp":    time.Now().UTC(),
 		}, c.GetRespHeader(fiber.HeaderXRequestID), nil))

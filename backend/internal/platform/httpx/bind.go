@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -35,6 +36,28 @@ func BindQuery[T any](c *fiber.Ctx, validate *validator.Validate) (T, error) {
 	return payload, nil
 }
 
+// sensitiveFields lists validator field names whose raw value must not be echoed back.
+var sensitiveFields = map[string]struct{}{
+	"password":        {},
+	"newpassword":     {},
+	"oldpassword":     {},
+	"confirmpassword": {},
+	"twofactorcode":   {},
+	"totpcode":        {},
+	"otpcode":         {},
+	"token":           {},
+	"refreshtoken":    {},
+	"secret":          {},
+	"ciphertext":      {},
+	"nonce":           {},
+	"key":             {},
+}
+
+func isSensitiveField(name string) bool {
+	_, ok := sensitiveFields[strings.ToLower(name)]
+	return ok
+}
+
 func validationError(err error) error {
 	validationErr := apperrors.New(fiber.StatusBadRequest, "request.validation_failed", "Request validation failed")
 	validationErr.Details = map[string]any{}
@@ -47,11 +70,14 @@ func validationError(err error) error {
 
 	violations := make([]map[string]string, 0, len(fields))
 	for _, fieldErr := range fields {
-		violations = append(violations, map[string]string{
+		violation := map[string]string{
 			"field": fieldErr.Field(),
 			"rule":  fieldErr.Tag(),
-			"value": fmt.Sprintf("%v", fieldErr.Value()),
-		})
+		}
+		if !isSensitiveField(fieldErr.Field()) {
+			violation["value"] = fmt.Sprintf("%v", fieldErr.Value())
+		}
+		violations = append(violations, violation)
 	}
 
 	validationErr.Details["violations"] = violations

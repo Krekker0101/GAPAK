@@ -25,8 +25,8 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 
 func (r *Repository) FindProfile(ctx context.Context, userID string) (*model.User, error) {
 	const query = `
-		SELECT id, email, username, display_name, bio, avatar_file_id, status_message, password_hash, role, account_status,
-		       is_anonymous, two_factor_enabled, two_factor_secret_ciphertext, two_factor_secret_nonce,
+		SELECT id, email, username, display_name, bio, avatar_file_id, status_message, role, account_status,
+		       is_anonymous, two_factor_enabled,
 		       created_at, updated_at, deleted_at
 		FROM users
 		WHERE id = $1 AND deleted_at IS NULL
@@ -36,7 +36,6 @@ func (r *Repository) FindProfile(ctx context.Context, userID string) (*model.Use
 	var user model.User
 	var role, accountStatus string
 	var email, bio, avatarFileID, statusMessage sql.NullString
-	var twoFactorSecretCiphertext, twoFactorSecretNonce sql.NullString
 	if err := row.Scan(
 		&user.ID,
 		&email,
@@ -45,13 +44,10 @@ func (r *Repository) FindProfile(ctx context.Context, userID string) (*model.Use
 		&bio,
 		&avatarFileID,
 		&statusMessage,
-		&user.PasswordHash,
 		&role,
 		&accountStatus,
 		&user.IsAnonymous,
 		&user.TwoFactorEnabled,
-		&twoFactorSecretCiphertext,
-		&twoFactorSecretNonce,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 		&user.DeletedAt,
