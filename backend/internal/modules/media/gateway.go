@@ -280,7 +280,7 @@ func (s *Service) gatewaySignature(parts ...string) string {
 }
 
 func parseSignedExpiry(raw string) (time.Time, error) {
-	value, err := time.Parse(time.RFC3339, raw)
+	value, err := time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
 		return time.Time{}, apperrors.New(400, "media.signature_expiry_invalid", "Signed request expiry is invalid")
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gapak/backend/internal/domain/enums"
@@ -19,12 +20,31 @@ import (
 	apperrors "github.com/gapak/backend/internal/platform/errors"
 )
 
+// dbConn abstracts *pgxpool.Pool and pgx.Tx so repository methods can run inside a transaction.
+type dbConn interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
+	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
+}
+
 type Repository struct {
-	db *pgxpool.Pool
+	db dbConn
 }
 
 func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
+}
+
+// Begin starts a new transaction.
+func (r *Repository) Begin(ctx context.Context) (pgx.Tx, error) {
+	return r.db.Begin(ctx)
+}
+
+// WithTx returns a repository instance that runs against the given transaction.
+func (r *Repository) WithTx(tx pgx.Tx) *Repository {
+	return &Repository{db: tx}
 }
 
 // ============================================================================
@@ -33,9 +53,9 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 
 func (r *Repository) CreateChat(ctx context.Context, chat *model.Chat) (*model.Chat, error) {
 	chat.ID = uuid.NewString()
-	chat.CreatedAt = time.Now()
-	chat.UpdatedAt = time.Now()
-	chat.MemberCount = len([]string{chat.CreatedByID})
+	chat.CreatedAt = time.Now().UTC()
+	chat.UpdatedAt = time.Now().UTC()
+	chat.MemberCount = 0
 
 	const query = `
 		INSERT INTO chats (
@@ -345,9 +365,9 @@ func (r *Repository) CreateMessage(ctx context.Context, message *model.Message) 
 	defer tx.Rollback(ctx)
 
 	message.ID = uuid.NewString()
-	message.SentAt = time.Now()
-	message.CreatedAt = time.Now()
-	message.UpdatedAt = time.Now()
+	message.SentAt = time.Now().UTC()
+	message.CreatedAt = time.Now().UTC()
+	message.UpdatedAt = time.Now().UTC()
 	message.Status = enums.MessageStatusSent
 
 	const seqQuery = `
@@ -839,15 +859,25 @@ func (r *Repository) GetPinnedMessages(ctx context.Context, chatID string) ([]*m
 
 func (r *Repository) CreateMessageVersion(ctx context.Context, version *model.MessageVersion) (*model.MessageVersion, error) {
 	version.ID = uuid.NewString()
-	version.EditedAt = time.Now()
+	version.EditedAt = time.Now().UTC()
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Lock the parent message to serialize concurrent edits and avoid duplicate version numbers.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM messages WHERE id = $1 FOR UPDATE`, version.MessageID); err != nil {
+		return nil, err
+	}
 
 	const versionQuery = `
 		SELECT COALESCE(MAX(version_number), 0) + 1
 		FROM message_versions
 		WHERE message_id = $1
 	`
-	err := r.db.QueryRow(ctx, versionQuery, version.MessageID).Scan(&version.VersionNumber)
-	if err != nil {
+	if err := tx.QueryRow(ctx, versionQuery, version.MessageID).Scan(&version.VersionNumber); err != nil {
 		return nil, err
 	}
 
@@ -859,7 +889,7 @@ func (r *Repository) CreateMessageVersion(ctx context.Context, version *model.Me
 		RETURNING id, message_id, version_number, ciphertext, nonce, content, metadata, edited_at, edited_by_id
 	`
 
-	return r.scanMessageVersion(r.db.QueryRow(ctx, query,
+	v, err := r.scanMessageVersion(tx.QueryRow(ctx, query,
 		version.ID,
 		version.MessageID,
 		version.VersionNumber,
@@ -870,6 +900,14 @@ func (r *Repository) CreateMessageVersion(ctx context.Context, version *model.Me
 		version.EditedAt,
 		version.EditedByID,
 	))
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
 func (r *Repository) GetMessageVersions(ctx context.Context, messageID string) ([]*model.MessageVersion, error) {
@@ -942,20 +980,19 @@ func (r *Repository) CreateAttachmentsBatch(ctx context.Context, attachments []*
 	return nil
 }
 
-func (r *Repository) MarkMessagesAsDeliveredBatch(ctx context.Context, messageIDs []string, userID string) error {
-	if len(messageIDs) == 0 {
+func (r *Repository) MarkMessagesAsDeliveredBatch(ctx context.Context, messageID string, userIDs []string) error {
+	if len(userIDs) == 0 {
 		return nil
 	}
 
 	const query = `
 		INSERT INTO delivery_receipts (id, message_id, user_id, delivered_at)
-		SELECT $1, unnest($2::uuid[]), $3, NOW()
+		SELECT gen_random_uuid(), $1, unnest($2::uuid[]), NOW()
 		ON CONFLICT (message_id, user_id)
 		DO UPDATE SET delivered_at = NOW()
 	`
 
-	id := uuid.NewString()
-	_, err := r.db.Exec(ctx, query, id, messageIDs, userID)
+	_, err := r.db.Exec(ctx, query, messageID, userIDs)
 	return err
 }
 
