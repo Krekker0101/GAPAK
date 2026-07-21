@@ -17,7 +17,7 @@ func RequireAuth(jwtManager *auth.Manager) fiber.Handler {
 		if token == "" {
 			return apperrors.ErrUnauthorized
 		}
-		claims, err := jwtManager.ParseAccessToken(token)
+		claims, err := jwtManager.VerifyAccessToken(c.UserContext(), token)
 		if err != nil {
 			return apperrors.ErrInvalidToken
 		}
@@ -32,7 +32,7 @@ func OptionalAuth(jwtManager *auth.Manager) fiber.Handler {
 		if token == "" {
 			return c.Next()
 		}
-		claims, err := jwtManager.ParseAccessToken(token)
+		claims, err := jwtManager.VerifyAccessToken(c.UserContext(), token)
 		if err == nil {
 			c.Locals(claimsContextKey, claims)
 		}

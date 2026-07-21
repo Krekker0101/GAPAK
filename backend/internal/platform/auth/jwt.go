@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"time"
@@ -45,11 +46,16 @@ type TokenPair struct {
 }
 
 type Manager struct {
-	cfg JWTConfig
+	cfg        JWTConfig
+	revocation RevocationChecker
 }
 
 func NewJWTManager(cfg JWTConfig) *Manager {
 	return &Manager{cfg: cfg}
+}
+
+func (m *Manager) SetRevocationChecker(rc RevocationChecker) {
+	m.revocation = rc
 }
 
 func (m *Manager) Issue(userID, sessionID, role string, scopes []string) (TokenPair, error) {
@@ -121,6 +127,41 @@ func (m *Manager) ParseAccessToken(raw string) (*Claims, error) {
 
 func (m *Manager) ParseRefreshToken(raw string) (*Claims, error) {
 	return m.parse(raw, []byte(m.cfg.RefreshSecret), TokenTypeRefresh)
+}
+
+// VerifyAccessToken parses and checks the token against the revocation list.
+func (m *Manager) VerifyAccessToken(ctx context.Context, raw string) (*Claims, error) {
+	claims, err := m.ParseAccessToken(raw)
+	if err != nil {
+		return nil, err
+	}
+	if m.revocation == nil {
+		return claims, nil
+	}
+	revoked, err := m.revocation.IsRevoked(ctx, claims)
+	if err != nil {
+		return nil, err
+	}
+	if revoked {
+		return nil, jwt.ErrTokenInvalidClaims
+	}
+	return claims, nil
+}
+
+// RevokeAccessToken invalidates a single access token by its JTI.
+func (m *Manager) RevokeAccessToken(ctx context.Context, jti string) error {
+	if m.revocation == nil || jti == "" {
+		return nil
+	}
+	return m.revocation.Revoke(ctx, jti, m.cfg.AccessTTL)
+}
+
+// RevokeUserTokens invalidates all access tokens issued for a user before now.
+func (m *Manager) RevokeUserTokens(ctx context.Context, userID string) error {
+	if m.revocation == nil || userID == "" {
+		return nil
+	}
+	return m.revocation.RevokeUser(ctx, userID, time.Now().UTC())
 }
 
 func (m *Manager) parse(raw string, secret []byte, expected TokenType) (*Claims, error) {
