@@ -9,7 +9,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -21,12 +24,36 @@ type Migration struct {
 	Checksum string
 }
 
+// querier is the subset of *pgxpool.Pool / *pgxpool.Conn needed for migrations.
+type querier interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 func ApplyMigrations(ctx context.Context, db *pgxpool.Pool, dir string) error {
 	if db == nil {
 		return fmt.Errorf("database pool is nil")
 	}
 
-	if err := ensureMigrationTable(ctx, db); err != nil {
+	// Hold a dedicated connection for the advisory lock so the lock is released
+	// on the same session that acquired it. pg_advisory_lock is per-connection.
+	conn, err := db.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Release()
+
+	const migrationLockID int64 = 42
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = conn.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", migrationLockID)
+	}()
+
+	if err := ensureMigrationTable(ctx, conn); err != nil {
 		return err
 	}
 
@@ -36,7 +63,7 @@ func ApplyMigrations(ctx context.Context, db *pgxpool.Pool, dir string) error {
 	}
 
 	for _, migration := range migrations {
-		applied, err := isMigrationApplied(ctx, db, migration.Version)
+		applied, err := isMigrationApplied(ctx, conn, migration.Version)
 		if err != nil {
 			return err
 		}
@@ -44,7 +71,7 @@ func ApplyMigrations(ctx context.Context, db *pgxpool.Pool, dir string) error {
 			continue
 		}
 
-		tx, err := db.Begin(ctx)
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return err
 		}
@@ -108,7 +135,7 @@ func LoadMigrations(dir string) ([]Migration, error) {
 	return migrations, nil
 }
 
-func ensureMigrationTable(ctx context.Context, db *pgxpool.Pool) error {
+func ensureMigrationTable(ctx context.Context, db querier) error {
 	_, err := db.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version TEXT PRIMARY KEY,
@@ -120,7 +147,7 @@ func ensureMigrationTable(ctx context.Context, db *pgxpool.Pool) error {
 	return err
 }
 
-func isMigrationApplied(ctx context.Context, db *pgxpool.Pool, version string) (bool, error) {
+func isMigrationApplied(ctx context.Context, db querier, version string) (bool, error) {
 	var exists bool
 	err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)`, version).Scan(&exists)
 	return exists, err
