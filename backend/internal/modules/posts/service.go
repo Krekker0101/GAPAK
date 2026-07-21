@@ -96,53 +96,75 @@ func (s *Service) Feed(ctx context.Context, viewerID string, page, limit int, co
 	if err != nil {
 		return nil, err
 	}
-	response := make([]PostResponse, 0, len(items))
-	for _, item := range items {
-		hydrated, err := s.hydrate(ctx, viewerID, &item)
-		if err != nil {
-			return nil, err
-		}
-		response = append(response, hydrated)
+	posts := make([]*model.Post, len(items))
+	for i := range items {
+		posts[i] = &items[i]
 	}
-	return response, nil
+	return s.hydrateMany(ctx, viewerID, posts)
 }
 
 func (s *Service) hydrate(ctx context.Context, viewerID string, post *model.Post) (PostResponse, error) {
-	audience, err := s.repo.AudienceUserIDs(ctx, post.ID)
+	if post == nil {
+		return PostResponse{}, apperrors.ErrNotFound
+	}
+	responses, err := s.hydrateMany(ctx, viewerID, []*model.Post{post})
 	if err != nil {
 		return PostResponse{}, err
 	}
-	mediaIDs, err := s.repo.MediaFileIDs(ctx, post.ID)
+	return responses[0], nil
+}
+
+func (s *Service) hydrateMany(ctx context.Context, viewerID string, posts []*model.Post) ([]PostResponse, error) {
+	if len(posts) == 0 {
+		return nil, nil
+	}
+
+	postIDs := make([]string, len(posts))
+	for i, post := range posts {
+		postIDs[i] = post.ID
+	}
+
+	audienceMap, err := s.repo.AudienceUserIDsBatch(ctx, postIDs)
 	if err != nil {
-		return PostResponse{}, err
+		return nil, err
 	}
-	commentCount, err := s.repo.GetCommentCount(ctx, post.ID)
+	mediaMap, err := s.repo.MediaFileIDsBatch(ctx, postIDs)
 	if err != nil {
-		return PostResponse{}, err
+		return nil, err
 	}
-	isLiked, err := s.repo.IsPostLiked(ctx, viewerID, post.ID)
+	commentCountMap, err := s.repo.CommentCountsBatch(ctx, postIDs)
 	if err != nil {
-		return PostResponse{}, err
+		return nil, err
 	}
-	if viewerID != post.AuthorID {
-		audience = nil
+	isLikedMap, err := s.repo.IsPostLikedBatch(ctx, viewerID, postIDs)
+	if err != nil {
+		return nil, err
 	}
-	return PostResponse{
-		ID:               post.ID,
-		AuthorID:         post.AuthorID,
-		ContentType:      string(post.ContentType),
-		Body:             post.Body,
-		Privacy:          string(post.Privacy),
-		LikeCount:        post.LikeCount,
-		CommentCount:     commentCount,
-		IsLiked:          isLiked,
-		ExpiresAt:        post.ExpiresAt,
-		OneTimeViewLimit: post.OneTimeViewLimit,
-		AudienceUserIDs:  audience,
-		MediaFileIDs:     mediaIDs,
-		PublishedAt:      post.PublishedAt,
-		EditedAt:         post.EditedAt,
-	}, nil
+
+	responses := make([]PostResponse, len(posts))
+	for i, post := range posts {
+		audience := audienceMap[post.ID]
+		if viewerID != post.AuthorID {
+			audience = nil
+		}
+		responses[i] = PostResponse{
+			ID:               post.ID,
+			AuthorID:         post.AuthorID,
+			ContentType:      string(post.ContentType),
+			Body:             post.Body,
+			Privacy:          string(post.Privacy),
+			LikeCount:        post.LikeCount,
+			CommentCount:     commentCountMap[post.ID],
+			IsLiked:          isLikedMap[post.ID],
+			ExpiresAt:        post.ExpiresAt,
+			OneTimeViewLimit: post.OneTimeViewLimit,
+			AudienceUserIDs:  audience,
+			MediaFileIDs:     mediaMap[post.ID],
+			PublishedAt:      post.PublishedAt,
+			EditedAt:         post.EditedAt,
+		}
+	}
+	return responses, nil
 }
 
 func (s *Service) normalizeCreateRequest(req CreatePostRequest) (CreatePostRequest, error) {
