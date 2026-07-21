@@ -191,7 +191,30 @@ func (r *Repository) consumeOneTimeAudienceGrant(ctx context.Context, tx pgx.Tx,
 		return err
 	}
 	if commandTag.RowsAffected() == 0 {
-		return apperrors.ErrNotFound
+		// Distinguish between a missing audience grant, an exhausted one-time
+		// view limit, and an expired grant to avoid spurious 404s under race.
+		var exists bool
+		var usedViews, maxViews int
+		var expiresAt *time.Time
+		err := tx.QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM post_audience_grants WHERE post_id = $1 AND subject_user_id = $2),
+				   COALESCE(used_views, 0), COALESCE(max_views, 0), expires_at
+			FROM post_audience_grants
+			WHERE post_id = $1 AND subject_user_id = $2
+		`, postID, viewerID).Scan(&exists, &usedViews, &maxViews, &expiresAt)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if errors.Is(err, pgx.ErrNoRows) || !exists {
+			return apperrors.ErrNotFound
+		}
+		if expiresAt != nil && !expiresAt.After(time.Now().UTC()) {
+			return apperrors.New(410, "posts.audience_grant_expired", "Audience grant has expired")
+		}
+		if maxViews > 0 && usedViews >= maxViews {
+			return apperrors.New(403, "posts.one_time_limit_exceeded", "One-time view limit exceeded")
+		}
+		return apperrors.New(409, "posts.audience_grant_conflict", "Audience grant is no longer available")
 	}
 	return nil
 }
