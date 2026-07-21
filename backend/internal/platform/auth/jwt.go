@@ -164,6 +164,15 @@ func (m *Manager) RevokeUserTokens(ctx context.Context, userID string) error {
 	return m.revocation.RevokeUser(ctx, userID, time.Now().UTC())
 }
 
+// ValidateToken parses and verifies an access token, returning the user ID.
+func (m *Manager) ValidateToken(ctx context.Context, raw string) (string, error) {
+	claims, err := m.VerifyAccessToken(ctx, raw)
+	if err != nil {
+		return "", err
+	}
+	return claims.UserID, nil
+}
+
 func (m *Manager) parse(raw string, secret []byte, expected TokenType) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(raw, &Claims{}, func(token *jwt.Token) (any, error) {
 		return secret, nil

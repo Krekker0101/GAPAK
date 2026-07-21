@@ -1,7 +1,11 @@
 package app
 
 import (
+	"context"
+	"time"
+
 	"github.com/gofiber/fiber/v2"
+	fws "github.com/gofiber/websocket/v2"
 
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/modules/admin"
@@ -21,6 +25,7 @@ import (
 	"github.com/gapak/backend/internal/modules/trustrooms"
 	"github.com/gapak/backend/internal/modules/users"
 	"github.com/gapak/backend/internal/platform/middleware"
+	"github.com/gapak/backend/internal/services/websocket"
 )
 
 func registerModules(app *fiber.App, deps Dependencies) {
@@ -66,8 +71,12 @@ func registerModules(app *fiber.App, deps Dependencies) {
 
 	users.NewController(users.NewService(users.NewRepository(deps.DB), media.NewRepository(deps.DB), deps.Privacy), deps.Validate).
 		RegisterRoutes(api, requireAuth)
-	presence.NewController(presence.NewService(presence.NewRepository(deps.DB)), deps.Validate).
+
+	presenceRepo := presence.NewRepository(deps.DB)
+	presenceService := presence.NewService(presenceRepo)
+	presence.NewController(presenceService, deps.Validate).
 		RegisterRoutes(api, requireAuth)
+
 	sessions.NewController(sessions.NewService(sessions.NewRepository(deps.DB), deps.Privacy)).
 		RegisterRoutes(api, requireAuth)
 	security.NewController(security.NewService(security.NewRepository(deps.DB), deps.Privacy), deps.Validate).
@@ -80,8 +89,19 @@ func registerModules(app *fiber.App, deps Dependencies) {
 		RegisterRoutes(api, requireAuth)
 	stories.NewController(stories.NewService(stories.NewRepository(deps.DB)), deps.Validate).
 		RegisterRoutes(api, requireAuth)
-	chats.NewController(chats.NewService(chats.NewRepository(deps.DB)), deps.Validate).
+	chatsRepo := chats.NewRepository(deps.DB)
+	chatsService := chats.NewService(chatsRepo)
+	chats.NewController(chatsService, deps.Validate).
 		RegisterRoutes(api, requireAuth)
+
+	wsService := websocket.NewService(
+		deps.Redis,
+		&wsChatAdapter{svc: chatsService},
+		presenceService,
+		deps.JWT,
+		deps.Logger,
+	)
+	app.Get("/ws", fws.New(wsService.HandleConnection))
 	trustrooms.NewController(trustrooms.NewService(trustrooms.NewRepository(deps.DB)), deps.Validate).
 		RegisterRoutes(api, requireAuth)
 	media.NewController(media.NewService(media.NewRepository(deps.DB), deps.Storage, deps.Queue, deps.Config), deps.Validate).
@@ -94,4 +114,29 @@ func registerModules(app *fiber.App, deps Dependencies) {
 		RegisterRoutes(api, requireAuth, requireModerationRead, requireModerationWrite)
 	admin.NewController(admin.NewService(admin.NewRepository(deps.DB)), deps.Validate).
 		RegisterRoutes(api, requireAuth, requireAdminDashboard, requireAdminUsersRead, requireAdminUsersWrite, requireAdminContentRead, requireAdminContentWrite)
+}
+
+type wsChatAdapter struct {
+	svc *chats.Service
+}
+
+func (a *wsChatAdapter) GetMessage(ctx context.Context, userID, id string) (interface{}, error) {
+	return a.svc.GetMessage(ctx, id, userID)
+}
+
+func (a *wsChatAdapter) GetMessages(ctx context.Context, userID, chatID string, limit int, before *time.Time) ([]interface{}, error) {
+	q := chats.ListMessagesQuery{Limit: limit}
+	if before != nil {
+		q.Cursor = before.Format(time.RFC3339Nano)
+		q.Before = true
+	}
+	msgs, _, err := a.svc.GetMessages(ctx, chatID, userID, q)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]interface{}, len(msgs))
+	for i := range msgs {
+		out[i] = msgs[i]
+	}
+	return out, nil
 }

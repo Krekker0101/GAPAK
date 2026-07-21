@@ -43,6 +43,25 @@ func (s *Service) Get(ctx context.Context, viewerID, targetUserID string) (Prese
 	return toPresenceResponse(viewerID, record), nil
 }
 
+func (s *Service) SetOnline(ctx context.Context, userID, deviceID string) error {
+	now := time.Now().UTC().Truncate(time.Second)
+	return s.repo.UpsertHeartbeat(ctx, userID, deviceID, HeartbeatRequest{
+		ConnectionID: deviceID,
+		State:        "ACTIVE",
+	}, now)
+}
+
+func (s *Service) SetOffline(ctx context.Context, userID, deviceID string) error {
+	now := time.Now().UTC().Truncate(time.Second)
+	return s.repo.Disconnect(ctx, userID, deviceID, DisconnectRequest{
+		ConnectionID: deviceID,
+	}, now)
+}
+
+func (s *Service) IsOnline(ctx context.Context, userID string) (bool, error) {
+	return s.repo.IsUserOnline(ctx, userID, time.Now().UTC().Add(-activeWindow))
+}
+
 func (s *Service) Query(ctx context.Context, viewerID string, userIDs []string) ([]PresenceResponse, error) {
 	seen := make(map[string]struct{}, len(userIDs))
 	response := make([]PresenceResponse, 0, len(userIDs))
