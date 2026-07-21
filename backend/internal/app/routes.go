@@ -30,9 +30,10 @@ func registerBaseRoutes(app *fiber.App, deps Dependencies) {
 			},
 			"redis": {
 				"status":   "up",
-				"critical": true,
+				"critical": deps.Config.Redis.Enabled,
 			},
 		}
+		mode := "full"
 
 		if deps.DB != nil {
 			if err := deps.DB.Ping(ctx); err != nil {
@@ -42,22 +43,24 @@ func registerBaseRoutes(app *fiber.App, deps Dependencies) {
 			}
 		}
 
-		if deps.Redis == nil {
+		if !deps.Config.Redis.Enabled {
+			dependencies["redis"]["status"] = "disabled"
+			dependencies["redis"]["reason"] = "redis is disabled via REDIS_ENABLED=false"
+			mode = "database-fallback"
+		} else if deps.Redis == nil {
 			dependencies["redis"]["status"] = "down"
 			dependencies["redis"]["reason"] = "redis client is not configured or unavailable during startup"
-			return c.Status(fiber.StatusServiceUnavailable).JSON(httpx.OK(map[string]any{
-				"status":       "unavailable",
-				"mode":         "database-fallback",
-				"dependencies": dependencies,
-				"timestamp":    time.Now().UTC(),
-			}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
-		}
-		if err := deps.Redis.Ping(ctx).Err(); err != nil {
+			mode = "database-fallback"
+		} else if err := deps.Redis.Ping(ctx).Err(); err != nil {
 			dependencies["redis"]["status"] = "down"
 			dependencies["redis"]["reason"] = err.Error()
+			mode = "database-fallback"
+		}
+
+		if dependencies["redis"]["critical"].(bool) && dependencies["redis"]["status"] != "up" {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(httpx.OK(map[string]any{
 				"status":       "unavailable",
-				"mode":         "database-fallback",
+				"mode":         mode,
 				"dependencies": dependencies,
 				"timestamp":    time.Now().UTC(),
 			}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
@@ -65,7 +68,7 @@ func registerBaseRoutes(app *fiber.App, deps Dependencies) {
 
 		return c.JSON(httpx.OK(map[string]any{
 			"status":       "ready",
-			"mode":         "full",
+			"mode":         mode,
 			"dependencies": dependencies,
 			"timestamp":    time.Now().UTC(),
 		}, c.GetRespHeader(fiber.HeaderXRequestID), nil))

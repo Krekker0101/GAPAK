@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -82,10 +83,14 @@ func New(ctx context.Context) (*App, error) {
 		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
 
-	redisClient, err := cache.NewRedis(ctx, cfg.Redis)
-	if err != nil {
-		log.Warn().Err(err).Msg("redis is unavailable; starting in degraded mode")
-		redisClient = nil
+	var redisClient *redis.Client
+	if cfg.Redis.Enabled && strings.TrimSpace(cfg.Redis.URL) != "" {
+		var err error
+		redisClient, err = cache.NewRedis(ctx, cfg.Redis)
+		if err != nil {
+			log.Warn().Err(err).Msg("redis is unavailable; starting in degraded mode")
+			redisClient = nil
+		}
 	}
 
 	encryptor, err := appcrypto.NewEncryptor(cfg.Security.EncryptionKey)
