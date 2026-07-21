@@ -336,7 +336,7 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 
 	var expiresAt *time.Time
 	if req.ExpiresInSeconds != nil {
-		value := time.Now().Add(time.Duration(*req.ExpiresInSeconds) * time.Second)
+		value := time.Now().UTC().Add(time.Duration(*req.ExpiresInSeconds) * time.Second)
 		expiresAt = &value
 	}
 
@@ -366,7 +366,17 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		ExpiresAt:              expiresAt,
 	}
 
-	createdMessage, err := s.repo.CreateMessage(ctx, message)
+	// Wrap message, key envelopes, attachments and delivery receipts in a single transaction
+	// so the message is never persisted without its decryption keys.
+	tx, err := s.repo.Begin(ctx)
+	if err != nil {
+		return MessageResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	repoTx := s.repo.WithTx(tx)
+
+	createdMessage, err := repoTx.CreateMessage(ctx, message)
 	if err != nil {
 		return MessageResponse{}, err
 	}
@@ -375,12 +385,11 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		if err != nil {
 			return MessageResponse{}, err
 		}
-		if err := s.repo.CreateMessageKeyEnvelopes(ctx, envelopes); err != nil {
+		if err := repoTx.CreateMessageKeyEnvelopes(ctx, envelopes); err != nil {
 			return MessageResponse{}, err
 		}
 	}
 
-	// Create attachments
 	if len(req.Attachments) > 0 {
 		attachments := make([]*model.Attachment, 0, len(req.Attachments))
 		for _, att := range req.Attachments {
@@ -403,30 +412,30 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 			}
 			attachments = append(attachments, attachment)
 		}
-		if err := s.repo.CreateAttachmentsBatch(ctx, attachments); err != nil {
+		if err := repoTx.CreateAttachmentsBatch(ctx, attachments); err != nil {
 			return MessageResponse{}, err
 		}
 	}
 
-	// Update chat last message
-	updates := map[string]interface{}{
-		"last_message_id":      createdMessage.ID,
-		"last_message_at":      createdMessage.SentAt,
-		"last_sequence_number": createdMessage.SequenceNumber,
-	}
-	if _, err := s.repo.UpdateChat(ctx, chatID, updates); err != nil {
+	// Mark as delivered to all other members in the same transaction.
+	members, err := repoTx.ListChatMembers(ctx, chatID, "", 100, 0)
+	if err != nil {
 		return MessageResponse{}, err
 	}
-
-	// Mark as delivered to all other members
-	members, err := s.repo.ListChatMembers(ctx, chatID, "", 100, 0)
-	if err == nil {
-		messageIDs := []string{createdMessage.ID}
-		for _, member := range members {
-			if member.UserID != userID {
-				_ = s.repo.MarkMessagesAsDeliveredBatch(ctx, messageIDs, member.UserID)
-			}
+	recipientIDs := make([]string, 0, len(members))
+	for _, member := range members {
+		if member.UserID != userID {
+			recipientIDs = append(recipientIDs, member.UserID)
 		}
+	}
+	if len(recipientIDs) > 0 {
+		if err := repoTx.MarkMessagesAsDeliveredBatch(ctx, createdMessage.ID, recipientIDs); err != nil {
+			return MessageResponse{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return MessageResponse{}, err
 	}
 
 	return s.toMessageResponse(ctx, createdMessage, userID)
@@ -466,6 +475,15 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 	}
 	req.EncryptionProtocol = strings.ToUpper(strings.TrimSpace(req.EncryptionProtocol))
 
+	// Wrap version, update and envelopes in a transaction for consistency.
+	tx, err := s.repo.Begin(ctx)
+	if err != nil {
+		return MessageResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	repoTx := s.repo.WithTx(tx)
+
 	// Create version before editing
 	version := &model.MessageVersion{
 		MessageID:  messageID,
@@ -475,7 +493,7 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 		Metadata:   message.Metadata,
 		EditedByID: userID,
 	}
-	if _, err := s.repo.CreateMessageVersion(ctx, version); err != nil {
+	if _, err := repoTx.CreateMessageVersion(ctx, version); err != nil {
 		return MessageResponse{}, err
 	}
 
@@ -484,7 +502,7 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 		"nonce":                req.Nonce,
 		"content":              nil,
 		"metadata":             req.Metadata,
-		"edited_at":            time.Now(),
+		"edited_at":            time.Now().UTC(),
 		"encryption_algorithm": "client-managed-aead",
 	}
 	if req.EncryptionProtocol != "" {
@@ -497,7 +515,7 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 		updates["ratchet_counter"] = req.RatchetCounter
 	}
 
-	updatedMessage, err := s.repo.UpdateMessage(ctx, messageID, updates)
+	updatedMessage, err := repoTx.UpdateMessage(ctx, messageID, updates)
 	if err != nil {
 		return MessageResponse{}, err
 	}
@@ -513,9 +531,13 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 		if err != nil {
 			return MessageResponse{}, err
 		}
-		if err := s.repo.CreateMessageKeyEnvelopes(ctx, envelopes); err != nil {
+		if err := repoTx.CreateMessageKeyEnvelopes(ctx, envelopes); err != nil {
 			return MessageResponse{}, err
 		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return MessageResponse{}, err
 	}
 
 	return s.toMessageResponse(ctx, updatedMessage, userID)
@@ -540,7 +562,7 @@ func (s *Service) GetMessages(ctx context.Context, chatID, userID string, query 
 	var cursorID *string
 
 	if query.Cursor != "" {
-		parsed, err := time.Parse(time.RFC3339, query.Cursor)
+		parsed, err := time.Parse(time.RFC3339Nano, query.Cursor)
 		if err == nil {
 			cursor = &parsed
 		}
@@ -573,7 +595,8 @@ func (s *Service) GetMessages(ctx context.Context, chatID, userID string, query 
 
 	if len(messages) > 0 {
 		lastMessage := messages[len(messages)-1]
-		cursorStr := lastMessage.SentAt.Format(time.RFC3339)
+		// Use millisecond precision (matching the DB TIMESTAMP(3)) to avoid skipping messages.
+		cursorStr := lastMessage.SentAt.UTC().Format("2006-01-02T15:04:05.000Z07:00")
 		pagination.NextCursor = &cursorStr
 		pagination.NextCursorID = &lastMessage.ID
 	}
