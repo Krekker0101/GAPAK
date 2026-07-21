@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"net"
+	"os"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -184,8 +186,22 @@ func (a *App) Run(ctx context.Context) error {
 		_ = a.Shutdown(shutdownCtx)
 	}()
 
-	address := fmt.Sprintf("%s:%s", a.Config.HTTP.Host, a.Config.HTTP.Port)
-	return a.Fiber.Listen(address)
+	// Vercel and many PaaS providers expose the target port in the PORT env var.
+	// Keep APP_PORT as the explicit override, but fall back to PORT so the
+	// container/serverless runtime can bind correctly.
+	port := a.Config.HTTP.Port
+	if port == "" {
+		port = os.Getenv("PORT")
+	}
+	if port == "" {
+		port = "8080"
+	}
+	host := a.Config.HTTP.Host
+	if host == "" {
+		host = "0.0.0.0"
+	}
+
+	return a.Fiber.Listen(net.JoinHostPort(host, port))
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
