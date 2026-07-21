@@ -15,9 +15,13 @@ func NewPasswordManager(pepper string) *PasswordManager {
 	return &PasswordManager{
 		pepper: pepper,
 		params: &argon2id.Params{
-			Memory:      256 * 1024,
-			Iterations:  3,
-			Parallelism: 2,
+			// OWASP 2023 recommends at least 19 MiB; 64 MiB with 4 iterations is
+			// a reasonable high-load balance between brute-force resistance and
+			// login latency. Existing hashes remain valid because argon2id's
+			// encoded hash stores the parameters used at creation time.
+			Memory:      64 * 1024 * 1024,
+			Iterations:  4,
+			Parallelism: 4,
 			SaltLength:  16,
 			KeyLength:   32,
 		},
