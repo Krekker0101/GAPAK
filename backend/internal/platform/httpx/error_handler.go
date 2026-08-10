@@ -4,6 +4,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/rs/zerolog"
 
+	logsanitize "github.com/gapak/backend/internal/platform/logger"
+
 	apperrors "github.com/gapak/backend/internal/platform/errors"
 )
 
@@ -23,7 +25,7 @@ func FiberErrorHandler(logger zerolog.Logger) fiber.ErrorHandler {
 			Str("code", appErr.Code)
 
 		if appErr.Cause != nil {
-			event = event.Err(appErr.Cause)
+			event = event.Str("cause", logsanitize.Sanitize(appErr.Cause.Error()))
 		}
 
 		event.Msg(appErr.Message)

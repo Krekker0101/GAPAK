@@ -27,7 +27,11 @@ func (s *Service) GetMe(ctx context.Context, userID string) (ProfileResponse, er
 	if err != nil {
 		return ProfileResponse{}, err
 	}
-	return s.toProfileResponse(user, privacy), nil
+	theme, err := s.repo.GetTheme(ctx, userID)
+	if err != nil {
+		return ProfileResponse{}, err
+	}
+	return s.toProfileResponse(user, privacy, theme), nil
 }
 
 func (s *Service) UpdateMe(ctx context.Context, userID string, req UpdateProfileRequest) (ProfileResponse, error) {
@@ -42,6 +46,13 @@ func (s *Service) UpdateMe(ctx context.Context, userID string, req UpdateProfile
 	return s.GetMe(ctx, userID)
 }
 
+func (s *Service) UpdateTheme(ctx context.Context, userID string, req UpdateThemeRequest) (ProfileResponse, error) {
+	if err := s.repo.UpdateTheme(ctx, userID, req.Theme); err != nil {
+		return ProfileResponse{}, err
+	}
+	return s.GetMe(ctx, userID)
+}
+
 func (s *Service) UpdatePrivacy(ctx context.Context, userID string, req UpdatePrivacyRequest) (ProfileResponse, error) {
 	if err := s.repo.UpdatePrivacy(ctx, userID, req); err != nil {
 		return ProfileResponse{}, err
@@ -49,7 +60,7 @@ func (s *Service) UpdatePrivacy(ctx context.Context, userID string, req UpdatePr
 	return s.GetMe(ctx, userID)
 }
 
-func (s *Service) toProfileResponse(user *model.User, privacy *model.UserPrivacySettings) ProfileResponse {
+func (s *Service) toProfileResponse(user *model.User, privacy *model.UserPrivacySettings, theme string) ProfileResponse {
 	return ProfileResponse{
 		ID:               user.ID,
 		Email:            s.privacy.PublicEmail(user),
@@ -61,6 +72,7 @@ func (s *Service) toProfileResponse(user *model.User, privacy *model.UserPrivacy
 		Role:             string(user.Role),
 		IsAnonymous:      user.IsAnonymous,
 		TwoFactorEnabled: user.TwoFactorEnabled,
+		Theme:            theme,
 		Privacy: PrivacyResponse{
 			ProfileVisibility:    string(privacy.ProfileVisibility),
 			LastSeenVisibility:   string(privacy.LastSeenVisibility),

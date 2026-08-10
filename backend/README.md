@@ -2,7 +2,7 @@
 
 > A production-oriented, privacy-first social network backend built with Go. Gapak reimagines social platforms through trust, layered identity, controlled visibility, and secure media delivery.
 
-[![Go Version](https://img.shields.io/badge/Go-1.24.3-blue.svg)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/Go-1.24.13-blue.svg)](https://golang.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 [![Build Status](https://img.shields.io/badge/status-active-brightgreen)](#)
 

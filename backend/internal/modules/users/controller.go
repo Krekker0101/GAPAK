@@ -22,6 +22,7 @@ func (ctl *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Han
 	group.Get("/me", ctl.getMe)
 	group.Patch("/me", ctl.updateMe)
 	group.Patch("/me/privacy", ctl.updatePrivacy)
+	group.Patch("/me/theme", ctl.updateTheme)
 }
 
 func (ctl *Controller) getMe(c *fiber.Ctx) error {
@@ -40,6 +41,19 @@ func (ctl *Controller) updateMe(c *fiber.Ctx) error {
 	}
 	claims := middleware.ClaimsFromContext(c)
 	response, err := ctl.service.UpdateMe(c.UserContext(), claims.UserID, payload)
+	if err != nil {
+		return err
+	}
+	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+}
+
+func (ctl *Controller) updateTheme(c *fiber.Ctx) error {
+	payload, err := httpx.BindBody[UpdateThemeRequest](c, ctl.validate)
+	if err != nil {
+		return err
+	}
+	claims := middleware.ClaimsFromContext(c)
+	response, err := ctl.service.UpdateTheme(c.UserContext(), claims.UserID, payload)
 	if err != nil {
 		return err
 	}

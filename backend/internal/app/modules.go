@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -28,24 +29,27 @@ import (
 	"github.com/gapak/backend/internal/services/websocket"
 )
 
-func registerModules(app *fiber.App, deps Dependencies) {
+func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 	api := app.Group("/api/v1")
 
 	requireAuth := middleware.RequireAuth(deps.JWT)
 	authLimiter := middleware.RateLimiter{
-		Redis:  deps.Redis,
-		Prefix: "rl:auth",
-		Max:    deps.Config.RateLimit.AuthMax,
-		Window: deps.Config.RateLimit.AuthWindow,
-		KeyFn:  deps.Privacy.RateLimitKey,
+		Redis:   deps.Redis,
+		Prefix:  "rl:auth",
+		Metrics: deps.Observability,
+		Max:     deps.Config.RateLimit.AuthMax,
+		Window:  deps.Config.RateLimit.AuthWindow,
+		KeyFn:   deps.Privacy.RateLimitKey,
 	}.Handler()
 	passwordLimiter := middleware.RateLimiter{
-		Redis:  deps.Redis,
-		Prefix: "rl:password",
-		Max:    deps.Config.RateLimit.PasswordMax,
-		Window: deps.Config.RateLimit.PasswordWindow,
-		KeyFn:  deps.Privacy.RateLimitKey,
+		Redis:   deps.Redis,
+		Prefix:  "rl:password",
+		Metrics: deps.Observability,
+		Max:     deps.Config.RateLimit.PasswordMax,
+		Window:  deps.Config.RateLimit.PasswordWindow,
+		KeyFn:   deps.Privacy.RateLimitKey,
 	}.Handler()
+	idempotency := middleware.Idempotency(deps.Redis)
 	requireModerationRead := middleware.RequirePermissions(deps.RolePermissions, enums.PermissionAdminModerationRead)
 	requireModerationWrite := middleware.RequirePermissions(deps.RolePermissions, enums.PermissionAdminModerationWrite)
 	requireAdminDashboard := middleware.RequirePermissions(deps.RolePermissions, enums.PermissionAdminDashboardRead)
@@ -62,12 +66,13 @@ func registerModules(app *fiber.App, deps Dependencies) {
 			deps.TOTP,
 			deps.Encryptor,
 			deps.Privacy,
+			deps.Config.OAuth,
 		),
 		deps.Validate,
 		deps.Config.Security,
 		deps.Privacy,
 	)
-	authController.RegisterRoutes(api, requireAuth, authLimiter, passwordLimiter)
+	authController.RegisterRoutes(api, requireAuth, authLimiter, passwordLimiter, idempotency)
 
 	users.NewController(users.NewService(users.NewRepository(deps.DB), media.NewRepository(deps.DB), deps.Privacy), deps.Validate).
 		RegisterRoutes(api, requireAuth)
@@ -100,8 +105,13 @@ func registerModules(app *fiber.App, deps Dependencies) {
 		presenceService,
 		deps.JWT,
 		deps.Logger,
+		deps.Observability,
 	)
-	app.Get("/ws", fws.New(wsService.HandleConnection))
+	app.Get("/ws", requireAuth, func(c *fiber.Ctx) error {
+		claims := middleware.ClaimsFromContext(c)
+		c.Locals("userId", claims.UserID)
+		return c.Next()
+	}, fws.New(wsService.HandleConnection))
 	trustrooms.NewController(trustrooms.NewService(trustrooms.NewRepository(deps.DB)), deps.Validate).
 		RegisterRoutes(api, requireAuth)
 	media.NewController(media.NewService(media.NewRepository(deps.DB), deps.Storage, deps.ObjectStore, deps.Queue, deps.Config), deps.Validate).
@@ -114,6 +124,8 @@ func registerModules(app *fiber.App, deps Dependencies) {
 		RegisterRoutes(api, requireAuth, requireModerationRead, requireModerationWrite)
 	admin.NewController(admin.NewService(admin.NewRepository(deps.DB)), deps.Validate).
 		RegisterRoutes(api, requireAuth, requireAdminDashboard, requireAdminUsersRead, requireAdminUsersWrite, requireAdminContentRead, requireAdminContentWrite)
+
+	return wsService
 }
 
 type wsChatAdapter struct {
@@ -139,4 +151,74 @@ func (a *wsChatAdapter) GetMessages(ctx context.Context, userID, chatID string, 
 		out[i] = msgs[i]
 	}
 	return out, nil
+}
+
+func (a *wsChatAdapter) GetMessagesAfterSequence(ctx context.Context, userID, chatID string, afterSequence int64, limit int) ([]interface{}, error) {
+	msgs, err := a.svc.GetMessagesAfterSequence(ctx, chatID, userID, afterSequence, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]interface{}, len(msgs))
+	for i := range msgs {
+		out[i] = msgs[i]
+	}
+	return out, nil
+}
+
+func (a *wsChatAdapter) SendMessage(ctx context.Context, userID, chatID string, data map[string]interface{}) (interface{}, error) {
+	body, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	// WebSocket clients historically use snake_case field names while the HTTP
+	// DTO uses camelCase. Normalize the wire aliases before decoding into the
+	// existing, validated chat request type.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	aliases := map[string]string{
+		"chat_id": "chatId", "client_message_id": "clientMessageId",
+		"sender_device_id": "senderDeviceId", "sender_key_id": "senderKeyId",
+		"encryption_protocol": "encryptionProtocol", "encryption_algorithm": "encryptionAlgorithm",
+		"associated_data": "associatedData", "ratchet_counter": "ratchetCounter",
+		"authentication_tag": "authenticationTag", "reply_to_message_id": "replyToMessageId",
+		"forwarded_from_id": "forwardedFromId", "expires_in_seconds": "expiresInSeconds",
+		"key_envelopes": "keyEnvelopes",
+	}
+	for from, to := range aliases {
+		if value, ok := raw[from]; ok {
+			raw[to] = value
+		}
+	}
+	body, err = json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	var req chats.SendMessageRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, err
+	}
+	return a.svc.SendMessage(ctx, chatID, userID, req)
+}
+
+func (a *wsChatAdapter) MarkAsDelivered(ctx context.Context, userID, chatID, messageID string) (interface{}, error) {
+	return a.svc.MarkAsDelivered(ctx, messageID, userID)
+}
+
+func (a *wsChatAdapter) MarkAsRead(ctx context.Context, userID, chatID, messageID string) (interface{}, error) {
+	receipt, err := a.svc.MarkAsRead(ctx, chatID, userID, chats.MarkAsReadRequest{MessageID: messageID})
+	if err != nil {
+		return nil, err
+	}
+	return receipt, nil
+}
+
+func (a *wsChatAdapter) ListChatMemberIDs(ctx context.Context, userID, chatID string) ([]string, error) {
+	return a.svc.ListChatMemberIDs(ctx, chatID, userID)
+}
+
+func (a *wsChatAdapter) AssertChatAccess(ctx context.Context, userID, chatID string) error {
+	_, err := a.svc.GetChat(ctx, chatID, userID)
+	return err
 }

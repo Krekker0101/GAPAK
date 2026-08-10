@@ -90,7 +90,7 @@ if (Test-Path $envFile) {
     $content = Get-Content $envFile -Raw
     
     # Check for cloud or local database configuration
-    if ($content -match "db\.prisma\.io" -or $content -match "postgresql://postgres:5433@127\.0\.0\.1:5432" -or $content -match "postgresql://gapak:gapak@postgres:5432") {
+    if ($content -match "db\.prisma\.io" -or $content -match "postgresql://postgres:5433@127\.0\.0\.1:5432" -or $content -match "postgresql://gapak@postgres:5432") {
         Write-Host "   ✅ DATABASE_URL: Correct (Cloud or Local PostgreSQL)" -ForegroundColor Green
     } else {
         Write-Host "   ❌ DATABASE_URL: Incorrect or missing" -ForegroundColor Red

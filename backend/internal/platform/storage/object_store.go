@@ -14,5 +14,6 @@ type ObjectStore interface {
 	GetObject(ctx context.Context, bucket, objectKey string) (io.ReadCloser, int64, string, error)
 	ComposeObject(ctx context.Context, bucket, destObjectKey string, partObjectKeys []string) error
 	DeleteObjects(ctx context.Context, bucket string, objectKeys []string) error
+	ListObjects(ctx context.Context, bucket, prefix string, limit int) ([]string, error)
 	ResolvePartKey(objectKey string, partNumber int) string
 }

@@ -1,0 +1,10 @@
+/mnt/data/gapak_stage2/src/domains/auth/api/authApi.ts
+/mnt/data/gapak_stage2/src/domains/connections/api/connectionsApi.ts
+/mnt/data/gapak_stage2/src/domains/posts/api/postsApi.ts
+/mnt/data/gapak_stage2/src/domains/users/api/usersApi.ts
+/mnt/data/gapak_stage2/src/shared/api/authManager.ts
+/mnt/data/gapak_stage2/src/shared/api/httpClient.ts
+/mnt/data/gapak_stage2/src/shared/api/retryPolicy.ts
+/mnt/data/gapak_stage2/src/shared/api/schemas.ts
+/mnt/data/gapak_stage2/src/shared/api/tokenManager.ts
+/mnt/data/gapak_stage2/src/shared/api/types.ts

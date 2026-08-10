@@ -8,6 +8,7 @@ import (
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
+	"github.com/gapak/backend/internal/platform/pagination"
 )
 
 type Service struct {
@@ -82,6 +83,38 @@ func (s *Service) Get(ctx context.Context, viewerID, postID string) (PostRespons
 		return PostResponse{}, err
 	}
 	return s.hydrate(ctx, viewerID, post)
+}
+
+func (s *Service) FeedCursor(ctx context.Context, viewerID string, cursor *pagination.Cursor, limit int, contentType string) ([]PostResponse, *pagination.Cursor, error) {
+	if limit == 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	contentType = strings.ToUpper(strings.TrimSpace(contentType))
+	items, err := s.repo.FeedCursor(ctx, viewerID, cursor, limit, contentType)
+	if err != nil {
+		return nil, nil, err
+	}
+	hasNext := len(items) > limit
+	if hasNext {
+		items = items[:limit]
+	}
+	posts := make([]*model.Post, len(items))
+	for i := range items {
+		posts[i] = &items[i]
+	}
+	responses, err := s.hydrateMany(ctx, viewerID, posts)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !hasNext || len(items) == 0 {
+		return responses, nil, nil
+	}
+	last := items[len(items)-1]
+	next := pagination.Cursor{Time: last.PublishedAt, ID: last.ID}
+	return responses, &next, nil
 }
 
 func (s *Service) Feed(ctx context.Context, viewerID string, page, limit int, contentType string) ([]PostResponse, error) {
@@ -458,10 +491,24 @@ func (s *Service) DeleteComment(ctx context.Context, userID, commentID string) e
 }
 
 func (s *Service) LikeComment(ctx context.Context, userID, commentID string) error {
+	postID, err := s.repo.GetCommentPostID(ctx, commentID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.repo.GetVisiblePost(ctx, userID, postID); err != nil {
+		return err
+	}
 	return s.repo.LikeComment(ctx, userID, commentID)
 }
 
 func (s *Service) UnlikeComment(ctx context.Context, userID, commentID string) error {
+	postID, err := s.repo.GetCommentPostID(ctx, commentID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.repo.GetVisiblePost(ctx, userID, postID); err != nil {
+		return err
+	}
 	return s.repo.UnlikeComment(ctx, userID, commentID)
 }
 

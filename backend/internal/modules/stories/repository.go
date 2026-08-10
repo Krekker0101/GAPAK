@@ -152,7 +152,19 @@ func (r *Repository) GetVisible(ctx context.Context, viewerID, storyID string) (
 		return nil, err
 	}
 	if story.Privacy == enums.PostPrivacyOneTime && viewerID != story.AuthorID {
-		_, _ = r.db.Exec(ctx, `UPDATE story_audience_grants SET used_views = used_views + 1 WHERE story_id = $1 AND subject_user_id = $2`, storyID, viewerID)
+		tag, err := r.db.Exec(ctx, `
+			UPDATE story_audience_grants
+			SET used_views = used_views + 1
+			WHERE story_id = $1
+			  AND subject_user_id = $2
+			  AND (expires_at IS NULL OR expires_at > NOW())
+			  AND (max_views IS NULL OR used_views < max_views)`, storyID, viewerID)
+		if err != nil {
+			return nil, err
+		}
+		if tag.RowsAffected() == 0 {
+			return nil, apperrors.New(410, "stories.one_time_limit_exceeded", "Story view limit exceeded")
+		}
 	}
 	return story, nil
 }

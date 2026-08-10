@@ -23,6 +23,8 @@ type User struct {
 	TwoFactorEnabled          bool
 	TwoFactorSecretCiphertext *string
 	TwoFactorSecretNonce      *string
+	FailedLoginAttempts       int
+	LockedUntil               *time.Time
 	LastSeenAt                *time.Time
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time
@@ -81,6 +83,18 @@ type TwoFactorSetupChallenge struct {
 	ExpiresAt        time.Time
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+type SocialAccount struct {
+	ID             string
+	UserID         string
+	Provider       string
+	ProviderUserID string
+	Email          *string
+	DisplayName    *string
+	AvatarURL      *string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type Post struct {
@@ -302,36 +316,6 @@ type DevicePreKey struct {
 	UsedAt    *time.Time
 	CreatedAt time.Time
 	ExpiresAt *time.Time
-}
-
-// ============================================================================
-// LEGACY MODELS (kept for backward compatibility during migration)
-// ============================================================================
-
-type DirectChat struct {
-	ID            string
-	CreatedByID   string
-	LastMessageAt *time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	DeletedAt     *time.Time
-}
-
-type DirectChatMember struct {
-	ChatID     string
-	UserID     string
-	Role       enums.ChatMemberRole
-	JoinedAt   time.Time
-	LastReadAt *time.Time
-	MutedUntil *time.Time
-	DeletedAt  *time.Time
-}
-
-type MessageMediaAttachment struct {
-	ID          string
-	MessageID   string
-	MediaFileID string
-	CreatedAt   time.Time
 }
 
 type TrustRoom struct {
@@ -574,6 +558,8 @@ type ProcessingJob struct {
 	ReservedAt      *time.Time
 	StartedAt       *time.Time
 	FinishedAt      *time.Time
+	LeaseToken      *string
+	NextAttemptAt   *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
@@ -657,20 +643,21 @@ type LiveChatMessage struct {
 }
 
 type RealtimeEvent struct {
-	ID             string
-	Sequence       int64
-	Channel        string
-	AggregateType  string
-	AggregateID    string
-	EventType      string
-	PayloadJSON    []byte
-	RelayStatus    string
-	RelayAttempts  int
-	LastRelayError *string
-	ReservedAt     *time.Time
-	RelayedAt      *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID              string
+	Sequence        int64
+	Channel         string
+	AggregateType   string
+	AggregateID     string
+	EventType       string
+	PayloadJSON     []byte
+	RelayStatus     string
+	RelayAttempts   int
+	LastRelayError  *string
+	ReservedAt      *time.Time
+	RelayLeaseToken *string
+	RelayedAt       *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type Battle struct {

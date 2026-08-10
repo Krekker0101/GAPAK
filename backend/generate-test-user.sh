@@ -26,14 +26,14 @@ echo "Generated hash: $HASH"
 echo "Remember - test credentials:"
 echo "  Username: testuser"
 echo "  Email: test@example.com"
-echo "  Password: TestPassword123"
+echo "  Password: 543212345"
 
 # Create SQL file with actual hash
 cat > db/migrations/20260516000000_seed_test_user.sql << EOF
 -- Seed test user for debugging login issues
 -- Username: testuser
 -- Email: test@example.com
--- Password: TestPassword123
+-- Password: 543212345
 
 INSERT INTO users (id, email, username, display_name, password_hash, role, account_status, is_anonymous, updated_at)
 VALUES (

@@ -189,7 +189,7 @@ func (r *Repository) CompleteUploadSession(ctx context.Context, ownerID, session
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE media_files
-		SET status = 'READY', updated_at = NOW()
+		SET status = 'PENDING', updated_at = NOW()
 		WHERE id = $1
 	`, session.MediaFileID); err != nil {
 		return nil, err
@@ -247,6 +247,20 @@ func (r *Repository) CreateProcessingJob(ctx context.Context, queueName string, 
 		RETURNING id, queue_name, job_type, status, media_file_id, upload_session_id, video_asset_id, payload_json,
 		          attempts, max_attempts, last_error, reserved_at, started_at, finished_at, created_at, updated_at`
 	return scanProcessingJob(r.db.QueryRow(ctx, query, uuid.NewString(), queueName, string(jobType), mediaID, sessionID, rawPayload))
+}
+
+func (r *Repository) GetMediaChecksum(ctx context.Context, mediaID string) (string, bool) {
+	var checksum *string
+	err := r.db.QueryRow(ctx, `SELECT checksum_sha256 FROM media_files WHERE id = $1`, mediaID).Scan(&checksum)
+	if err != nil || checksum == nil {
+		return "", false
+	}
+	return strings.TrimSpace(*checksum), true
+}
+
+func (r *Repository) UpdateMediaChecksum(ctx context.Context, mediaID, checksum string) error {
+	_, err := r.db.Exec(ctx, `UPDATE media_files SET checksum_sha256 = $2, updated_at = NOW() WHERE id = $1`, mediaID, checksum)
+	return err
 }
 
 func (r *Repository) FindAccessibleMedia(ctx context.Context, viewerID, mediaID string) (*model.MediaFile, error) {
@@ -461,10 +475,10 @@ func (r *Repository) ConsumePlaybackGrant(ctx context.Context, grantID, viewerID
 	media.Kind = enums.MediaKind(mediaKind)
 	media.StorageProvider = enums.StorageProvider(provider)
 	media.Status = enums.MediaStatus(mediaStatus)
-
-	if grant.Status != enums.PlaybackGrantActive {
-		return nil, apperrors.New(410, "media.playback_grant_inactive", "Playback grant is no longer active")
+	if media.Status != enums.MediaReady {
+		return nil, apperrors.New(409, "media.not_ready", "Media is not ready for playback")
 	}
+
 	if grant.ExpiresAt.Before(time.Now().UTC()) {
 		if _, err := tx.Exec(ctx, `
 			UPDATE playback_access_grants
@@ -482,31 +496,35 @@ func (r *Repository) ConsumePlaybackGrant(ctx context.Context, grantID, viewerID
 	if !allowedObject {
 		return nil, apperrors.ErrForbidden
 	}
-	if grant.MaxViews != nil && grant.UsedViews >= *grant.MaxViews {
-		if _, err := tx.Exec(ctx, `
-			UPDATE playback_access_grants
-			SET status = 'CONSUMED', updated_at = NOW()
-			WHERE id = $1
-		`, grantID); err != nil {
-			return nil, err
-		}
-		return nil, apperrors.New(410, "media.playback_grant_consumed", "Playback grant has already been consumed")
+	isDerivedObject := objectKey != media.ObjectKey
+	if grant.Status != enums.PlaybackGrantActive && !isDerivedObject {
+		return nil, apperrors.New(410, "media.playback_grant_inactive", "Playback grant is no longer active")
 	}
 
-	newUsedViews := grant.UsedViews + 1
-	newStatus := "ACTIVE"
-	if grant.MaxViews != nil && newUsedViews >= *grant.MaxViews {
-		newStatus = "CONSUMED"
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE playback_access_grants
-		SET used_views = $2,
-		    status = $3::"PlaybackGrantStatus",
-		    consumed_at = CASE WHEN $3::text = 'CONSUMED' THEN NOW() ELSE consumed_at END,
-		    updated_at = NOW()
-		WHERE id = $1
-	`, grantID, newUsedViews, newStatus); err != nil {
-		return nil, err
+	// HLS playback is a session: the first playlist/object request consumes one view,
+	// while subsequent variant playlists and segments reuse the same short-lived grant.
+	// This prevents a 1-view playback from being exhausted by dozens of segment requests.
+	shouldConsumeView := !isDerivedObject || grant.ConsumedAt == nil
+	if shouldConsumeView {
+		if grant.MaxViews != nil && grant.UsedViews >= *grant.MaxViews {
+			if isDerivedObject && grant.ConsumedAt != nil {
+				// Existing HLS session remains valid until grant expiry.
+			} else {
+				return nil, apperrors.New(410, "media.playback_grant_consumed", "Playback grant has already been consumed")
+			}
+		}
+		newUsedViews := grant.UsedViews + 1
+		newStatus := "ACTIVE"
+		if grant.MaxViews != nil && newUsedViews >= *grant.MaxViews {
+			newStatus = "CONSUMED"
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE playback_access_grants
+			SET used_views = $2, status = $3::"PlaybackGrantStatus",
+			    consumed_at = COALESCE(consumed_at, NOW()), updated_at = NOW()
+			WHERE id = $1`, grantID, newUsedViews, newStatus); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

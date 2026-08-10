@@ -40,6 +40,7 @@ func validConfig() Config {
 			MaxOpenConns:    20,
 			MinOpenConns:    5,
 			MaxConnLifetime: 1,
+			MaxConnIdleTime: 1,
 		},
 		Redis: RedisConfig{
 			URL: "redis://127.0.0.1:6379/0",
@@ -63,6 +64,7 @@ func validConfig() Config {
 			HashSecret: "12345678901234567890123456789012",
 		},
 		Storage: StorageConfig{
+			LocalRootPath:          "./var/storage",
 			SigningSecret:          "12345678901234567890123456789012",
 			MultipartPartSizeBytes: 8 * 1024 * 1024,
 			MaxUploadBytes:         32 * 1024 * 1024,
@@ -71,5 +73,34 @@ func validConfig() Config {
 			UploadIntentTTL:        1,
 			PlaybackGrantTTL:       1,
 		},
+	}
+}
+
+func TestValidateRejectsProductionFallbackSecrets(t *testing.T) {
+	cfg := validConfig()
+	cfg.App.Environment = "production"
+	cfg.Security.JWTAccessSecret = "default-jwt-access-secret-change-in-production-min-32-chars"
+	if err := validate(cfg); err == nil {
+		t.Fatal("expected production fallback secret to be rejected")
+	}
+}
+
+func TestValidateAcceptsSecureProductionConfig(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.gapak.example")
+	cfg := validConfig()
+	cfg.App.Environment = "production"
+	cfg.App.BaseURL = "https://api.gapak.example"
+	cfg.App.CORSOrigins = []string{"https://app.gapak.example"}
+	cfg.Redis.Enabled = true
+	cfg.Redis.URL = "redis://127.0.0.1:6379/0"
+	cfg.Security.JWTAccessSecret = "production-access-secret-12345678901234567890"
+	cfg.Security.JWTRefreshSecret = "production-refresh-secret-12345678901234567890"
+	cfg.Security.PasswordPepper = "production-password-pepper-1234567890"
+	cfg.Storage.SigningSecret = "production-storage-signing-secret-1234567890"
+	cfg.Anonymity.HashSecret = "production-anonymity-hash-secret-1234567890"
+	cfg.Security.EncryptionKey = "cHJvZHVjdGlvbi1hZXMta2V5LTEyMzQ1Njc4OTAxMjM="
+	cfg.Security.CookieSecure = true
+	if err := validate(cfg); err != nil {
+		t.Fatalf("expected secure production config to validate: %v", err)
 	}
 }

@@ -16,7 +16,7 @@ postgres init failed: postgres ping failed: failed to connect to
 
 **✅ FIXED TO:**
 ```env
-DATABASE_URL=postgresql://gapak:gapak@127.0.0.1:5432/gapak?sslmode=disable
+DATABASE_URL=postgresql://gapak@127.0.0.1:5432/gapak?sslmode=disable
 ```
 
 ---
@@ -55,7 +55,7 @@ DATABASE_URL=postgresql://gapak:gapak@127.0.0.1:5432/gapak?sslmode=disable
 
 | Component | Requirement | Status | Details |
 |-----------|-------------|--------|---------|
-| Database URL | Must match docker-compose credentials | ✅ | `postgresql://gapak:gapak@...` |
+| Database URL | Must match docker-compose credentials | ✅ | `postgresql://gapak@...` |
 | JWT Access Secret | Minimum 32 characters | ✅ | 67 characters |
 | JWT Refresh Secret | Minimum 32 characters, DIFFERENT from access | ✅ | 68 characters, different |
 | Password Pepper | Minimum 16 characters | ✅ | 52 characters |

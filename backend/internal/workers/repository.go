@@ -17,6 +17,13 @@ import (
 
 var ErrJobNotReserved = errors.New("processing job is not reserved")
 
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 type Repository struct {
 	db *pgxpool.Pool
 }
@@ -25,7 +32,7 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-func (r *Repository) MarkJobRunning(ctx context.Context, jobID string) error {
+func (r *Repository) MarkJobRunning(ctx context.Context, jobID, leaseToken string) error {
 	const query = `
 		UPDATE processing_jobs
 		SET status = 'RUNNING',
@@ -35,8 +42,9 @@ func (r *Repository) MarkJobRunning(ctx context.Context, jobID string) error {
 		    updated_at = NOW(),
 		    last_error = NULL
 		WHERE id = $1
-		  AND status = 'RESERVED'`
-	commandTag, err := r.db.Exec(ctx, query, jobID)
+		  AND status = 'RESERVED'
+		  AND lease_token = $2`
+	commandTag, err := r.db.Exec(ctx, query, jobID, leaseToken)
 	if err != nil {
 		return err
 	}
@@ -47,18 +55,20 @@ func (r *Repository) MarkJobRunning(ctx context.Context, jobID string) error {
 }
 
 func (r *Repository) ClaimJobByID(ctx context.Context, jobID string, staleBefore time.Time) (*model.ProcessingJob, error) {
+	leaseToken := uuid.NewString()
 	const query = `
 		UPDATE processing_jobs
-		SET status = 'RESERVED', reserved_at = NOW(), updated_at = NOW()
+		SET status = 'RESERVED', reserved_at = NOW(), lease_token = $3, started_at = NULL, finished_at = NULL, updated_at = NOW()
 		WHERE id = $1
 		  AND (
 		    status = 'PENDING'
-		    OR (status = 'FAILED' AND attempts < max_attempts)
+		    OR (status = 'FAILED' AND attempts < max_attempts AND (next_attempt_at IS NULL OR next_attempt_at <= NOW()))
 		    OR (status = 'RESERVED' AND (reserved_at IS NULL OR reserved_at < $2))
-		  )
+		)
 		RETURNING id, queue_name, job_type, status, media_file_id, upload_session_id, video_asset_id,
-		          payload_json, attempts, max_attempts, last_error, reserved_at, started_at, finished_at, created_at, updated_at`
-	job, err := scanProcessingJob(r.db.QueryRow(ctx, query, jobID, staleBefore))
+		          payload_json, attempts, max_attempts, last_error, reserved_at, started_at, finished_at,
+		          lease_token, next_attempt_at, created_at, updated_at`
+	job, err := scanProcessingJob(r.db.QueryRow(ctx, query, jobID, staleBefore, leaseToken))
 	if errors.Is(err, apperrors.ErrNotFound) {
 		return nil, nil
 	}
@@ -66,6 +76,7 @@ func (r *Repository) ClaimJobByID(ctx context.Context, jobID string, staleBefore
 }
 
 func (r *Repository) ClaimNextProcessingJob(ctx context.Context, queueName string, staleBefore time.Time) (*model.ProcessingJob, error) {
+	leaseToken := uuid.NewString()
 	const query = `
 		WITH candidate AS (
 			SELECT id
@@ -73,54 +84,83 @@ func (r *Repository) ClaimNextProcessingJob(ctx context.Context, queueName strin
 			WHERE queue_name = $1
 			  AND (
 			    status = 'PENDING'
-			    OR (status = 'FAILED' AND attempts < max_attempts)
+			    OR (status = 'FAILED' AND attempts < max_attempts AND (next_attempt_at IS NULL OR next_attempt_at <= NOW()))
 			    OR (status = 'RESERVED' AND (reserved_at IS NULL OR reserved_at < $2))
 			  )
-			ORDER BY created_at ASC
+			ORDER BY CASE WHEN status = 'PENDING' THEN 0 ELSE 1 END, COALESCE(next_attempt_at, created_at), created_at, id
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
 		UPDATE processing_jobs pj
-		SET status = 'RESERVED', reserved_at = NOW(), updated_at = NOW()
+		SET status = 'RESERVED', reserved_at = NOW(), lease_token = $3, started_at = NULL, finished_at = NULL, updated_at = NOW()
 		FROM candidate
 		WHERE pj.id = candidate.id
 		RETURNING pj.id, pj.queue_name, pj.job_type, pj.status, pj.media_file_id, pj.upload_session_id, pj.video_asset_id,
 		          pj.payload_json, pj.attempts, pj.max_attempts, pj.last_error, pj.reserved_at, pj.started_at, pj.finished_at,
-		          pj.created_at, pj.updated_at`
-	job, err := scanProcessingJob(r.db.QueryRow(ctx, query, queueName, staleBefore))
+		          pj.lease_token, pj.next_attempt_at, pj.created_at, pj.updated_at`
+	job, err := scanProcessingJob(r.db.QueryRow(ctx, query, queueName, staleBefore, leaseToken))
 	if errors.Is(err, apperrors.ErrNotFound) {
 		return nil, nil
 	}
 	return job, err
 }
 
-func (r *Repository) MarkJobSucceeded(ctx context.Context, jobID string) error {
+func (r *Repository) RenewJobLease(ctx context.Context, jobID, leaseToken string) error {
 	const query = `
 		UPDATE processing_jobs
-		SET status = 'SUCCEEDED', reserved_at = NULL, finished_at = NOW(), updated_at = NOW(), last_error = NULL
-		WHERE id = $1`
-	_, err := r.db.Exec(ctx, query, jobID)
-	return err
+		SET reserved_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND status IN ('RESERVED', 'RUNNING') AND lease_token = $2`
+	tag, err := r.db.Exec(ctx, query, jobID, leaseToken)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrJobNotReserved
+	}
+	return nil
 }
 
-func (r *Repository) MarkJobFailed(ctx context.Context, jobID string, errText string) error {
+func (r *Repository) MarkJobSucceeded(ctx context.Context, jobID, leaseToken string) error {
+	const query = `
+		UPDATE processing_jobs
+		SET status = 'SUCCEEDED', reserved_at = NULL, lease_token = NULL, finished_at = NOW(), updated_at = NOW(), last_error = NULL
+		WHERE id = $1 AND status = 'RUNNING' AND lease_token = $2`
+	tag, err := r.db.Exec(ctx, query, jobID, leaseToken)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrJobNotReserved
+	}
+	return nil
+}
+
+func (r *Repository) MarkJobFailed(ctx context.Context, jobID, leaseToken string, errText string) error {
 	const query = `
 		UPDATE processing_jobs
 		SET status = CASE WHEN attempts + 1 >= max_attempts THEN 'DEAD' ELSE 'FAILED' END,
 		    attempts = attempts + 1,
 		    reserved_at = NULL,
+		    lease_token = NULL,
+		    next_attempt_at = CASE WHEN attempts + 1 >= max_attempts THEN NULL ELSE NOW() + LEAST(300, POWER(2, attempts)) * INTERVAL '1 second' END,
 		    finished_at = NOW(),
 		    updated_at = NOW(),
-		    last_error = $2
-		WHERE id = $1`
-	_, err := r.db.Exec(ctx, query, jobID, errText)
-	return err
+		    last_error = $3
+		WHERE id = $1 AND status = 'RUNNING' AND lease_token = $2`
+	tag, err := r.db.Exec(ctx, query, jobID, leaseToken, errText)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrJobNotReserved
+	}
+	return nil
 }
 
 func (r *Repository) FindProcessingJob(ctx context.Context, jobID string) (*model.ProcessingJob, error) {
 	const query = `
 		SELECT id, queue_name, job_type, status, media_file_id, upload_session_id, video_asset_id,
-		       payload_json, attempts, max_attempts, last_error, reserved_at, started_at, finished_at, created_at, updated_at
+		       payload_json, attempts, max_attempts, last_error, reserved_at, started_at, finished_at, lease_token, next_attempt_at, created_at, updated_at
 		FROM processing_jobs
 		WHERE id = $1
 		LIMIT 1`
@@ -144,6 +184,8 @@ func (r *Repository) FindProcessingJob(ctx context.Context, jobID string) (*mode
 		&item.ReservedAt,
 		&item.StartedAt,
 		&item.FinishedAt,
+		&item.LeaseToken,
+		&item.NextAttemptAt,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	); err != nil {
@@ -196,6 +238,11 @@ func (r *Repository) FindMediaFile(ctx context.Context, mediaID string) (*model.
 	item.StorageProvider = enums.StorageProvider(provider)
 	item.Status = enums.MediaStatus(status)
 	return &item, nil
+}
+
+func (r *Repository) MarkMediaFailed(ctx context.Context, mediaID string) error {
+	_, err := r.db.Exec(ctx, `UPDATE media_files SET status = 'FAILED', updated_at = NOW() WHERE id = $1`, mediaID)
+	return err
 }
 
 func (r *Repository) MarkMediaReady(ctx context.Context, mediaID string) error {
@@ -392,6 +439,7 @@ func (r *Repository) ExpireOrphanedUploads(ctx context.Context, olderThan time.T
 }
 
 func (r *Repository) ClaimRealtimeEvents(ctx context.Context, batchSize int64, staleBefore time.Time) ([]model.RealtimeEvent, error) {
+	leaseToken := uuid.NewString()
 	const query = `
 		WITH candidates AS (
 			SELECT id
@@ -403,20 +451,17 @@ func (r *Repository) ClaimRealtimeEvents(ctx context.Context, batchSize int64, s
 			FOR UPDATE SKIP LOCKED
 		)
 		UPDATE realtime_events re
-		SET relay_status = 'RESERVED',
-		    reserved_at = NOW(),
-		    updated_at = NOW()
+		SET relay_status = 'RESERVED', relay_lease_token = $3, reserved_at = NOW(), updated_at = NOW()
 		FROM candidates
 		WHERE re.id = candidates.id
 		RETURNING re.id, re.sequence, re.channel, re.aggregate_type, re.aggregate_id, re.event_type,
 		          re.payload_json, re.relay_status, re.relay_attempts, re.last_relay_error,
-		          re.reserved_at, re.relayed_at, re.created_at, re.updated_at`
-	rows, err := r.db.Query(ctx, query, batchSize, staleBefore)
+		          re.reserved_at, re.relay_lease_token, re.relayed_at, re.created_at, re.updated_at`
+	rows, err := r.db.Query(ctx, query, batchSize, staleBefore, leaseToken)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
 	items := make([]model.RealtimeEvent, 0)
 	for rows.Next() {
 		item, err := scanRealtimeEvent(rows)
@@ -428,29 +473,27 @@ func (r *Repository) ClaimRealtimeEvents(ctx context.Context, batchSize int64, s
 	return items, rows.Err()
 }
 
-func (r *Repository) MarkRealtimeEventRelayed(ctx context.Context, eventID string) error {
+func (r *Repository) MarkRealtimeEventRelayed(ctx context.Context, eventID, leaseToken string) error {
 	const query = `
 		UPDATE realtime_events
-		SET relay_status = 'RELAYED',
-		    relayed_at = NOW(),
-		    reserved_at = NULL,
-		    updated_at = NOW(),
-		    last_relay_error = NULL
-		WHERE id = $1`
-	_, err := r.db.Exec(ctx, query, eventID)
-	return err
+		SET relay_status = 'RELAYED', relayed_at = NOW(), reserved_at = NULL, relay_lease_token = NULL, updated_at = NOW(), last_relay_error = NULL
+		WHERE id = $1 AND relay_status = 'RESERVED' AND relay_lease_token = $2`
+	tag, err := r.db.Exec(ctx, query, eventID, leaseToken)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrJobNotReserved
+	}
+	return nil
 }
 
-func (r *Repository) MarkRealtimeEventRelayFailed(ctx context.Context, eventID string, errText string) error {
+func (r *Repository) MarkRealtimeEventRelayFailed(ctx context.Context, eventID, leaseToken string, errText string) error {
 	const query = `
 		UPDATE realtime_events
-		SET relay_status = 'FAILED',
-		    relay_attempts = relay_attempts + 1,
-		    reserved_at = NULL,
-		    updated_at = NOW(),
-		    last_relay_error = $2
-		WHERE id = $1`
-	_, err := r.db.Exec(ctx, query, eventID, errText)
+		SET relay_status = 'FAILED', relay_attempts = relay_attempts + 1, reserved_at = NULL, relay_lease_token = NULL, updated_at = NOW(), last_relay_error = $3
+		WHERE id = $1 AND relay_status = 'RESERVED' AND relay_lease_token = $2`
+	_, err := r.db.Exec(ctx, query, eventID, leaseToken, errText)
 	return err
 }
 
@@ -473,6 +516,8 @@ func scanProcessingJob(row interface{ Scan(dest ...any) error }) (*model.Process
 		&item.ReservedAt,
 		&item.StartedAt,
 		&item.FinishedAt,
+		&item.LeaseToken,
+		&item.NextAttemptAt,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	); err != nil {
@@ -500,6 +545,7 @@ func scanRealtimeEvent(row interface{ Scan(dest ...any) error }) (*model.Realtim
 		&item.RelayAttempts,
 		&item.LastRelayError,
 		&item.ReservedAt,
+		&item.RelayLeaseToken,
 		&item.RelayedAt,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -510,4 +556,63 @@ func scanRealtimeEvent(row interface{ Scan(dest ...any) error }) (*model.Realtim
 		return nil, err
 	}
 	return &item, nil
+}
+
+func (r *Repository) FailStuckProcessingJobs(ctx context.Context, cutoff time.Time) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE processing_jobs
+		SET status = 'FAILED',
+		    last_error = 'processing lease expired during reconciliation',
+		    reserved_at = NULL,
+		    lease_token = NULL,
+		    updated_at = NOW(),
+		    next_attempt_at = NOW()
+		WHERE status IN ('RUNNING','RESERVED')
+		  AND COALESCE(reserved_at, started_at, updated_at) < $1`, cutoff)
+	return err
+}
+
+func (r *Repository) ListReferencedObjectKeys(ctx context.Context, bucket string, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 10000
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT object_key FROM media_files WHERE bucket = $1 AND deleted_at IS NULL
+		UNION ALL
+		SELECT object_key FROM upload_sessions WHERE bucket = $1 AND status NOT IN ('ABORTED','EXPIRED')
+		UNION ALL
+		SELECT object_key FROM media_thumbnails WHERE bucket = $1
+		UNION ALL
+		SELECT master_playlist_key FROM video_assets va JOIN media_files mf ON mf.id = va.media_file_id
+		WHERE mf.bucket = $1 AND master_playlist_key IS NOT NULL
+		UNION ALL
+		SELECT preview_playlist_key FROM video_assets va JOIN media_files mf ON mf.id = va.media_file_id
+		WHERE mf.bucket = $1 AND preview_playlist_key IS NOT NULL
+		UNION ALL
+		SELECT poster_object_key FROM video_assets va JOIN media_files mf ON mf.id = va.media_file_id
+		WHERE mf.bucket = $1 AND poster_object_key IS NOT NULL
+		UNION ALL
+		SELECT vv.playlist_object_key FROM video_variants vv JOIN video_assets va ON va.id = vv.video_asset_id
+		JOIN media_files mf ON mf.id = va.media_file_id WHERE mf.bucket = $1 AND vv.playlist_object_key IS NOT NULL
+		UNION ALL
+		SELECT vv.init_segment_key FROM video_variants vv JOIN video_assets va ON va.id = vv.video_asset_id
+		JOIN media_files mf ON mf.id = va.media_file_id WHERE mf.bucket = $1 AND vv.init_segment_key IS NOT NULL
+		UNION ALL
+		SELECT vv.segment_prefix FROM video_variants vv JOIN video_assets va ON va.id = vv.video_asset_id
+		JOIN media_files mf ON mf.id = va.media_file_id WHERE mf.bucket = $1 AND vv.segment_prefix IS NOT NULL`, bucket)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]string, 0, minInt(limit, 256))
+	for rows.Next() && len(items) < limit {
+		var key *string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		if key != nil && strings.TrimSpace(*key) != "" {
+			items = append(items, *key)
+		}
+	}
+	return items, rows.Err()
 }

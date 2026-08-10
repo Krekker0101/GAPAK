@@ -90,13 +90,22 @@ type UpdateSubscriptionNotificationPreferencesRequest struct {
 	MuteMinutes   *int  `json:"muteMinutes"` // 0 = unmute, null/positive = mute for N minutes
 }
 
-// PagedSubscriptionsResponse для пагинированного списка
-type PagedSubscriptionsResponse struct {
+// PagedSubscribersResponse пагинированный список подписчиков
+type PagedSubscribersResponse struct {
 	Items    []SubscribersListResponse `json:"items"`
 	Total    int                       `json:"total"`
 	Page     int                       `json:"page"`
 	PageSize int                       `json:"pageSize"`
 	HasMore  bool                      `json:"hasMore"`
+}
+
+// PagedCreatorsResponse пагинированный список авторов на которых подписан пользователь
+type PagedCreatorsResponse struct {
+	Items    []CreatorsListResponse `json:"items"`
+	Total    int                    `json:"total"`
+	Page     int                    `json:"page"`
+	PageSize int                    `json:"pageSize"`
+	HasMore  bool                   `json:"hasMore"`
 }
 
 // PendingRequestsResponse для списка ожидающих запросов

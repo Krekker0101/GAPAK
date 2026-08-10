@@ -1,0 +1,205 @@
+name: CI / Release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+  security-events: write
+  packages: write
+
+concurrency:
+  group: gapak-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.24.13'
+  IMAGE_NAME: gapak/backend
+
+jobs:
+  verify:
+    name: Format / Lint / Vet / Test / Race / Fuzz
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: gapak
+          POSTGRES_USER: gapak
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U gapak -d gapak"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql://gapak@127.0.0.1:5432/gapak?sslmode=disable
+      REDIS_ENABLED: 'false'
+      JWT_ACCESS_SECRET: 01234567890123456789012345678901
+      JWT_REFRESH_SECRET: 12345678901234567890123456789012
+      PASSWORD_PEPPER: 0123456789012345
+      ENCRYPTION_KEY_BASE64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      ANONYMITY_HASH_SECRET: 01234567890123456789012345678901
+      STORAGE_SIGNING_SECRET: 01234567890123456789012345678901
+      STORAGE_PROVIDER: local
+      STORAGE_LOCAL_ROOT_PATH: /tmp/gapak-storage
+      CORS_ORIGINS: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Verify module graph
+        run: |
+          go mod verify
+          go list -m all >/dev/null
+
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61
+          args: --timeout=5m
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Unit / integration tests
+        run: go test ./... -count=1
+
+      - name: Race detector
+        run: go test -race ./... -count=1
+
+      - name: Fuzz smoke tests
+        run: go test ./internal/platform/pagination ./internal/platform/auth ./internal/modules/media ./internal/services/websocket ./internal/platform/logger -run=^$ -fuzz=Fuzz -fuzztime=15s
+
+      - name: Migration check
+        run: ./scripts/ci/check-migrations.sh
+
+  security:
+    name: Security / Dependencies / Secrets
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Go vulnerability scan
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: go.mod
+          go-package: ./...
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dependency audit
+        run: |
+          go mod verify
+          go list -m -u -json all > /tmp/gapak-modules.json
+          test -s /tmp/gapak-modules.json
+
+  container:
+    name: Build / Scan / SBOM
+    runs-on: ubuntu-latest
+    needs: [verify, security]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Derive build metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="0.0.0-${GITHUB_SHA::12}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          tags: gapak/backend:${{ steps.meta.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ steps.meta.outputs.commit }}
+            BUILD_TIME=${{ steps.meta.outputs.build_time }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Container vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: gapak/backend:${{ steps.meta.outputs.version }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: gapak/backend:${{ steps.meta.outputs.version }}
+          format: spdx-json
+          artifact-name: gapak-backend-${{ steps.meta.outputs.version }}.spdx.json
+          output-file: gapak-backend-${{ steps.meta.outputs.version }}.spdx.json
+
+      - name: Save image artifact
+        run: docker save gapak/backend:${{ steps.meta.outputs.version }} | gzip -9 > gapak-backend-${{ steps.meta.outputs.version }}.tar.gz
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gapak-backend-release-${{ steps.meta.outputs.version }}
+          path: |
+            gapak-backend-${{ steps.meta.outputs.version }}.tar.gz
+            gapak-backend-${{ steps.meta.outputs.version }}.spdx.json
+          retention-days: 14
+
+  release:
+    name: Release artifacts
+    runs-on: ubuntu-latest
+    needs: container
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download container artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: gapak-backend-release-*
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: '*.tar.gz'

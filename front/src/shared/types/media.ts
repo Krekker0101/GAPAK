@@ -1,105 +1,140 @@
-export type UploadPurpose =
-  | "POST_ATTACHMENT"
-  | "CHAT_ATTACHMENT"
-  | "CLIP"
-  | "STORY"
-  | "PROFILE"
-  | "TRUST_ROOM"
-  | "LIVE_REPLAY";
+/**
+ * GAPAK Media domain contracts.
+ *
+ * Security rule: media URLs are server-issued. The client never invents
+ * public CDN URLs or playback grants.
+ */
 
-export type CreateUploadSessionRequest = {
-  purpose: UploadPurpose;
-  fileName: string;
-  mimeType: string;
-  sizeBytes: number;
-  checksumSha256?: string;
-  multipart?: boolean;
-  partSizeBytes?: number;
-};
+export type MediaUsageContext =
+  | 'POST_ATTACHMENT'
+  | 'CHAT_ATTACHMENT'
+  | 'CLIP'
+  | 'STORY'
+  | 'PROFILE'
+  | 'TRUST_ROOM'
+  | 'LIVE_REPLAY';
 
-export type SignedRequestResponse = {
-  method: "PUT" | "GET";
-  url: string;
-  headers: Record<string, string>;
-  expiresAt: string;
-};
+export type UploadState =
+  | 'CREATED'
+  | 'PREPARING'
+  | 'PAUSED'
+  | 'UPLOADING'
+  | 'PROCESSING'
+  | 'READY'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'EXPIRED';
 
-export type UploadPartGrantResponse = {
-  partNumber: number;
-  request: SignedRequestResponse;
-};
+export type MediaKind = 'image' | 'video' | 'audio' | 'document';
 
-export type UploadSessionResponse = {
-  id: string;
-  mediaFileId: string;
-  purpose: UploadPurpose;
-  status: string;
-  bucket: string;
-  objectKey: string;
-  fileName: string;
-  mimeType: string;
-  sizeBytes: number;
-  partSizeBytes: number;
-  totalParts: number;
-  expiresAt: string;
-  partGrants?: UploadPartGrantResponse[];
-};
+export type MediaPrivacy = 'PUBLIC' | 'CONNECTIONS' | 'TRUSTED_CIRCLE' | 'PRIVATE';
 
-export type CompletedUploadPart = {
-  partNumber: number;
-  etag: string;
-  sizeBytes: number;
-};
-
-export type CompleteUploadSessionRequest = {
-  parts: CompletedUploadPart[];
-};
-
-export type PlaybackGrantResponse = {
-  id: string;
-  status: string;
-  maxViews?: number | null;
-  usedViews: number;
-  expiresAt: string;
-  request: SignedRequestResponse;
-  adaptiveRequest?: SignedRequestResponse | null;
-  variantRequests?: Record<string, SignedRequestResponse> | null;
-};
-
-export type VideoVariantResponse = {
-  id: string;
-  label: string;
-  status: string;
-  playlistObjectKey: string;
-  container: string;
-  width?: number | null;
-  height?: number | null;
-  bitrateKbps?: number | null;
-  durationMillis?: number | null;
-};
-
-export type VideoAssetResponse = {
-  id: string;
-  status: string;
-  masterPlaylistKey?: string | null;
-  previewPlaylistKey?: string | null;
-  posterObjectKey?: string | null;
-  durationMillis?: number | null;
-  width?: number | null;
-  height?: number | null;
-  variants?: VideoVariantResponse[];
-};
-
-export type MediaAssetResponse = {
+export interface MediaAsset {
   id: string;
   ownerId: string;
-  kind: string;
-  status: string;
-  bucket: string;
-  objectKey: string;
-  originalName?: string | null;
+  fileName: string;
   mimeType: string;
   sizeBytes: number;
-  isEncrypted: boolean;
-  videoAsset?: VideoAssetResponse | null;
-};
+  kind: MediaKind;
+  privacy: MediaPrivacy;
+  encrypted: boolean;
+  createdAt: string;
+  updatedAt: string;
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
+  thumbnailUrl?: string;
+  /** Server-authorized short-lived URL. Never synthesized client-side. */
+  previewUrl?: string;
+  albumId?: string | null;
+  expiresAt?: string | null;
+}
+
+export interface MediaPage {
+  items: MediaAsset[];
+  nextCursor?: string | null;
+  hasMore: boolean;
+}
+
+export interface MediaAlbum {
+  id: string;
+  name: string;
+  description?: string;
+  coverUrl?: string;
+  itemCount: number;
+  privacy: MediaPrivacy;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MediaAlbumPage {
+  items: MediaAlbum[];
+  nextCursor?: string | null;
+  hasMore: boolean;
+}
+
+export interface UploadPart {
+  partNumber: number;
+  url: string;
+  headers?: Record<string, string>;
+}
+
+export interface UploadSession {
+  id: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  context: MediaUsageContext;
+  state: UploadState;
+  progress: number;
+  uploadedBytes: number;
+  speedBytesPerSec: number;
+  timeRemainingSec: number;
+  processingStep?: string;
+  error?: string;
+  mediaId?: string;
+  mediaUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+  chunkSizeBytes?: number;
+  totalParts?: number;
+  completedParts?: number[];
+}
+
+export interface UploadInitResponse {
+  uploadId: string;
+  mode: 'single' | 'multipart';
+  chunkSizeBytes?: number;
+  uploadUrl?: string;
+  uploadHeaders?: Record<string, string>;
+  parts?: UploadPart[];
+  expiresAt: string;
+  mediaId?: string;
+}
+
+export interface UploadCompleteResponse {
+  media: MediaAsset;
+}
+
+export interface HLSVariant {
+  resolution: '1080p' | '720p' | '480p' | '360p' | 'auto';
+  bandwidth: number;
+  url: string;
+  width: number;
+  height: number;
+}
+
+export interface PlaybackGrant {
+  mediaId: string;
+  grantToken: string;
+  expiresAt: number;
+  streamType: 'hls' | 'mp4';
+  watermarkToken?: string;
+  variants: HLSVariant[];
+  masterManifestUrl: string;
+  captions?: Array<{ language: string; label: string; url: string }>;
+}
+
+export interface PlaybackGrantResponse {
+  grant: PlaybackGrant;
+}

@@ -244,6 +244,12 @@ func (s *Service) Access(ctx context.Context, ownerID, mediaID string) (UploadIn
 	if err != nil {
 		return UploadIntentResponse{}, err
 	}
+	if aggregate.Media.OwnerID != ownerID {
+		// The legacy endpoint returns internal storage coordinates and is an
+		// upload-management surface, not a public playback surface. Never expose
+		// object keys to a non-owner.
+		return UploadIntentResponse{}, apperrors.ErrForbidden
+	}
 	response := UploadIntentResponse{
 		ID:          aggregate.Media.ID,
 		MediaFileID: aggregate.Media.ID,
@@ -487,8 +493,8 @@ func (s *Service) validateCompletedParts(session *model.UploadSession, parts []C
 	if len(parts) != session.TotalParts {
 		return apperrors.New(400, "media.incomplete_parts", "All expected upload parts must be completed before finalization")
 	}
-	if totalSize > session.SizeBytes {
-		return apperrors.New(400, "media.completed_size_invalid", "Completed upload parts exceed declared upload size")
+	if totalSize != session.SizeBytes {
+		return apperrors.New(400, "media.completed_size_invalid", "Completed upload parts must exactly match the declared upload size")
 	}
 	return nil
 }

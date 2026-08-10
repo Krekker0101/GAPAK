@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
@@ -189,14 +190,59 @@ func (r *Repository) UpdateUser(ctx context.Context, userID string, req UpdateUs
 		return r.FindUser(ctx, userID)
 	}
 
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return AdminUserResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Serialize administrator demotions/suspensions so the "at least one active
+	// admin" invariant cannot be defeated by two concurrent admin changes.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(0x4750414B41544D)); err != nil {
+		return AdminUserResponse{}, err
+	}
+
+	var currentRole, currentStatus string
+	if err := tx.QueryRow(ctx, `
+		SELECT role::text, account_status::text
+		FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, userID).Scan(&currentRole, &currentStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AdminUserResponse{}, apperrors.ErrNotFound
+		}
+		return AdminUserResponse{}, err
+	}
+
+	nextRole, nextStatus := currentRole, currentStatus
+	if req.Role != nil {
+		nextRole = strings.TrimSpace(*req.Role)
+	}
+	if req.AccountStatus != nil {
+		nextStatus = strings.TrimSpace(*req.AccountStatus)
+	}
+	if currentRole == "ADMIN" && currentStatus == "ACTIVE" && (nextRole != "ADMIN" || nextStatus != "ACTIVE") {
+		var activeAdmins int
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE role = 'ADMIN' AND account_status = 'ACTIVE' AND deleted_at IS NULL`).Scan(&activeAdmins); err != nil {
+			return AdminUserResponse{}, err
+		}
+		if activeAdmins <= 1 {
+			return AdminUserResponse{}, apperrors.New(http.StatusConflict, "admin.last_admin_protected", "At least one active administrator must remain")
+		}
+	}
+
 	query := `
 		UPDATE users
 		SET ` + strings.Join(fields, ", ") + `, updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
 		RETURNING id, email, username, display_name, role, account_status, is_anonymous,
 		          two_factor_enabled, last_seen_at, created_at, updated_at`
-
-	return scanAdminUser(r.db.QueryRow(ctx, query, args...))
+	user, err := scanAdminUser(tx.QueryRow(ctx, query, args...))
+	if err != nil {
+		return AdminUserResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AdminUserResponse{}, err
+	}
+	return user, nil
 }
 
 func (r *Repository) ListPages(ctx context.Context, locale string) ([]PageSummaryResponse, error) {

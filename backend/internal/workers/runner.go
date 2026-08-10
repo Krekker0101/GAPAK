@@ -18,22 +18,34 @@ import (
 	"github.com/gapak/backend/internal/config"
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
+	"github.com/gapak/backend/internal/platform/observability"
 	"github.com/gapak/backend/internal/platform/queue"
+	"github.com/gapak/backend/internal/platform/storage"
 )
 
 type Runner struct {
-	cfg    config.Config
-	logger zerolog.Logger
-	repo   *Repository
-	queue  *queue.RedisQueue
+	cfg       config.Config
+	logger    zerolog.Logger
+	repo      *Repository
+	queue     *queue.RedisQueue
+	store     storage.ObjectStore
+	ffmpegSem chan struct{}
+	metrics   *observability.Registry
 }
 
-func NewRunner(cfg config.Config, logger zerolog.Logger, repo *Repository, q *queue.RedisQueue) *Runner {
+func NewRunner(cfg config.Config, logger zerolog.Logger, repo *Repository, q *queue.RedisQueue, store storage.ObjectStore, metrics *observability.Registry) *Runner {
+	concurrency := cfg.Storage.FFmpegConcurrency
+	if concurrency <= 0 {
+		concurrency = 1
+	}
 	return &Runner{
-		cfg:    cfg,
-		logger: logger,
-		repo:   repo,
-		queue:  q,
+		cfg:       cfg,
+		logger:    logger,
+		repo:      repo,
+		queue:     q,
+		store:     store,
+		ffmpegSem: make(chan struct{}, concurrency),
+		metrics:   metrics,
 	}
 }
 
@@ -65,6 +77,12 @@ func (r *Runner) Run(ctx context.Context) error {
 		r.runRealtimeRelay(ctx)
 	}()
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r.runMediaCleanup(ctx)
+	}()
+
 	<-ctx.Done()
 	wg.Wait()
 	return nil
@@ -88,10 +106,35 @@ func (r *Runner) runQueue(ctx context.Context, queueName string, workerIndex int
 			continue
 		}
 		if job == nil {
+			if r.metrics != nil {
+				r.metrics.WorkerQueueDepth.Set(observability.Label("queue", queueName), 0)
+			}
 			continue
 		}
+		if r.metrics != nil && r.queue != nil && r.queue.Available() {
+			if depth, e := r.queue.Depth(ctx, queueName); e == nil {
+				r.metrics.WorkerQueueDepth.Set(observability.Label("queue", queueName), depth)
+			}
+		}
 
-		if err := r.handleJob(ctx, job); err != nil {
+		jobCtx, stopLease := context.WithCancel(ctx)
+		leaseDone := make(chan struct{})
+		go r.renewJobLease(jobCtx, job, log, leaseDone, stopLease)
+
+		started := time.Now()
+		err = r.handleJob(jobCtx, job)
+		if r.metrics != nil {
+			outcome := "success"
+			if err != nil {
+				outcome = "failure"
+			}
+			r.metrics.WorkerJobs.Inc(observability.Label("queue", queueName) + observability.Label("outcome", outcome))
+			r.metrics.WorkerLatency.Observe(observability.Label("queue", queueName), time.Since(started).Seconds())
+		}
+		stopLease()
+		<-leaseDone
+
+		if err != nil {
 			if errors.Is(err, ErrJobNotReserved) {
 				if ack != nil {
 					_ = ack()
@@ -99,11 +142,14 @@ func (r *Runner) runQueue(ctx context.Context, queueName string, workerIndex int
 				continue
 			}
 			log.Error().Err(err).Str("jobId", job.ID).Str("jobType", string(job.JobType)).Msg("job failed")
-			_ = r.repo.MarkJobFailed(ctx, job.ID, err.Error())
+			_ = r.repo.MarkJobFailed(ctx, job.ID, valueOrEmpty(job.LeaseToken), err.Error())
+			if r.metrics != nil {
+				r.metrics.WorkerJobs.Inc(observability.Label("queue", queueName) + observability.Label("outcome", "retry_or_dead"))
+			}
 			continue
 		}
 
-		if err := r.repo.MarkJobSucceeded(ctx, job.ID); err != nil {
+		if err := r.repo.MarkJobSucceeded(ctx, job.ID, valueOrEmpty(job.LeaseToken)); err != nil {
 			log.Error().Err(err).Str("jobId", job.ID).Msg("job succeeded but status update failed")
 		}
 		if ack != nil {
@@ -150,10 +196,10 @@ func (r *Runner) runRealtimeRelay(ctx context.Context) {
 			payload := json.RawMessage(event.PayloadJSON)
 			if err := r.queue.PublishLiveEvent(ctx, event.Channel, payload); err != nil {
 				log.Error().Err(err).Str("eventId", event.ID).Str("channel", event.Channel).Msg("realtime relay publish failed")
-				_ = r.repo.MarkRealtimeEventRelayFailed(ctx, event.ID, err.Error())
+				_ = r.repo.MarkRealtimeEventRelayFailed(ctx, event.ID, valueOrEmpty(event.RelayLeaseToken), err.Error())
 				continue
 			}
-			if err := r.repo.MarkRealtimeEventRelayed(ctx, event.ID); err != nil {
+			if err := r.repo.MarkRealtimeEventRelayed(ctx, event.ID, valueOrEmpty(event.RelayLeaseToken)); err != nil {
 				log.Error().Err(err).Str("eventId", event.ID).Msg("realtime relay status update failed")
 			}
 		}
@@ -202,8 +248,34 @@ func (r *Runner) nextJob(ctx context.Context, queueName, consumerID string, log 
 	}
 }
 
+func (r *Runner) renewJobLease(ctx context.Context, job *model.ProcessingJob, log zerolog.Logger, done chan<- struct{}, cancel context.CancelFunc) {
+	defer close(done)
+	leaseToken := valueOrEmpty(job.LeaseToken)
+	if leaseToken == "" {
+		return
+	}
+	interval := r.cfg.Queue.ClaimTTL / 3
+	if interval < time.Second {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := r.repo.RenewJobLease(ctx, job.ID, leaseToken); err != nil {
+				log.Error().Err(err).Str("jobId", job.ID).Msg("job lease renewal failed; cancelling job")
+				cancel()
+				return
+			}
+		}
+	}
+}
+
 func (r *Runner) handleJob(ctx context.Context, job *model.ProcessingJob) error {
-	if err := r.repo.MarkJobRunning(ctx, job.ID); err != nil {
+	if err := r.repo.MarkJobRunning(ctx, job.ID, valueOrEmpty(job.LeaseToken)); err != nil {
 		return err
 	}
 
@@ -216,13 +288,19 @@ func (r *Runner) handleJob(ctx context.Context, job *model.ProcessingJob) error 
 	case enums.ProcessingJobLiveReplayFinalize:
 		return r.processLiveReplay(ctx, job.ID)
 	case enums.ProcessingJobCleanupOrphans:
-		return r.repo.ExpireOrphanedUploads(ctx, nowUTC())
+		return r.reconcileMedia(ctx)
 	default:
 		return fmt.Errorf("unsupported job type %s", job.JobType)
 	}
 }
 
 func (r *Runner) processMedia(ctx context.Context, jobID string) error {
+	started := time.Now()
+	defer func() {
+		if r.metrics != nil {
+			r.metrics.MediaLatency.Observe(observability.Label("pipeline", "media"), time.Since(started).Seconds())
+		}
+	}()
 	job, err := r.repo.FindProcessingJob(ctx, jobID)
 	if err != nil {
 		return err
@@ -236,6 +314,23 @@ func (r *Runner) processMedia(ctx context.Context, jobID string) error {
 		return err
 	}
 
+	if strings.HasPrefix(media.MimeType, "video/") {
+		videoAssetID, err := r.repo.EnsureVideoAsset(ctx, media)
+		if err != nil {
+			return err
+		}
+		if err := r.processAdaptiveVideo(ctx, media, videoAssetID); err != nil {
+			if r.metrics != nil {
+				r.metrics.MediaEvents.Inc(observability.Label("event", "ffmpeg_failure"))
+			}
+			_ = r.repo.MarkVideoAssetFailed(ctx, videoAssetID)
+			_ = r.repo.MarkMediaFailed(ctx, media.ID)
+			return err
+		}
+	}
+	if r.metrics != nil {
+		r.metrics.MediaEvents.Inc(observability.Label("event", "processed"))
+	}
 	if err := r.repo.MarkMediaReady(ctx, media.ID); err != nil {
 		return err
 	}
@@ -244,29 +339,20 @@ func (r *Runner) processMedia(ctx context.Context, jobID string) error {
 			return err
 		}
 	}
-
-	if strings.HasPrefix(media.MimeType, "video/") {
-		videoAssetID, err := r.repo.EnsureVideoAsset(ctx, media)
-		if err != nil {
-			return err
-		}
-		if err := r.processAdaptiveVideo(ctx, media, videoAssetID); err != nil {
-			_ = r.repo.MarkVideoAssetFailed(ctx, videoAssetID)
-			return err
-		}
-	}
 	return nil
 }
 
 func (r *Runner) processAdaptiveVideo(ctx context.Context, media *model.MediaFile, videoAssetID string) error {
 	if !strings.EqualFold(strings.TrimSpace(r.cfg.Storage.Provider), string(enums.StorageProviderLocal)) {
-		r.logger.Warn().Str("mediaId", media.ID).Msg("adaptive video transcoding currently requires local storage; original playback remains available")
-		return r.repo.MarkVideoAssetReady(ctx, videoAssetID)
+		// Marking a video READY without producing its advertised HLS assets would
+		// create a silent production data-integrity failure. Until the object-store
+		// processing path is explicitly implemented, fail the job and let the
+		// retry/dead-letter policy handle it deterministically.
+		return fmt.Errorf("adaptive video transcoding is not available for storage provider %q", r.cfg.Storage.Provider)
 	}
 
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		r.logger.Warn().Str("mediaId", media.ID).Msg("ffmpeg is unavailable; adaptive video variants were skipped and original playback remains available")
-		return r.repo.MarkVideoAssetReady(ctx, videoAssetID)
+		return fmt.Errorf("ffmpeg is required for secure video processing")
 	}
 
 	inputPath, err := r.resolveObjectPath(media.Bucket, media.ObjectKey)
@@ -278,7 +364,13 @@ func (r *Runner) processAdaptiveVideo(ctx context.Context, media *model.MediaFil
 	}
 
 	baseKey := strings.TrimSuffix(media.ObjectKey, filepathExt(media.ObjectKey))
-	info, _ := r.probeVideo(ctx, inputPath)
+	info, err := r.probeVideo(ctx, inputPath)
+	if err != nil {
+		return fmt.Errorf("media probe failed: %w", err)
+	}
+	if r.cfg.Storage.FFmpegMaxDuration > 0 && info.durationMillis > int(r.cfg.Storage.FFmpegMaxDuration/time.Millisecond) {
+		return fmt.Errorf("media duration exceeds configured limit")
+	}
 	if info.width == 0 || info.height == 0 {
 		info.width = 1920
 		info.height = 1080
@@ -289,8 +381,8 @@ func (r *Runner) processAdaptiveVideo(ctx context.Context, media *model.MediaFil
 	if info.audioCodec == "" {
 		info.audioCodec = "aac"
 	}
-	if info.durationMillis == 0 {
-		info.durationMillis = 15000
+	if info.durationMillis <= 0 {
+		return fmt.Errorf("media duration could not be determined")
 	}
 
 	if err := r.repo.UpdateVideoAsset(ctx, videoAssetID, info.width, info.height, info.durationMillis, info.videoCodec, info.audioCodec); err != nil {
@@ -303,18 +395,30 @@ func (r *Runner) processAdaptiveVideo(ctx context.Context, media *model.MediaFil
 	}
 
 	for _, variant := range variants {
+		select {
+		case r.ffmpegSem <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		variantDir, err := r.resolveObjectPath(media.Bucket, filepath.ToSlash(filepath.Join(baseKey, "variants", variant.label)))
 		if err != nil {
+			<-r.ffmpegSem
 			return err
 		}
 		if err := os.MkdirAll(variantDir, 0o755); err != nil {
+			<-r.ffmpegSem
 			return err
 		}
 
 		playlistFile := filepath.Join(variantDir, "index.m3u8")
 		segmentPattern := filepath.Join(variantDir, "segment_%03d.ts")
-		transcodeCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+		transcodeCtx, cancel := context.WithTimeout(ctx, r.cfg.Storage.FFmpegTimeout)
 		args := []string{
+			"-hide_banner", "-loglevel", "error",
+			"-threads", strconv.Itoa(max(1, r.cfg.Storage.FFmpegThreads)),
+			"-filter_threads", strconv.Itoa(max(1, r.cfg.Storage.FFmpegThreads)),
+			"-filter_complex_threads", strconv.Itoa(max(1, r.cfg.Storage.FFmpegThreads)),
+			"-timelimit", strconv.Itoa(max(1, int(r.cfg.Storage.FFmpegTimeout.Seconds()))),
 			"-y", "-i", inputPath,
 			"-map", "0:v:0",
 			"-map", "0:a?",
@@ -336,10 +440,40 @@ func (r *Runner) processAdaptiveVideo(ctx context.Context, media *model.MediaFil
 			playlistFile,
 		}
 		cmd := exec.CommandContext(transcodeCtx, "ffmpeg", args...)
-		output, runErr := cmd.CombinedOutput()
+		outputCh := make(chan []byte, 1)
+		go func() {
+			output, runErr := cmd.CombinedOutput()
+			if runErr != nil {
+				outputCh <- []byte(runErr.Error() + "\n" + strings.TrimSpace(string(output)))
+			} else {
+				outputCh <- nil
+			}
+		}()
+		monitorDone := make(chan struct{})
+		go func() {
+			defer close(monitorDone)
+			ticker := time.NewTicker(500 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-transcodeCtx.Done():
+					return
+				case <-ticker.C:
+					sz, err := directorySize(variantDir)
+					if err == nil && r.cfg.Storage.FFmpegMaxOutputBytes > 0 && sz > r.cfg.Storage.FFmpegMaxOutputBytes {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+		output := <-outputCh
 		cancel()
-		if runErr != nil {
-			return fmt.Errorf("ffmpeg hls %s: %w: %s", variant.label, runErr, strings.TrimSpace(string(output)))
+		<-monitorDone
+		<-r.ffmpegSem
+		if output != nil {
+			_ = os.RemoveAll(variantDir)
+			return fmt.Errorf("ffmpeg hls %s failed: %s", variant.label, strings.TrimSpace(string(output)))
 		}
 
 		playlistKey := filepath.ToSlash(filepath.Join(baseKey, "variants", variant.label, "index.m3u8"))
@@ -458,10 +592,12 @@ type videoInfo struct {
 
 func (r *Runner) probeVideo(ctx context.Context, inputPath string) (videoInfo, error) {
 	if _, err := exec.LookPath("ffprobe"); err != nil {
-		return videoInfo{}, nil
+		return videoInfo{}, fmt.Errorf("ffprobe is required for secure media processing")
 	}
 
-	cmd := exec.CommandContext(ctx, "ffprobe",
+	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, "ffprobe",
 		"-v", "error",
 		"-print_format", "json",
 		"-show_streams",
@@ -528,6 +664,13 @@ func nowUTC() time.Time {
 	return time.Now().UTC()
 }
 
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func max(a, b int) int {
 	if a > b {
 		return a
@@ -551,5 +694,93 @@ func sleepWithContext(ctx context.Context, duration time.Duration) bool {
 		return false
 	case <-timer.C:
 		return true
+	}
+}
+
+func directorySize(root string) (int64, error) {
+	var total int64
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total, err
+}
+
+func (r *Runner) reconcileMedia(ctx context.Context) error {
+	cutoff := nowUTC().Add(-r.cfg.Queue.ClaimTTL)
+	if err := r.repo.ExpireOrphanedUploads(ctx, cutoff); err != nil {
+		return err
+	}
+	if err := r.repo.FailStuckProcessingJobs(ctx, cutoff); err != nil {
+		return err
+	}
+	if r.store == nil {
+		return nil
+	}
+	objects, err := r.store.ListObjects(ctx, r.cfg.Storage.Bucket, "", 10000)
+	if err != nil {
+		return err
+	}
+	owned, err := r.repo.ListReferencedObjectKeys(ctx, r.cfg.Storage.Bucket, 10000)
+	if err != nil {
+		return err
+	}
+	ref := make(map[string]struct{}, len(owned))
+	prefixes := make([]string, 0)
+	for _, key := range owned {
+		ref[key] = struct{}{}
+		if strings.HasSuffix(key, "segment_") {
+			prefixes = append(prefixes, key)
+		}
+	}
+	orphans := make([]string, 0)
+	for _, key := range objects {
+		if strings.HasSuffix(key, ".assembling") || strings.Contains(key, ".part.") {
+			orphans = append(orphans, key)
+			continue
+		}
+		if _, ok := ref[key]; !ok {
+			protected := false
+			for _, prefix := range prefixes {
+				if strings.HasPrefix(key, prefix) {
+					protected = true
+					break
+				}
+			}
+			if !protected {
+				orphans = append(orphans, key)
+			}
+		}
+	}
+	if len(orphans) > 0 {
+		return r.store.DeleteObjects(ctx, r.cfg.Storage.Bucket, orphans)
+	}
+	return nil
+}
+
+func (r *Runner) runMediaCleanup(ctx context.Context) {
+	interval := r.cfg.Worker.CleanupInterval
+	if interval <= 0 {
+		interval = 30 * time.Minute
+	}
+	if err := r.reconcileMedia(ctx); err != nil {
+		r.logger.Error().Err(err).Msg("initial media reconciliation failed")
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := r.reconcileMedia(ctx); err != nil {
+				r.logger.Error().Err(err).Msg("media reconciliation failed")
+			}
+		}
 	}
 }

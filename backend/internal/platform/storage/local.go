@@ -215,6 +215,47 @@ func (s *LocalStorage) DeleteObjects(ctx context.Context, bucket string, objectK
 	return nil
 }
 
+func (s *LocalStorage) ListObjects(ctx context.Context, bucket, prefix string, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 10000
+	}
+	root := filepath.Join(filepath.Clean(s.cfg.LocalRootPath), filepath.Clean(bucket))
+	base := filepath.Clean(prefix)
+	items := make([]string, 0, minInt(limit, 128))
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		key := filepath.ToSlash(rel)
+		if base != "." && !strings.HasPrefix(key, filepath.ToSlash(base)) {
+			return nil
+		}
+		items = append(items, key)
+		if len(items) >= limit {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil && err != filepath.SkipAll {
+		return nil, err
+	}
+	return items, nil
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func (s *LocalStorage) ResolvePartKey(objectKey string, partNumber int) string {
 	return fmt.Sprintf("%s.part.%d", objectKey, partNumber)
 }

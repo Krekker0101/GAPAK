@@ -2,6 +2,8 @@ package subscriptions
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
+	apperrors "github.com/gapak/backend/internal/platform/errors"
 )
 
 type Repository struct {
@@ -353,21 +356,83 @@ func (r *Repository) GetPendingSubscriptionRequests(ctx context.Context, creator
 	return requests, total, rows.Err()
 }
 
-// RespondSubscriptionRequest ответить на запрос подписки
-func (r *Repository) RespondSubscriptionRequest(ctx context.Context, requestID string, accept bool) error {
-	status := enums.SubscriptionStatusBlocked
-	if accept {
-		status = enums.SubscriptionStatusActive
+// ApproveSubscriptionRequest atomically authorizes the creator, consumes the
+// pending request and creates the active subscription. This prevents an IDOR
+// approval and avoids a split-brain state where the request is accepted but the
+// subscription insert fails.
+func (r *Repository) ApproveSubscriptionRequest(ctx context.Context, creatorID, requestID string) (*model.Subscription, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var subscriberID string
+	var status enums.SubscriptionStatus
+	if err := tx.QueryRow(ctx, `
+		SELECT subscriber_id, status
+		FROM subscription_requests
+		WHERE id = $1 AND creator_id = $2
+		FOR UPDATE`, requestID, creatorID).Scan(&subscriberID, &status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	if status != enums.SubscriptionStatusPending {
+		return nil, apperrors.New(409, "subscriptions.request_not_pending", "subscription request is no longer pending")
 	}
 
-	query := `
+	now := time.Now().UTC()
+	if _, err := tx.Exec(ctx, `
 		UPDATE subscription_requests
-		SET status = $1, responded_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $2
-	`
+		SET status = 'ACTIVE', responded_at = $3, updated_at = $3
+		WHERE id = $1 AND creator_id = $2`, requestID, creatorID, now); err != nil {
+		return nil, err
+	}
 
-	_, err := r.db.Exec(ctx, query, status, requestID)
-	return err
+	subscription := &model.Subscription{
+		ID:               uuid.NewString(),
+		SubscriberID:     subscriberID,
+		CreatorID:        creatorID,
+		Status:           enums.SubscriptionStatusActive,
+		SubscriptionType: enums.SubscriptionTypeVisible,
+		SubscribedAt:     now,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	const query = `
+		INSERT INTO subscriptions (id, subscriber_id, creator_id, status, subscription_type, subscribed_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (subscriber_id, creator_id) DO UPDATE
+		SET status = EXCLUDED.status, subscription_type = EXCLUDED.subscription_type,
+		    subscribed_at = EXCLUDED.subscribed_at, updated_at = EXCLUDED.updated_at
+		RETURNING id, subscriber_id, creator_id, status, subscription_type, subscribed_at, created_at, updated_at`
+	if err := tx.QueryRow(ctx, query, subscription.ID, subscription.SubscriberID, subscription.CreatorID,
+		subscription.Status, subscription.SubscriptionType, subscription.SubscribedAt, subscription.CreatedAt, subscription.UpdatedAt).Scan(
+		&subscription.ID, &subscription.SubscriberID, &subscription.CreatorID, &subscription.Status,
+		&subscription.SubscriptionType, &subscription.SubscribedAt, &subscription.CreatedAt, &subscription.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return subscription, nil
+}
+
+func (r *Repository) RejectSubscriptionRequest(ctx context.Context, creatorID, requestID string) error {
+	const query = `
+		UPDATE subscription_requests
+		SET status = 'BLOCKED', responded_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $1 AND creator_id = $2 AND status = 'PENDING'`
+	tag, err := r.db.Exec(ctx, query, requestID, creatorID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
 }
 
 // DeleteSubscriptionRequest удалить запрос на подписку

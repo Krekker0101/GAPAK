@@ -1,0 +1,6 @@
+{
+  "name": "GAPAK Frontend Platform",
+  "description": "Production-grade frontend architecture foundation with typed API client, single-flight token refresh, auth state machine, permission guards, design system primitives, and adaptive shell.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

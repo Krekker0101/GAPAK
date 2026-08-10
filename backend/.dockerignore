@@ -1,7 +1,13 @@
 .git
-.gitignore
+.github
 node_modules
-generated
-tmp
-*.log
 front
+tmp
+var
+*.log
+.env
+.env.*
+!.env.example
+bin
+coverage
+vendor

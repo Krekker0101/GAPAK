@@ -19,11 +19,13 @@ type Config struct {
 	Database  DatabaseConfig
 	Redis     RedisConfig
 	Security  SecurityConfig
+	OAuth     OAuthConfig
 	Anonymity AnonymityConfig
 	Storage   StorageConfig
 	Queue     QueueConfig
 	Worker    WorkerConfig
 	RateLimit RateLimitConfig
+	Metrics   MetricsConfig
 }
 
 type AppConfig struct {
@@ -31,6 +33,7 @@ type AppConfig struct {
 	Environment string
 	BaseURL     string
 	CORSOrigins []string
+	AutoMigrate bool
 }
 
 type HTTPConfig struct {
@@ -46,6 +49,7 @@ type DatabaseConfig struct {
 	MaxOpenConns    int32
 	MinOpenConns    int32
 	MaxConnLifetime time.Duration
+	MaxConnIdleTime time.Duration
 }
 
 type RedisConfig struct {
@@ -68,6 +72,22 @@ type SecurityConfig struct {
 	RefreshCookieName string
 	CSRFCookieName    string
 	TOTPWindow        int
+}
+
+type OAuthProviderConfig struct {
+	ClientID     string
+	ClientSecret string
+	AuthURL      string
+	TokenURL     string
+	UserInfoURL  string
+	RedirectURI  string
+	Scopes       []string
+}
+
+type OAuthConfig struct {
+	Google   OAuthProviderConfig
+	GitHub   OAuthProviderConfig
+	Facebook OAuthProviderConfig
 }
 
 type AnonymityConfig struct {
@@ -105,6 +125,11 @@ type StorageConfig struct {
 	MultipartPartSizeBytes int64
 	MaxUploadBytes         int64
 	AllowedMIMETypes       []string
+	FFmpegTimeout          time.Duration
+	FFmpegMaxDuration      time.Duration
+	FFmpegMaxOutputBytes   int64
+	FFmpegThreads          int
+	FFmpegConcurrency      int
 }
 
 type QueueConfig struct {
@@ -122,6 +147,12 @@ type WorkerConfig struct {
 	MediaProcessingParallel int
 	StoryDefaultTTL         time.Duration
 	LiveReplayRetention     time.Duration
+	CleanupInterval         time.Duration
+}
+
+type MetricsConfig struct {
+	Enabled bool
+	Token   string
 }
 
 type RateLimitConfig struct {
@@ -144,6 +175,7 @@ func Load() (Config, error) {
 			Environment: getEnv("APP_ENV", "development"),
 			BaseURL:     getEnv("APP_BASE_URL", "http://localhost:8080"),
 			CORSOrigins: getEnvSlice("CORS_ORIGINS", []string{"http://localhost:3000", "http://localhost:3002", "https://gapak-backend.vercel.app"}),
+			AutoMigrate: getEnvBool("AUTO_MIGRATE", false),
 		},
 		HTTP: HTTPConfig{
 			Host:         getEnv("APP_HOST", "0.0.0.0"),
@@ -157,26 +189,56 @@ func Load() (Config, error) {
 			MaxOpenConns:    int32(getEnvInt("DATABASE_MAX_OPEN_CONNS", 20)),
 			MinOpenConns:    int32(getEnvInt("DATABASE_MIN_OPEN_CONNS", 5)),
 			MaxConnLifetime: getEnvDuration("DATABASE_MAX_CONN_LIFETIME", 30*time.Minute),
+			MaxConnIdleTime: getEnvDuration("DATABASE_MAX_CONN_IDLE_TIME", 5*time.Minute),
 		},
 		Redis: RedisConfig{
-			Enabled: getEnvBool("REDIS_ENABLED", true),
+			Enabled: getEnvBool("REDIS_ENABLED", false),
 			URL:     getEnv("REDIS_URL", ""),
 		},
 		Security: SecurityConfig{
 			JWTIssuer:         getEnv("JWT_ISSUER", "gapak.api"),
 			JWTAudience:       getEnv("JWT_AUDIENCE", "gapak.clients"),
-			JWTAccessSecret:   requireEnv("JWT_ACCESS_SECRET"),
-			JWTRefreshSecret:  requireEnv("JWT_REFRESH_SECRET"),
+			JWTAccessSecret:   getEnv("JWT_ACCESS_SECRET", "default-jwt-access-secret-change-in-production-min-32-chars"),
+			JWTRefreshSecret:  getEnv("JWT_REFRESH_SECRET", "default-jwt-refresh-secret-change-in-production-min-32-chars"),
 			AccessTokenTTL:    getEnvDuration("JWT_ACCESS_TTL", 15*time.Minute),
 			RefreshTokenTTL:   getEnvDuration("JWT_REFRESH_TTL", 30*24*time.Hour),
-			PasswordPepper:    getEnv("PASSWORD_PEPPER", ""),
-			EncryptionKey:     requireEnv("ENCRYPTION_KEY_BASE64"),
+			PasswordPepper:    getEnv("PASSWORD_PEPPER", "default-password-pepper-change-in-production"),
+			EncryptionKey:     getEnv("ENCRYPTION_KEY_BASE64", "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODk="),
 			CookieDomain:      getEnv("COOKIE_DOMAIN", "localhost"),
-			CookieSecure:      getEnvBool("COOKIE_SECURE", true),
-			CookieSameSite:    getEnv("COOKIE_SAME_SITE", "strict"),
+			CookieSecure:      getEnvBool("COOKIE_SECURE", false),
+			CookieSameSite:    getEnv("COOKIE_SAME_SITE", "lax"),
 			RefreshCookieName: getEnv("REFRESH_COOKIE_NAME", "gapak_rt"),
 			CSRFCookieName:    getEnv("CSRF_COOKIE_NAME", "gapak_csrf"),
 			TOTPWindow:        getEnvInt("TOTP_WINDOW", 1),
+		},
+		OAuth: OAuthConfig{
+			Google: OAuthProviderConfig{
+				ClientID:     getEnv("OAUTH_GOOGLE_CLIENT_ID", ""),
+				ClientSecret: getEnv("OAUTH_GOOGLE_CLIENT_SECRET", ""),
+				AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+				TokenURL:     "https://oauth2.googleapis.com/token",
+				UserInfoURL:  "https://www.googleapis.com/oauth2/v2/userinfo",
+				RedirectURI:  getEnv("OAUTH_GOOGLE_REDIRECT_URI", strings.TrimRight(getEnv("APP_BASE_URL", "http://localhost:8080"), "/")+"/api/v1/auth/callback/google"),
+				Scopes:       []string{"openid", "email", "profile"},
+			},
+			GitHub: OAuthProviderConfig{
+				ClientID:     getEnv("OAUTH_GITHUB_CLIENT_ID", ""),
+				ClientSecret: getEnv("OAUTH_GITHUB_CLIENT_SECRET", ""),
+				AuthURL:      "https://github.com/login/oauth/authorize",
+				TokenURL:     "https://github.com/login/oauth/access_token",
+				UserInfoURL:  "https://api.github.com/user",
+				RedirectURI:  getEnv("OAUTH_GITHUB_REDIRECT_URI", strings.TrimRight(getEnv("APP_BASE_URL", "http://localhost:8080"), "/")+"/api/v1/auth/callback/github"),
+				Scopes:       []string{"user:email"},
+			},
+			Facebook: OAuthProviderConfig{
+				ClientID:     getEnv("OAUTH_FACEBOOK_CLIENT_ID", ""),
+				ClientSecret: getEnv("OAUTH_FACEBOOK_CLIENT_SECRET", ""),
+				AuthURL:      "https://www.facebook.com/v19.0/dialog/oauth",
+				TokenURL:     "https://graph.facebook.com/v19.0/oauth/access_token",
+				UserInfoURL:  "https://graph.facebook.com/v19.0/me?fields=id,name,email",
+				RedirectURI:  getEnv("OAUTH_FACEBOOK_REDIRECT_URI", strings.TrimRight(getEnv("APP_BASE_URL", "http://localhost:8080"), "/")+"/api/v1/auth/callback/facebook"),
+				Scopes:       []string{"email", "public_profile"},
+			},
 		},
 		Anonymity: AnonymityConfig{
 			Enabled:                   getEnvBool("ANONYMITY_ENABLED", true),
@@ -186,7 +248,7 @@ func Load() (Config, error) {
 			AllowPasswordRecovery:     getEnvBool("ANONYMITY_ALLOW_PASSWORD_RECOVERY", false),
 			TrustProxyHeaders:         getEnvBool("ANONYMITY_TRUST_PROXY_HEADERS", false),
 			ProxyHeaders:              getEnvSlice("ANONYMITY_PROXY_HEADERS", []string{"CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP"}),
-			HashSecret:                requireEnv("ANONYMITY_HASH_SECRET"),
+			HashSecret:                getEnv("ANONYMITY_HASH_SECRET", "default-anonymity-hash-secret-change-in-production"),
 			StoreIP:                   getEnvBool("ANONYMITY_STORE_IP", false),
 			StoreUserAgent:            getEnvBool("ANONYMITY_STORE_USER_AGENT", false),
 			StoreDeviceFingerprint:    getEnvBool("ANONYMITY_STORE_DEVICE_FINGERPRINT", false),
@@ -194,7 +256,7 @@ func Load() (Config, error) {
 			ExposeEmailInResponses:    getEnvBool("ANONYMITY_EXPOSE_EMAIL_IN_RESPONSES", false),
 		},
 		Storage: StorageConfig{
-			Provider:               getEnv("STORAGE_PROVIDER", "s3"),
+			Provider:               getEnv("STORAGE_PROVIDER", "local"),
 			LocalRootPath:          getEnv("STORAGE_LOCAL_ROOT_PATH", "./var/storage"),
 			Endpoint:               getEnv("STORAGE_ENDPOINT", "http://minio:9000"),
 			Region:                 getEnv("STORAGE_REGION", "us-east-1"),
@@ -208,10 +270,15 @@ func Load() (Config, error) {
 			SignedURLTTL:           getEnvDuration("STORAGE_SIGNED_URL_TTL", 15*time.Minute),
 			UploadIntentTTL:        getEnvDuration("STORAGE_UPLOAD_INTENT_TTL", 30*time.Minute),
 			PlaybackGrantTTL:       getEnvDuration("STORAGE_PLAYBACK_GRANT_TTL", 5*time.Minute),
-			SigningSecret:          requireEnv("STORAGE_SIGNING_SECRET"),
+			SigningSecret:          getEnv("STORAGE_SIGNING_SECRET", "default-storage-signing-secret-change-in-production"),
 			MultipartPartSizeBytes: getEnvInt64("STORAGE_MULTIPART_PART_SIZE_BYTES", 8*1024*1024),
 			MaxUploadBytes:         getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 25*1024*1024),
 			AllowedMIMETypes:       getEnvSlice("STORAGE_ALLOWED_MIME_TYPES", []string{"image/jpeg", "image/png", "image/webp", "video/mp4", "application/pdf"}),
+			FFmpegTimeout:          getEnvDuration("MEDIA_FFMPEG_TIMEOUT", 20*time.Minute),
+			FFmpegMaxDuration:      getEnvDuration("MEDIA_FFMPEG_MAX_DURATION", 2*time.Hour),
+			FFmpegMaxOutputBytes:   getEnvInt64("MEDIA_FFMPEG_MAX_OUTPUT_BYTES", 1024*1024*1024),
+			FFmpegThreads:          getEnvInt("MEDIA_FFMPEG_THREADS", 2),
+			FFmpegConcurrency:      getEnvInt("MEDIA_FFMPEG_CONCURRENCY", 2),
 		},
 		Queue: QueueConfig{
 			MediaProcessingQueue: getEnv("QUEUE_MEDIA_PROCESSING", "queue:media:processing"),
@@ -227,7 +294,9 @@ func Load() (Config, error) {
 			MediaProcessingParallel: getEnvInt("WORKER_MEDIA_CONCURRENCY", 4),
 			StoryDefaultTTL:         getEnvDuration("STORY_DEFAULT_TTL", 24*time.Hour),
 			LiveReplayRetention:     getEnvDuration("LIVE_REPLAY_RETENTION", 30*24*time.Hour),
+			CleanupInterval:         getEnvDuration("WORKER_MEDIA_CLEANUP_INTERVAL", 30*time.Minute),
 		},
+		Metrics: MetricsConfig{Enabled: getEnvBool("METRICS_ENABLED", true), Token: getEnv("METRICS_TOKEN", "")},
 		RateLimit: RateLimitConfig{
 			GlobalWindow:   getEnvDuration("RATE_LIMIT_GLOBAL_WINDOW", time.Minute),
 			GlobalMax:      int64(getEnvInt("RATE_LIMIT_GLOBAL_MAX", 120)),
@@ -254,6 +323,51 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func rejectInsecureProductionDefaults(cfg Config) error {
+	checks := map[string]string{
+		"JWT_ACCESS_SECRET":      cfg.Security.JWTAccessSecret,
+		"JWT_REFRESH_SECRET":     cfg.Security.JWTRefreshSecret,
+		"PASSWORD_PEPPER":        cfg.Security.PasswordPepper,
+		"STORAGE_SIGNING_SECRET": cfg.Storage.SigningSecret,
+		"ANONYMITY_HASH_SECRET":  cfg.Anonymity.HashSecret,
+	}
+	defaults := map[string]string{
+		"JWT_ACCESS_SECRET":      "default-jwt-access-secret-change-in-production-min-32-chars",
+		"JWT_REFRESH_SECRET":     "default-jwt-refresh-secret-change-in-production-min-32-chars",
+		"PASSWORD_PEPPER":        "default-password-pepper-change-in-production",
+		"STORAGE_SIGNING_SECRET": "default-storage-signing-secret-change-in-production",
+		"ANONYMITY_HASH_SECRET":  "default-anonymity-hash-secret-change-in-production",
+	}
+	for key, value := range checks {
+		if value == defaults[key] || strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s must be explicitly configured in production", key)
+		}
+	}
+	if cfg.Security.EncryptionKey == "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODk=" {
+		return fmt.Errorf("ENCRYPTION_KEY_BASE64 must be explicitly configured in production")
+	}
+	if raw, ok := os.LookupEnv("CORS_ORIGINS"); !ok || strings.TrimSpace(raw) == "" {
+		return fmt.Errorf("CORS_ORIGINS must be explicitly configured in production")
+	}
+	baseURL, err := url.Parse(cfg.App.BaseURL)
+	if err != nil || !strings.EqualFold(baseURL.Scheme, "https") || baseURL.Host == "" {
+		return fmt.Errorf("APP_BASE_URL must be an explicit HTTPS URL in production")
+	}
+	for _, origin := range cfg.App.CORSOrigins {
+		parsed, err := url.Parse(origin)
+		if err != nil || !strings.EqualFold(parsed.Scheme, "https") {
+			return fmt.Errorf("CORS_ORIGINS must contain HTTPS origins in production")
+		}
+	}
+	if !cfg.Security.CookieSecure {
+		return fmt.Errorf("COOKIE_SECURE must be true in production")
+	}
+	if strings.EqualFold(cfg.Security.CookieSameSite, "none") && !cfg.Security.CookieSecure {
+		return fmt.Errorf("COOKIE_SECURE must be true when COOKIE_SAME_SITE=none")
+	}
+	return nil
 }
 
 func getEnv(key, fallback string) string {
@@ -337,13 +451,7 @@ func getEnvSlice(key string, fallback []string) []string {
 
 func validate(cfg Config) error {
 	required := map[string]string{
-		"DATABASE_URL":           cfg.Database.URL,
-		"JWT_ACCESS_SECRET":      cfg.Security.JWTAccessSecret,
-		"JWT_REFRESH_SECRET":     cfg.Security.JWTRefreshSecret,
-		"PASSWORD_PEPPER":        cfg.Security.PasswordPepper,
-		"ENCRYPTION_KEY_BASE64":  cfg.Security.EncryptionKey,
-		"STORAGE_SIGNING_SECRET": cfg.Storage.SigningSecret,
-		"ANONYMITY_HASH_SECRET":  cfg.Anonymity.HashSecret,
+		"DATABASE_URL": cfg.Database.URL,
 	}
 	missing := make([]string, 0)
 	for key, value := range required {
@@ -361,6 +469,9 @@ func validate(cfg Config) error {
 	}
 	if cfg.Database.MinOpenConns < 0 {
 		return fmt.Errorf("DATABASE_MIN_OPEN_CONNS cannot be negative")
+	}
+	if cfg.Database.MaxConnLifetime <= 0 || cfg.Database.MaxConnIdleTime <= 0 {
+		return fmt.Errorf("database connection lifetime/idle time must be positive")
 	}
 	if cfg.Database.MinOpenConns > cfg.Database.MaxOpenConns {
 		return fmt.Errorf("DATABASE_MIN_OPEN_CONNS cannot exceed DATABASE_MAX_OPEN_CONNS")
@@ -385,6 +496,24 @@ func validate(cfg Config) error {
 	}
 	if len(cfg.Anonymity.HashSecret) < 32 {
 		return fmt.Errorf("ANONYMITY_HASH_SECRET must be at least 32 characters long")
+	}
+	if strings.EqualFold(cfg.App.Environment, "production") {
+		if cfg.App.AutoMigrate {
+			return fmt.Errorf("AUTO_MIGRATE must be false in production; run migrations as a separate release step")
+		}
+		if cfg.Metrics.Enabled && strings.TrimSpace(cfg.Metrics.Token) == "" {
+			return fmt.Errorf("METRICS_TOKEN must be configured when metrics are enabled in production")
+		}
+		if err := rejectInsecureProductionDefaults(cfg); err != nil {
+			return err
+		}
+		if !cfg.Redis.Enabled || strings.TrimSpace(cfg.Redis.URL) == "" {
+			return fmt.Errorf("REDIS_ENABLED=true and REDIS_URL must be configured in production")
+		}
+	}
+	key, err := base64.StdEncoding.DecodeString(cfg.Security.EncryptionKey)
+	if err != nil || len(key) != 32 {
+		return fmt.Errorf("ENCRYPTION_KEY_BASE64 must be valid base64 encoding of exactly 32 bytes")
 	}
 	switch strings.ToLower(cfg.Security.CookieSameSite) {
 	case "lax", "strict", "none":

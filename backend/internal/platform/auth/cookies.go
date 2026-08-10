@@ -27,7 +27,7 @@ func SetCSRFCookie(c *fiber.Ctx, cfg config.SecurityConfig, csrf string, expires
 		Name:     cfg.CSRFCookieName,
 		Value:    csrf,
 		Path:     "/",
-		HTTPOnly: false,
+		HTTPOnly: true,
 		Secure:   cfg.CookieSecure,
 		SameSite: "Strict",
 		Domain:   cookieDomain(cfg.CookieDomain),
@@ -51,7 +51,7 @@ func ClearAuthCookies(c *fiber.Ctx, cfg config.SecurityConfig) {
 		Name:     cfg.CSRFCookieName,
 		Value:    "",
 		Path:     "/",
-		HTTPOnly: false,
+		HTTPOnly: true,
 		Secure:   cfg.CookieSecure,
 		SameSite: parseSameSite(cfg.CookieSameSite),
 		Domain:   cookieDomain(cfg.CookieDomain),
@@ -61,9 +61,20 @@ func ClearAuthCookies(c *fiber.Ctx, cfg config.SecurityConfig) {
 		Name:     cfg.CSRFCookieName,
 		Value:    "",
 		Path:     "/api/v1/auth",
-		HTTPOnly: false,
+		HTTPOnly: true,
 		Secure:   cfg.CookieSecure,
 		SameSite: parseSameSite(cfg.CookieSameSite),
+		Domain:   cookieDomain(cfg.CookieDomain),
+		Expires:  expiredAt,
+	})
+	// Also clear the access token cookie
+	c.Cookie(&fiber.Cookie{
+		Name:     "gapak_at",
+		Value:    "",
+		Path:     "/",
+		HTTPOnly: true,
+		Secure:   cfg.CookieSecure,
+		SameSite: "Lax",
 		Domain:   cookieDomain(cfg.CookieDomain),
 		Expires:  expiredAt,
 	})
@@ -80,10 +91,14 @@ func parseSameSite(raw string) string {
 	}
 }
 
-func cookieDomain(raw string) string {
+func CookieDomain(raw string) string {
 	domain := strings.TrimSpace(raw)
 	if domain == "" || strings.EqualFold(domain, "localhost") || domain == "127.0.0.1" || domain == "::1" {
 		return ""
 	}
 	return domain
+}
+
+func cookieDomain(raw string) string {
+	return CookieDomain(raw)
 }

@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -7,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: gapak
       POSTGRES_USER: gapak
-      POSTGRES_PASSWORD: gapak
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -37,7 +35,7 @@ services:
     container_name: gapak-minio
     environment:
       MINIO_ROOT_USER: gapak
-      MINIO_ROOT_PASSWORD: gapak-secret
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
     command: ["server", "/data", "--console-address", ":9001"]
     ports:
       - "9000:9000"
@@ -58,7 +56,7 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set gapak http://minio:9000 gapak gapak-secret &&
+      mc alias set gapak http://minio:9000 gapak $${MINIO_ROOT_PASSWORD} &&
       mc mb --ignore-existing gapak/gapak-private &&
       mc anonymous set private gapak/gapak-private
       "
@@ -73,7 +71,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
       MIGRATIONS_DIR: db/migrations
     depends_on:
       postgres:
@@ -88,13 +86,13 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
       REDIS_URL: redis://redis:6379/5
       STORAGE_ENDPOINT: http://minio:9000
       STORAGE_ACCESS_KEY_ID: gapak
-      STORAGE_SECRET_ACCESS_KEY: gapak-secret
+      STORAGE_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       STORAGE_BUCKET: gapak-private
-      STORAGE_SIGNING_SECRET: ${STORAGE_SIGNING_SECRET:-local-storage-signing-secret-change-me}
+      STORAGE_SIGNING_SECRET: ${STORAGE_SIGNING_SECRET:?set STORAGE_SIGNING_SECRET}
     ports:
       - "8080:8080"
     depends_on:
@@ -107,6 +105,22 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+    volumes:
+      - media_data:/app/var/storage
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/health/live >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
 
   worker:
     build:
@@ -117,13 +131,13 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://gapak:gapak@postgres:5432/gapak?sslmode=disable}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
       REDIS_URL: redis://redis:6379/5
       STORAGE_ENDPOINT: http://minio:9000
       STORAGE_ACCESS_KEY_ID: gapak
-      STORAGE_SECRET_ACCESS_KEY: gapak-secret
+      STORAGE_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       STORAGE_BUCKET: gapak-private
-      STORAGE_SIGNING_SECRET: ${STORAGE_SIGNING_SECRET:-local-storage-signing-secret-change-me}
+      STORAGE_SIGNING_SECRET: ${STORAGE_SIGNING_SECRET:?set STORAGE_SIGNING_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
@@ -134,8 +148,19 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1g
+    volumes:
+      - media_data:/app/var/storage
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 60s
 
 volumes:
   postgres_data:
   redis_data:
   minio_data:
+  media_data:

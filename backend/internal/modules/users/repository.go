@@ -174,3 +174,22 @@ func (r *Repository) UpdatePrivacy(ctx context.Context, userID string, req Updat
 func itoa(value int) string {
 	return strconv.Itoa(value)
 }
+
+func (r *Repository) GetTheme(ctx context.Context, userID string) (string, error) {
+	const query = `SELECT theme FROM user_settings WHERE user_id = $1`
+	var theme string
+	err := r.db.QueryRow(ctx, query, userID).Scan(&theme)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "light", nil // default
+	}
+	return theme, err
+}
+
+func (r *Repository) UpdateTheme(ctx context.Context, userID, theme string) error {
+	const query = `
+		INSERT INTO user_settings (user_id, theme, created_at, updated_at)
+		VALUES ($1, $2, NOW(), NOW())
+		ON CONFLICT (user_id) DO UPDATE SET theme = $2, updated_at = NOW()`
+	_, err := r.db.Exec(ctx, query, userID, theme)
+	return err
+}

@@ -24,6 +24,16 @@ func NewRepository(db *pgxpool.Pool, eventChannelBase string) *Repository {
 	return &Repository{db: db, eventChannelBase: eventChannelBase}
 }
 
+func (r *Repository) CanHostInTrustRoom(ctx context.Context, userID, roomID string) (bool, error) {
+	var allowed bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM trust_room_members
+			WHERE room_id = $1 AND user_id = $2 AND deleted_at IS NULL
+		)`, roomID, userID).Scan(&allowed)
+	return allowed, err
+}
+
 func (r *Repository) Create(ctx context.Context, hostUserID string, req CreateLiveStreamRequest) (*model.LiveStream, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {

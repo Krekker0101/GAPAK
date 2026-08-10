@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/alexedwards/argon2id"
@@ -17,25 +18,29 @@ func main() {
 		KeyLength:   32,
 	}
 
-	password := "TestPassword123"
-	pepper := "this-is-a-pepper-secret-minimum-16-chars-long-value"
+	password := strings.TrimSpace(os.Getenv("TEST_PASSWORD"))
+	pepper := os.Getenv("TEST_PASSWORD_PEPPER")
+	if password == "" || pepper == "" {
+		fmt.Fprintln(os.Stderr, "TEST_PASSWORD and TEST_PASSWORD_PEPPER must be set")
+		return
+	}
 
 	// Генерируем хеш
-	hash, err := argon2id.CreateHash(strings.TrimSpace(password)+pepper, params)
+	hash, err := argon2id.CreateHash(password+pepper, params)
 	if err != nil {
 		fmt.Printf("Error generating hash: %v\n", err)
 		return
 	}
 
-	fmt.Printf("Password: %s\n", password)
-	fmt.Printf("Pepper: %s\n", pepper)
-	fmt.Printf("Hash: %s\n", hash)
-
 	// Проверяем что хеш валиден
-	ok, err := argon2id.ComparePasswordAndHash(strings.TrimSpace(password)+pepper, hash)
+	ok, err := argon2id.ComparePasswordAndHash(password+pepper, hash)
 	if err != nil {
 		fmt.Printf("Error comparing: %v\n", err)
 		return
 	}
-	fmt.Printf("Verify result: %v\n", ok)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "password hash verification failed")
+		return
+	}
+	fmt.Println("password hash verification succeeded")
 }

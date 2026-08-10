@@ -63,7 +63,7 @@ func ApplyMigrations(ctx context.Context, db *pgxpool.Pool, dir string) error {
 	}
 
 	for _, migration := range migrations {
-		applied, err := isMigrationApplied(ctx, conn, migration.Version)
+		applied, err := isMigrationApplied(ctx, conn, migration)
 		if err != nil {
 			return err
 		}
@@ -129,8 +129,17 @@ func LoadMigrations(dir string) ([]Migration, error) {
 	}
 
 	sort.Slice(migrations, func(i, j int) bool {
+		if migrations[i].Version == migrations[j].Version {
+			return migrations[i].Name < migrations[j].Name
+		}
 		return migrations[i].Version < migrations[j].Version
 	})
+
+	for i := 1; i < len(migrations); i++ {
+		if migrations[i-1].Version == migrations[i].Version {
+			return nil, fmt.Errorf("duplicate migration version %q: %s and %s", migrations[i].Version, migrations[i-1].Path, migrations[i].Path)
+		}
+	}
 
 	return migrations, nil
 }
@@ -147,10 +156,25 @@ func ensureMigrationTable(ctx context.Context, db querier) error {
 	return err
 }
 
-func isMigrationApplied(ctx context.Context, db querier, version string) (bool, error) {
-	var exists bool
-	err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)`, version).Scan(&exists)
-	return exists, err
+func isMigrationApplied(ctx context.Context, db querier, migration Migration) (bool, error) {
+	var storedName, storedChecksum string
+	err := db.QueryRow(ctx, `
+		SELECT name, checksum
+		FROM schema_migrations
+		WHERE version = $1`, migration.Version).Scan(&storedName, &storedChecksum)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	if storedName != migration.Name || storedChecksum != migration.Checksum {
+		return false, fmt.Errorf(
+			"migration %s checksum/name mismatch: database has name=%q checksum=%s, repository has name=%q checksum=%s",
+			migration.Version, storedName, storedChecksum, migration.Name, migration.Checksum,
+		)
+	}
+	return true, nil
 }
 
 func parseMigrationName(fileName string) (string, string) {

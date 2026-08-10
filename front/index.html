@@ -1,14 +1,33 @@
-<!DOCTYPE html>
-<html lang="en" class="dark">
+<!doctype html>
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Gapak | Private Social Network</title>
-    <meta name="description" content="Gapak is a premium privacy-first social network focused on trusted spaces, secure messaging, and controlled visibility." />
+    <title>GAPAK Frontend Platform</title>
+    <script>
+      (function() {
+        try {
+          var target = window;
+          var prop = 'fetch';
+          var origFetch = target[prop];
+          if (typeof origFetch === 'function') {
+            var currentFetch = origFetch;
+            Object.defineProperty(target, prop, {
+              get: function() { return currentFetch; },
+              set: function(v) { currentFetch = v; },
+              configurable: true,
+              enumerable: true
+            });
+          }
+        } catch (e) {
+          console.warn('[GAPAK Runtime] Fetch property descriptor patch:', e);
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
+

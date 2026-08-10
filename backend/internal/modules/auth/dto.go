@@ -80,3 +80,24 @@ type TwoFactorSetupResponse struct {
 	Secret     string `json:"secret"`
 	OtpAuthURL string `json:"otpAuthUrl"`
 }
+
+type OAuthCallbackRequest struct {
+	Code  string `json:"code" validate:"required"`
+	State string `json:"state" validate:"omitempty"`
+}
+
+type OAuthRedirectResponse struct {
+	URL string `json:"url"`
+}
+
+type SocialAccount struct {
+	ID             string    `json:"id"`
+	UserID         string    `json:"userId"`
+	Provider       string    `json:"provider"`
+	ProviderUserID string    `json:"providerUserId"`
+	Email          *string   `json:"email,omitempty"`
+	DisplayName    *string   `json:"displayName,omitempty"`
+	AvatarURL      *string   `json:"avatarUrl,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}

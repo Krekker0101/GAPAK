@@ -46,3 +46,27 @@ func TestValidateCompletedPartsRequiresAllExpectedParts(t *testing.T) {
 		t.Fatal("expected incomplete multipart upload to be rejected")
 	}
 }
+
+func TestValidateCompletedPartsRequiresExactDeclaredSize(t *testing.T) {
+	service := &Service{}
+	session := &model.UploadSession{TotalParts: 2, SizeBytes: 2048}
+	err := service.validateCompletedParts(session, []CompletedUploadPart{
+		{PartNumber: 1, ETag: "a", SizeBytes: 1024},
+		{PartNumber: 2, ETag: "b", SizeBytes: 1023},
+	})
+	if err == nil {
+		t.Fatal("expected exact size validation to reject under-sized upload")
+	}
+}
+
+func TestValidateCompletedPartsRejectsOverSizedUpload(t *testing.T) {
+	service := &Service{}
+	session := &model.UploadSession{TotalParts: 2, SizeBytes: 2048}
+	err := service.validateCompletedParts(session, []CompletedUploadPart{
+		{PartNumber: 1, ETag: "a", SizeBytes: 1024},
+		{PartNumber: 2, ETag: "b", SizeBytes: 2049},
+	})
+	if err == nil {
+		t.Fatal("expected over-sized upload to be rejected")
+	}
+}

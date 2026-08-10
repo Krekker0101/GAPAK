@@ -19,7 +19,9 @@ func NewPasswordManager(pepper string) *PasswordManager {
 			// a reasonable high-load balance between brute-force resistance and
 			// login latency. Existing hashes remain valid because argon2id's
 			// encoded hash stores the parameters used at creation time.
-			Memory:      64 * 1024 * 1024,
+			// argon2id expects memory in KiB. 64 * 1024 is 64 MiB; using
+			// 64 * 1024 * 1024 would allocate 64 GiB per hash attempt.
+			Memory:      64 * 1024,
 			Iterations:  4,
 			Parallelism: 4,
 			SaltLength:  16,

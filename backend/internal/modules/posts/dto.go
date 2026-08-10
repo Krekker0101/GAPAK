@@ -26,6 +26,7 @@ type FeedQuery struct {
 	Page        int    `query:"page" validate:"omitempty,min=1"`
 	Limit       int    `query:"limit" validate:"omitempty,min=1,max=50"`
 	ContentType string `query:"contentType" validate:"omitempty,oneof=POST CLIP"`
+	Cursor      string `query:"cursor" validate:"omitempty,max=512"`
 }
 
 type PostResponse struct {
@@ -59,8 +60,8 @@ type UpdateCommentRequest struct {
 }
 
 type CommentQuery struct {
-	Page   int `query:"page" validate:"omitempty,min=1"`
-	Limit  int `query:"limit" validate:"omitempty,min=1,max=50"`
+	Page   int    `query:"page" validate:"omitempty,min=1"`
+	Limit  int    `query:"limit" validate:"omitempty,min=1,max=50"`
 	SortBy string `query:"sortBy" validate:"omitempty,oneof=recent top"`
 }
 
@@ -82,4 +83,3 @@ type LikesListResponse struct {
 	UserID   string `json:"userId"`
 	Username string `json:"username"`
 }
-

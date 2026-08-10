@@ -1,20 +1,31 @@
-let envAny: any;
-try {
-  envAny = (import.meta as any).env;
-} catch (e) {
-  envAny = typeof process !== 'undefined' ? process.env : {};
-}
+/**
+ * GAPAK runtime configuration.
+ * Production must never silently fall back to development mocks.
+ */
 
-export const publicEnv = {
-  appName: envAny.VITE_PUBLIC_APP_NAME ?? envAny.NEXT_PUBLIC_APP_NAME ?? "Gapak",
-  appUrl: envAny.VITE_PUBLIC_APP_URL ?? envAny.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
-  apiBaseUrl: envAny.VITE_PUBLIC_API_BASE_URL ?? envAny.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1",
-  authHintCookie: envAny.VITE_PUBLIC_AUTH_HINT_COOKIE ?? envAny.NEXT_PUBLIC_AUTH_HINT_COOKIE ?? "gapak_auth_hint",
-  csrfCookieName: envAny.VITE_PUBLIC_CSRF_COOKIE_NAME ?? envAny.NEXT_PUBLIC_CSRF_COOKIE_NAME ?? "gapak_csrf",
-} as const;
+const readBoolean = (value: unknown, fallback = false): boolean => {
+  if (typeof value !== 'string') return fallback;
+  return value.toLowerCase() === 'true';
+};
 
-export const serverEnv = {
-  backendUrl: envAny.GAPAK_BACKEND_URL ?? "http://localhost:8080",
-  backendApiPrefix: envAny.GAPAK_BACKEND_API_PREFIX ?? "/api/v1",
-  csrfCookieName: envAny.GAPAK_CSRF_COOKIE_NAME ?? "gapak_csrf",
-} as const;
+export const env = Object.freeze({
+  apiBaseUrl: (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, ''),
+  wsBaseUrl: (import.meta.env.VITE_WS_BASE_URL ?? '').replace(/\/$/, ''),
+  mediaBaseUrl: (import.meta.env.VITE_MEDIA_BASE_URL ?? '').replace(/\/$/, ''),
+  environment: import.meta.env.VITE_ENVIRONMENT ?? (import.meta.env.DEV ? 'development' : 'production'),
+  // Mocks are intentionally limited to development builds.
+  enableMockApi: import.meta.env.DEV && readBoolean(import.meta.env.VITE_ENABLE_MOCK_API, false),
+  enablePlatformSandbox: import.meta.env.DEV && readBoolean(import.meta.env.VITE_ENABLE_PLATFORM_SANDBOX, true),
+});
+
+export const resolveApiUrl = (url: string): string => {
+  if (/^https?:\/\//i.test(url)) return url;
+  const path = url.startsWith('/') ? url : `/${url}`;
+  // Domain clients use `/api/...`, while the backend exposes its public API
+  // under `/api/v1`. Normalize at one boundary so no client calls the backend
+  // root and renders its raw NOT_FOUND JSON response in the browser.
+  const versionedPath = path === '/api' || path.startsWith('/api/')
+    ? `/api/v1${path.slice('/api'.length)}`
+    : path;
+  return `${env.apiBaseUrl}${versionedPath}`;
+};

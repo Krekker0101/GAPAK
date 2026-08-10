@@ -11,6 +11,7 @@ type ProfileResponse struct {
 	Role             string          `json:"role"`
 	IsAnonymous      bool            `json:"isAnonymous"`
 	TwoFactorEnabled bool            `json:"twoFactorEnabled"`
+	Theme            string          `json:"theme"`
 	Privacy          PrivacyResponse `json:"privacy"`
 }
 
@@ -19,6 +20,7 @@ type UpdateProfileRequest struct {
 	Bio           *string `json:"bio" validate:"omitempty,max=600"`
 	StatusMessage *string `json:"statusMessage" validate:"omitempty,max=160"`
 	AvatarFileID  *string `json:"avatarFileId" validate:"omitempty,uuid4"`
+	Theme         *string `json:"theme" validate:"omitempty,oneof=light dark auto"`
 }
 
 type PrivacyResponse struct {
@@ -30,6 +32,10 @@ type PrivacyResponse struct {
 	SearchableByUsername bool   `json:"searchableByUsername"`
 	PostDefaultPrivacy   string `json:"postDefaultPrivacy"`
 	ShowOnlineStatus     bool   `json:"showOnlineStatus"`
+}
+
+type UpdateThemeRequest struct {
+	Theme string `json:"theme" validate:"required,oneof=light dark auto"`
 }
 
 type UpdatePrivacyRequest struct {

@@ -12,6 +12,7 @@ import (
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
+	"github.com/gapak/backend/internal/platform/pagination"
 )
 
 type Repository struct {
@@ -217,6 +218,61 @@ func (r *Repository) consumeOneTimeAudienceGrant(ctx context.Context, tx pgx.Tx,
 		return apperrors.New(409, "posts.audience_grant_conflict", "Audience grant is no longer available")
 	}
 	return nil
+}
+
+func (r *Repository) FeedCursor(ctx context.Context, viewerID string, cursor *pagination.Cursor, limit int, contentType string) ([]model.Post, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	const selectCols = `
+		SELECT p.id, p.author_id, p.content_type, p.body, p.privacy, p.like_count, p.expires_at, p.one_time_view_limit,
+		       p.published_at, p.edited_at, p.deleted_at, p.created_at, p.updated_at
+		FROM posts p
+		WHERE p.deleted_at IS NULL
+		  AND (p.expires_at IS NULL OR p.expires_at > NOW())
+		  AND ($2 = '' OR p.content_type = $2)
+		  AND (
+		    p.author_id = $1
+		    OR p.privacy = 'PUBLIC'
+		    OR (p.privacy = 'FRIENDS' AND EXISTS (
+		          SELECT 1 FROM friend_connections fc
+		          WHERE fc.deleted_at IS NULL AND fc.status = 'ACCEPTED'
+		            AND ((fc.requester_id = p.author_id AND fc.addressee_id = $1) OR (fc.addressee_id = p.author_id AND fc.requester_id = $1))
+		        ))
+		    OR (p.privacy = 'TRUSTED_CIRCLE' AND EXISTS (
+		          SELECT 1 FROM trusted_circle_memberships tcm
+		          WHERE tcm.owner_id = p.author_id AND tcm.member_id = $1
+		        ))
+		    OR (p.privacy IN ('PRIVATE', 'ONE_TIME', 'TIMED') AND EXISTS (
+		          SELECT 1 FROM post_audience_grants pag
+		          WHERE pag.post_id = p.id AND pag.subject_user_id = $1
+		            AND (pag.expires_at IS NULL OR pag.expires_at > NOW())
+		            AND (pag.max_views IS NULL OR pag.used_views < pag.max_views)
+		        ))
+		  )`
+	var rows pgx.Rows
+	var err error
+	if cursor == nil {
+		rows, err = r.db.Query(ctx, selectCols+` ORDER BY p.published_at DESC, p.id DESC LIMIT $3`, viewerID, contentType, limit+1)
+	} else {
+		rows, err = r.db.Query(ctx, selectCols+` AND (p.published_at < $3 OR (p.published_at = $3 AND p.id < $4)) ORDER BY p.published_at DESC, p.id DESC LIMIT $5`, viewerID, contentType, cursor.Time, cursor.ID, limit+1)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.Post, 0, limit+1)
+	for rows.Next() {
+		post, scanErr := scanPost(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, *post)
+	}
+	return items, rows.Err()
 }
 
 func (r *Repository) Feed(ctx context.Context, viewerID string, page, limit int, contentType string) ([]model.Post, error) {
@@ -599,6 +655,15 @@ func (r *Repository) GetPostLikes(ctx context.Context, postID string, page, limi
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (r *Repository) GetCommentPostID(ctx context.Context, commentID string) (string, error) {
+	var postID string
+	err := r.db.QueryRow(ctx, `SELECT post_id FROM comments WHERE id = $1 AND deleted_at IS NULL`, commentID).Scan(&postID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", apperrors.ErrNotFound
+	}
+	return postID, err
 }
 
 func (r *Repository) GetCommentCount(ctx context.Context, postID string) (int, error) {

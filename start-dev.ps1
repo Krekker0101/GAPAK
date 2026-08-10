@@ -114,7 +114,8 @@ if (($dbExists | Out-String).Trim() -ne "1") {
 $env:DATABASE_URL = "postgresql://gapak@127.0.0.1:$PostgresPort/gapak?sslmode=disable"
 $env:APP_PORT = "$ApiPort"
 $env:GAPAK_BACKEND_URL = "http://127.0.0.1:$ApiPort"
-$env:VITE_PUBLIC_API_BASE_URL = "/api/v1"
+$env:VITE_API_BASE_URL = ""
+$env:VITE_DEV_API_TARGET = "http://127.0.0.1:$ApiPort"
 
 Write-Host "Running backend migrations"
 Push-Location $backend
@@ -153,20 +154,22 @@ if (-not (Test-Path -LiteralPath (Join-Path $front "node_modules"))) {
     throw "Frontend dependencies are missing. Run npm install in $front first."
 }
 
-if (-not (Test-PortListening $FrontendPort)) {
-    Write-Host "Starting frontend (Vite) on port $FrontendPort"
-    $frontStdout = Join-Path $logs "front-$timestamp.out.log"
-    $frontStderr = Join-Path $logs "front-$timestamp.err.log"
-    $frontProcess = Start-Process `
-        -FilePath "npm.cmd" `
-        -ArgumentList @("run", "dev", "--", "-p", "$FrontendPort") `
-        -WorkingDirectory $front `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $frontStdout `
-        -RedirectStandardError $frontStderr `
-        -PassThru
-    $processes += [pscustomobject]@{ Name = "frontend"; Id = $frontProcess.Id; Log = $frontStderr }
+if (Test-PortListening $FrontendPort) {
+    throw "Frontend port $FrontendPort is already in use. Stop the conflicting process or start with -FrontendPort <free-port>."
 }
+
+Write-Host "Starting frontend (Vite) on port $FrontendPort"
+$frontStdout = Join-Path $logs "front-$timestamp.out.log"
+$frontStderr = Join-Path $logs "front-$timestamp.err.log"
+$frontProcess = Start-Process `
+    -FilePath "npm.cmd" `
+    -ArgumentList @("run", "dev", "--", "-p", "$FrontendPort") `
+    -WorkingDirectory $front `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $frontStdout `
+    -RedirectStandardError $frontStderr `
+    -PassThru
+$processes += [pscustomobject]@{ Name = "frontend"; Id = $frontProcess.Id; Log = $frontStderr }
 
 $processes | ConvertTo-Json | Set-Content -Path $pidFile -Encoding UTF8
 

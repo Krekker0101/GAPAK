@@ -239,6 +239,10 @@ func (ctl *Controller) playbackObject(c *fiber.Ctx) error {
 func sanitizeDispositionFilename(fileName string) string {
 	cleaned := strings.TrimSpace(fileName)
 	cleaned = strings.ReplaceAll(cleaned, `"`, "")
+	cleaned = strings.ReplaceAll(cleaned, "\r", "")
+	cleaned = strings.ReplaceAll(cleaned, "\n", "")
+	cleaned = strings.ReplaceAll(cleaned, "\\", "_")
+	cleaned = strings.ReplaceAll(cleaned, "/", "_")
 	if cleaned == "" {
 		return "download.bin"
 	}

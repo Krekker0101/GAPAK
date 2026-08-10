@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
@@ -27,29 +28,34 @@ import (
 	"github.com/gapak/backend/internal/platform/httpx"
 	"github.com/gapak/backend/internal/platform/logger"
 	"github.com/gapak/backend/internal/platform/middleware"
+	"github.com/gapak/backend/internal/platform/observability"
 	"github.com/gapak/backend/internal/platform/privacy"
 	"github.com/gapak/backend/internal/platform/queue"
 	"github.com/gapak/backend/internal/platform/storage"
+	"github.com/gapak/backend/internal/services/websocket"
 )
 
 type App struct {
-	Config      config.Config
-	Logger      zerolog.Logger
-	Fiber       *fiber.App
-	DB          *pgxpool.Pool
-	Redis       *redis.Client
-	Validate    *validator.Validate
-	JWT         *authplatform.Manager
-	Passwords   *authplatform.PasswordManager
-	TOTP        *authplatform.TOTPManager
-	Encryptor   *appcrypto.Encryptor
-	Privacy     *privacy.Service
-	Storage     storage.Service
-	ObjectStore storage.ObjectStore
-	Queue       *queue.RedisQueue
+	Observability *observability.Registry
+	Config        config.Config
+	Logger        zerolog.Logger
+	Fiber         *fiber.App
+	DB            *pgxpool.Pool
+	Redis         *redis.Client
+	Validate      *validator.Validate
+	JWT           *authplatform.Manager
+	Passwords     *authplatform.PasswordManager
+	TOTP          *authplatform.TOTPManager
+	Encryptor     *appcrypto.Encryptor
+	Privacy       *privacy.Service
+	Storage       storage.Service
+	ObjectStore   storage.ObjectStore
+	Queue         *queue.RedisQueue
+	WebSocket     *websocket.Service
 }
 
 type Dependencies struct {
+	Observability   *observability.Registry
 	Config          config.Config
 	Logger          zerolog.Logger
 	DB              *pgxpool.Pool
@@ -73,23 +79,37 @@ func New(ctx context.Context) (*App, error) {
 	}
 
 	log := logger.New(cfg.App.Environment)
+	obs := observability.NewRegistry()
+	log.Info().Str("component", "startup").Str("environment", cfg.App.Environment).Str("app", cfg.App.Name).Msg("application startup diagnostics")
 
-	db, err := database.NewPostgres(ctx, cfg.Database)
+	db, err := database.NewPostgres(ctx, cfg.Database, obs)
 	if err != nil {
 		return nil, fmt.Errorf("postgres init: %w", err)
 	}
 
-	// Apply migrations automatically
-	migrationsDir := "db/migrations"
-	if err := database.ApplyMigrations(ctx, db, migrationsDir); err != nil {
-		return nil, fmt.Errorf("apply migrations: %w", err)
+	// Migrations are normally deployed as a separate, explicitly controlled
+	// release step. Keeping them out of API startup avoids surprise DDL locks
+	// and makes rollback/deploy ordering deterministic.
+	if cfg.App.AutoMigrate {
+		if strings.EqualFold(cfg.App.Environment, "production") {
+			db.Close()
+			return nil, fmt.Errorf("AUTO_MIGRATE must be false in production; run gapak-migrate as a release step")
+		}
+		if err := database.ApplyMigrations(ctx, db, "db/migrations"); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("apply migrations: %w", err)
+		}
 	}
 
 	var redisClient *redis.Client
 	if cfg.Redis.Enabled && strings.TrimSpace(cfg.Redis.URL) != "" {
 		var err error
-		redisClient, err = cache.NewRedis(ctx, cfg.Redis)
+		redisClient, err = cache.NewRedis(ctx, cfg.Redis, obs)
 		if err != nil {
+			if strings.EqualFold(cfg.App.Environment, "production") {
+				db.Close()
+				return nil, fmt.Errorf("redis init: %w", err)
+			}
 			log.Warn().Err(err).Msg("redis is unavailable; starting in degraded mode")
 			redisClient = nil
 		}
@@ -138,43 +158,52 @@ func New(ctx context.Context) (*App, error) {
 	})
 
 	fiberApp.Use(recover.New())
+	// Compress JSON/text responses to reduce bandwidth and serialization pressure.
+	fiberApp.Use(compress.New(compress.Config{Level: compress.LevelBestSpeed}))
 	fiberApp.Use(requestid.New())
+	fiberApp.Use(middleware.ObservabilityContext())
 	fiberApp.Use(cors.New(cors.Config{
 		AllowCredentials: true,
 		AllowOrigins:     joinOrigins(cfg.App.CORSOrigins),
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-CSRF-Token, X-Request-Id",
-		ExposeHeaders:    "X-Request-Id",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-CSRF-Token, X-Idempotency-Key, X-Request-Id",
+		ExposeHeaders:    "X-Request-Id, X-Next-Cursor",
 	}))
 	fiberApp.Use(helmet.New(helmet.Config{
-		ContentSecurityPolicy: "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; font-src 'self'",
+		ContentSecurityPolicy: "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 	}))
-	fiberApp.Use(middleware.RequestLogger(log, privacyService))
+	fiberApp.Use(middleware.SecurityHeaders(63072000))
+	fiberApp.Use(middleware.RequestLogger(log, privacyService, obs))
 	fiberApp.Use(middleware.RateLimiter{
-		Redis:  redisClient,
-		Prefix: "rl:global",
-		Max:    cfg.RateLimit.GlobalMax,
-		Window: cfg.RateLimit.GlobalWindow,
-		KeyFn:  privacyService.RateLimitKey,
+		Redis:   redisClient,
+		Prefix:  "rl:global",
+		Metrics: obs,
+		Max:     cfg.RateLimit.GlobalMax,
+		Window:  cfg.RateLimit.GlobalWindow,
+		KeyFn:   privacyService.RateLimitKey,
 	}.Handler())
 
+	database.StartPoolMetrics(ctx, db, obs)
+
 	app := &App{
-		Config:      cfg,
-		Logger:      log,
-		Fiber:       fiberApp,
-		DB:          db,
-		Redis:       redisClient,
-		Validate:    validate,
-		JWT:         jwtManager,
-		Passwords:   authplatform.NewPasswordManager(cfg.Security.PasswordPepper),
-		TOTP:        authplatform.NewTOTPManager(cfg.App.Name, cfg.Security.TOTPWindow),
-		Encryptor:   encryptor,
-		Privacy:     privacyService,
-		Storage:     storageProvider,
-		ObjectStore: objectStore,
-		Queue:       redisQueue,
+		Observability: obs,
+		Config:        cfg,
+		Logger:        log,
+		Fiber:         fiberApp,
+		DB:            db,
+		Redis:         redisClient,
+		Validate:      validate,
+		JWT:           jwtManager,
+		Passwords:     authplatform.NewPasswordManager(cfg.Security.PasswordPepper),
+		TOTP:          authplatform.NewTOTPManager(cfg.App.Name, cfg.Security.TOTPWindow),
+		Encryptor:     encryptor,
+		Privacy:       privacyService,
+		Storage:       storageProvider,
+		ObjectStore:   objectStore,
+		Queue:         redisQueue,
 	}
 
 	deps := Dependencies{
+		Observability:   obs,
 		Config:          cfg,
 		Logger:          log,
 		DB:              db,
@@ -192,7 +221,9 @@ func New(ctx context.Context) (*App, error) {
 	}
 
 	registerBaseRoutes(fiberApp, deps)
-	registerModules(fiberApp, deps)
+	wsService := registerModules(fiberApp, deps)
+	wsService.Start(ctx)
+	app.WebSocket = wsService
 
 	return app, nil
 }

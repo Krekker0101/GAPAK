@@ -180,3 +180,11 @@ func (q *RedisQueue) toDelivery(ctx context.Context, streamKey string, msg redis
 	}
 	return d, nil
 }
+
+// Depth returns the approximate stream depth for operational metrics.
+func (q *RedisQueue) Depth(ctx context.Context, queueName string) (int64, error) {
+	if !q.Available() {
+		return 0, apperrors.ErrDependencyUnavailable
+	}
+	return q.client.XLen(ctx, q.streamKey(queueName)).Result()
+}

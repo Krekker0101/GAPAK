@@ -29,16 +29,14 @@ func ValidateCSRFForMutations(cfg config.SecurityConfig) fiber.Handler {
 		if headerValue == "" {
 			return apperrors.ErrCSRFInvalid
 		}
-		// For mutations, we validate the header token
-		// For authenticated requests, also check cookie if present
 		cookieValue := c.Cookies(cfg.CSRFCookieName)
-		if cookieValue != "" {
-			if subtle.ConstantTimeCompare([]byte(cookieValue), []byte(headerValue)) != 1 {
-				return apperrors.ErrCSRFInvalid
-			}
+		// Double-submit CSRF requires both values. The /auth/csrf endpoint
+		// issues the cookie before any state-changing unauthenticated request.
+		// Accepting an arbitrary header without a cookie would make the middleware
+		// a presence check rather than a CSRF defense.
+		if cookieValue == "" || subtle.ConstantTimeCompare([]byte(cookieValue), []byte(headerValue)) != 1 {
+			return apperrors.ErrCSRFInvalid
 		}
-		// If no cookie (e.g., for register/login), we still validate header is present
-		// Additional validation can be added here if needed
 		return c.Next()
 	}
 }

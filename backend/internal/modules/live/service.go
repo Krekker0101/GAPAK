@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	apperrors "github.com/gapak/backend/internal/platform/errors"
+
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
 )
@@ -21,6 +23,18 @@ func NewService(repo *Repository, eventChannelBase string) *Service {
 }
 
 func (s *Service) Create(ctx context.Context, userID string, req CreateLiveStreamRequest) (LiveStreamResponse, error) {
+	if req.Visibility == "TRUST_ROOM" {
+		if req.TrustRoomID == nil || *req.TrustRoomID == "" {
+			return LiveStreamResponse{}, apperrors.New(400, "live.trust_room_required", "Trust room is required for TRUST_ROOM visibility")
+		}
+		allowed, err := s.repo.CanHostInTrustRoom(ctx, userID, *req.TrustRoomID)
+		if err != nil {
+			return LiveStreamResponse{}, err
+		}
+		if !allowed {
+			return LiveStreamResponse{}, apperrors.ErrForbidden
+		}
+	}
 	item, err := s.repo.Create(ctx, userID, req)
 	if err != nil {
 		return LiveStreamResponse{}, err
@@ -69,13 +83,34 @@ func (s *Service) End(ctx context.Context, userID, streamID string) (AcceptedRes
 }
 
 func (s *Service) Join(ctx context.Context, userID, streamID string, req JoinLiveRequest) (AcceptedResponse, error) {
-	if _, err := s.repo.GetVisible(ctx, userID, streamID); err != nil {
+	stream, err := s.repo.GetVisible(ctx, userID, streamID)
+	if err != nil {
 		return AcceptedResponse{}, err
 	}
-	if err := s.repo.UpsertParticipant(ctx, streamID, userID, enums.LiveParticipantRole(req.Role), req.IsGhostMode); err != nil {
+
+	role, ghost, ok := authorizeJoin(stream.HostUserID, userID, enums.LiveParticipantRole(req.Role), req.IsGhostMode)
+	if !ok {
+		return AcceptedResponse{}, apperrors.ErrForbidden
+	}
+	if err := s.repo.UpsertParticipant(ctx, streamID, userID, role, ghost); err != nil {
 		return AcceptedResponse{}, err
 	}
 	return AcceptedResponse{Accepted: true}, nil
+}
+
+func authorizeJoin(hostUserID, userID string, requestedRole enums.LiveParticipantRole, requestedGhost bool) (enums.LiveParticipantRole, bool, bool) {
+	if hostUserID == userID {
+		return enums.LiveRoleHost, false, true
+	}
+	if requestedGhost {
+		return enums.LiveRoleViewer, false, false
+	}
+	switch requestedRole {
+	case enums.LiveRoleViewer, enums.LiveRoleGuest:
+		return requestedRole, false, true
+	default:
+		return enums.LiveRoleViewer, false, false
+	}
 }
 
 func (s *Service) PostChatMessage(ctx context.Context, userID, streamID string, req LiveChatMessageRequest) (LiveChatMessageResponse, error) {

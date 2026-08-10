@@ -1,15 +1,17 @@
 package subscriptions
 
 import (
-	"time"
-
-	"github.com/gapak/backend/internal/domain/enums"
-	"github.com/gapak/backend/internal/platform/logger"
-	"github.com/gapak/backend/internal/platform/middleware"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
+
+	"github.com/gapak/backend/internal/platform/httpx"
+	"github.com/gapak/backend/internal/platform/middleware"
 )
+
+type paginationQuery struct {
+	Page  int `query:"page" validate:"omitempty,min=1"`
+	Limit int `query:"limit" validate:"omitempty,min=1,max=100"`
+}
 
 type Controller struct {
 	service  *Service
@@ -17,405 +19,256 @@ type Controller struct {
 }
 
 func NewController(service *Service, validate *validator.Validate) *Controller {
-	return &Controller{
-		service:  service,
-		validate: validate,
-	}
+	return &Controller{service: service, validate: validate}
 }
 
-// Subscribe подписать на пользователя
-// POST /api/v1/subscriptions/:creatorId
 func (c *Controller) Subscribe(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-	creatorID := ctx.Params("creatorId")
-
-	if creatorID == "" {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "creatorId is required",
-		})
+	creatorID, err := httpx.UUIDParam(ctx, "creatorId")
+	if err != nil {
+		return err
 	}
-
-	if _, err := uuid.Parse(creatorID); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid creatorId format",
-		})
-	}
-
 	sub, err := c.service.Subscribe(ctx.Context(), userID, creatorID)
 	if err != nil {
-		logger.Error().Err(err).Str("userID", userID).Str("creatorID", creatorID).Msg("failed to subscribe")
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+		return err
 	}
-
-	return ctx.Status(fiber.StatusCreated).JSON(sub)
+	return ctx.Status(fiber.StatusCreated).JSON(httpx.OK(sub, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
-// Unsubscribe отписать от пользователя
-// DELETE /api/v1/subscriptions/:creatorId
 func (c *Controller) Unsubscribe(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-	creatorID := ctx.Params("creatorId")
-
-	if creatorID == "" {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "creatorId is required",
-		})
-	}
-
-	err := c.service.Unsubscribe(ctx.Context(), userID, creatorID)
+	creatorID, err := httpx.UUIDParam(ctx, "creatorId")
 	if err != nil {
-		logger.Error().Err(err).Str("userID", userID).Str("creatorID", creatorID).Msg("failed to unsubscribe")
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+		return err
 	}
-
+	if err := c.service.Unsubscribe(ctx.Context(), userID, creatorID); err != nil {
+		return err
+	}
 	return ctx.Status(fiber.StatusNoContent).Send(nil)
 }
 
-// ChangeSubscriptionType изменить тип подписки (VISIBLE или SILENT)
-// PATCH /api/v1/subscriptions/:creatorId/type
 func (c *Controller) ChangeSubscriptionType(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-	creatorID := ctx.Params("creatorId")
-
-	var req UpdateSubscriptionTypeRequest
-	if err := ctx.BodyParser(&req); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid request body",
-		})
-	}
-
-	if err := c.validate.Struct(&req); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
-	}
-
-	subType := enums.SubscriptionType(req.SubscriptionType)
-	sub, err := c.service.ChangeSubscriptionType(ctx.Context(), userID, creatorID, subType)
+	creatorID, err := httpx.UUIDParam(ctx, "creatorId")
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to change subscription type")
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+		return err
 	}
-
-	return ctx.Status(fiber.StatusOK).JSON(sub)
+	req, err := httpx.BindBody[UpdateSubscriptionTypeRequest](ctx, c.validate)
+	if err != nil {
+		return err
+	}
+	sub, err := c.service.ChangeSubscriptionType(ctx.Context(), userID, creatorID, req.SubscriptionType)
+	if err != nil {
+		return err
+	}
+	return ctx.JSON(httpx.OK(sub, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
-// GetSubscribers получить подписчиков пользователя
-// GET /api/v1/subscriptions/:userId/subscribers?page=1&limit=20
 func (c *Controller) GetSubscribers(ctx *fiber.Ctx) error {
-	userID := ctx.Params("userId")
-
-	page := ctx.QueryInt("page", 1)
-	limit := ctx.QueryInt("limit", 20)
-
-	if page < 1 || limit < 1 || limit > 100 {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid pagination parameters",
-		})
-	}
-
-	offset := (page - 1) * limit
-
-	subscribers, total, err := c.service.GetSubscribers(ctx.Context(), userID, limit, offset)
+	userID, err := httpx.UUIDParam(ctx, "userId")
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to get subscribers")
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "internal server error",
-		})
+		return err
 	}
-
-	hasMore := total > (page * limit)
-
-	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{
-		"items":    subscribers,
-		"total":    total,
-		"page":     page,
-		"pageSize": limit,
-		"hasMore":  hasMore,
-	})
+	query, err := httpx.BindQuery[paginationQuery](ctx, c.validate)
+	if err != nil {
+		return err
+	}
+	if query.Page < 1 {
+		query.Page = 1
+	}
+	if query.Limit < 1 {
+		query.Limit = 20
+	}
+	offset := (query.Page - 1) * query.Limit
+	subscribers, total, err := c.service.GetSubscribers(ctx.Context(), userID, query.Limit, offset)
+	if err != nil {
+		return err
+	}
+	hasMore := total > (query.Page * query.Limit)
+	return ctx.JSON(httpx.OK(PagedSubscribersResponse{
+		Items:    subscribers,
+		Total:    total,
+		Page:     query.Page,
+		PageSize: query.Limit,
+		HasMore:  hasMore,
+	}, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
-// GetSubscriptions получить авторов на которых подписан пользователь
-// GET /api/v1/subscriptions/following?page=1&limit=20
 func (c *Controller) GetSubscriptions(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-
-	page := ctx.QueryInt("page", 1)
-	limit := ctx.QueryInt("limit", 20)
-
-	if page < 1 || limit < 1 || limit > 100 {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid pagination parameters",
-		})
-	}
-
-	offset := (page - 1) * limit
-
-	creators, total, err := c.service.GetSubscriptions(ctx.Context(), userID, limit, offset)
+	query, err := httpx.BindQuery[paginationQuery](ctx, c.validate)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to get subscriptions")
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "internal server error",
-		})
+		return err
 	}
-
-	hasMore := total > (page * limit)
-
-	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{
-		"items":    creators,
-		"total":    total,
-		"page":     page,
-		"pageSize": limit,
-		"hasMore":  hasMore,
-	})
+	if query.Page < 1 {
+		query.Page = 1
+	}
+	if query.Limit < 1 {
+		query.Limit = 20
+	}
+	offset := (query.Page - 1) * query.Limit
+	creators, total, err := c.service.GetSubscriptions(ctx.Context(), userID, query.Limit, offset)
+	if err != nil {
+		return err
+	}
+	hasMore := total > (query.Page * query.Limit)
+	return ctx.JSON(httpx.OK(PagedCreatorsResponse{
+		Items:    creators,
+		Total:    total,
+		Page:     query.Page,
+		PageSize: query.Limit,
+		HasMore:  hasMore,
+	}, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
-// IsSubscribed проверить подписан ли пользователь
-// GET /api/v1/subscriptions/:creatorId/status
 func (c *Controller) IsSubscribed(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-	creatorID := ctx.Params("creatorId")
-
+	creatorID, err := httpx.UUIDParam(ctx, "creatorId")
+	if err != nil {
+		return err
+	}
 	isSubscribed, err := c.service.IsSubscribed(ctx.Context(), userID, creatorID)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to check subscription status")
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "internal server error",
-		})
+		return err
 	}
-
-	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{
-		"isSubscribed": isSubscribed,
-	})
+	return ctx.JSON(httpx.OK(map[string]bool{"isSubscribed": isSubscribed}, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
-// RequestSubscription создать запрос на подписку
-// POST /api/v1/subscriptions/requests
 func (c *Controller) RequestSubscription(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-
-	var req CreateSubscriptionRequestRequest
-	if err := ctx.BodyParser(&req); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid request body",
-		})
+	req, err := httpx.BindBody[CreateSubscriptionRequestRequest](ctx, c.validate)
+	if err != nil {
+		return err
 	}
-
-	if err := c.validate.Struct(&req); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
-	}
-
 	subReq, err := c.service.RequestSubscription(ctx.Context(), userID, req.CreatorID, req.Message)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to request subscription")
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+		return err
 	}
-
-	return ctx.Status(fiber.StatusCreated).JSON(subReq)
+	return ctx.Status(fiber.StatusCreated).JSON(httpx.OK(subReq, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
-// ApproveSubscriptionRequest одобрить запрос на подписку
-// POST /api/v1/subscriptions/requests/:requestId/approve
 func (c *Controller) ApproveSubscriptionRequest(ctx *fiber.Ctx) error {
-	requestID := ctx.Params("requestId")
-
-	sub, err := c.service.ApproveSubscriptionRequest(ctx.Context(), requestID)
+	requestID, err := httpx.UUIDParam(ctx, "requestId")
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to approve subscription request")
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+		return err
 	}
-
-	return ctx.Status(fiber.StatusOK).JSON(sub)
+	creatorID := middleware.ClaimsFromContext(ctx).UserID
+	sub, err := c.service.ApproveSubscriptionRequest(ctx.Context(), creatorID, requestID)
+	if err != nil {
+		return err
+	}
+	return ctx.JSON(httpx.OK(sub, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
-// RejectSubscriptionRequest отклонить запрос на подписку
-// POST /api/v1/subscriptions/requests/:requestId/reject
 func (c *Controller) RejectSubscriptionRequest(ctx *fiber.Ctx) error {
-	requestID := ctx.Params("requestId")
-
-	err := c.service.RejectSubscriptionRequest(ctx.Context(), requestID)
+	requestID, err := httpx.UUIDParam(ctx, "requestId")
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to reject subscription request")
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+		return err
 	}
-
+	creatorID := middleware.ClaimsFromContext(ctx).UserID
+	if err := c.service.RejectSubscriptionRequest(ctx.Context(), creatorID, requestID); err != nil {
+		return err
+	}
 	return ctx.Status(fiber.StatusNoContent).Send(nil)
 }
 
-// GetPendingRequests получить ожидающие запросы на подписку
-// GET /api/v1/subscriptions/requests/pending?page=1&limit=20
 func (c *Controller) GetPendingRequests(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-
-	page := ctx.QueryInt("page", 1)
-	limit := ctx.QueryInt("limit", 20)
-
-	if page < 1 || limit < 1 || limit > 100 {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid pagination parameters",
-		})
-	}
-
-	offset := (page - 1) * limit
-
-	requests, total, err := c.service.GetPendingRequests(ctx.Context(), userID, limit, offset)
+	query, err := httpx.BindQuery[paginationQuery](ctx, c.validate)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to get pending requests")
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "internal server error",
-		})
+		return err
 	}
-
-	hasMore := total > (page * limit)
-
-	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{
-		"items":    requests,
-		"total":    total,
-		"page":     page,
-		"pageSize": limit,
-		"hasMore":  hasMore,
-	})
+	if query.Page < 1 {
+		query.Page = 1
+	}
+	if query.Limit < 1 {
+		query.Limit = 20
+	}
+	offset := (query.Page - 1) * query.Limit
+	requests, total, err := c.service.GetPendingRequests(ctx.Context(), userID, query.Limit, offset)
+	if err != nil {
+		return err
+	}
+	hasMore := total > (query.Page * query.Limit)
+	return ctx.JSON(httpx.OK(PendingRequestsResponse{
+		Items:    requests,
+		Total:    total,
+		Page:     query.Page,
+		PageSize: query.Limit,
+		HasMore:  hasMore,
+	}, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
-// BlockUser заблокировать пользователя
-// POST /api/v1/subscriptions/block
 func (c *Controller) BlockUser(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-
-	var req BlockUserRequest
-	if err := ctx.BodyParser(&req); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid request body",
-		})
-	}
-
-	if err := c.validate.Struct(&req); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
-	}
-
-	err := c.service.BlockUser(ctx.Context(), userID, req.UserID)
+	req, err := httpx.BindBody[BlockUserRequest](ctx, c.validate)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to block user")
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+		return err
 	}
-
+	if err := c.service.BlockUser(ctx.Context(), userID, req.UserID); err != nil {
+		return err
+	}
 	return ctx.Status(fiber.StatusNoContent).Send(nil)
 }
 
-// UnblockUser разблокировать пользователя
-// DELETE /api/v1/subscriptions/block/:userId
 func (c *Controller) UnblockUser(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-	blockedUserID := ctx.Params("userId")
-
-	err := c.service.UnblockUser(ctx.Context(), userID, blockedUserID)
+	blockedUserID, err := httpx.UUIDParam(ctx, "userId")
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to unblock user")
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+		return err
 	}
-
+	if err := c.service.UnblockUser(ctx.Context(), userID, blockedUserID); err != nil {
+		return err
+	}
 	return ctx.Status(fiber.StatusNoContent).Send(nil)
 }
 
-// SetNotificationPreference установить настройки уведомлений
-// PUT /api/v1/subscriptions/:creatorId/notifications
 func (c *Controller) SetNotificationPreference(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-	creatorID := ctx.Params("creatorId")
-
-	var req UpdateSubscriptionNotificationPreferencesRequest
-	if err := ctx.BodyParser(&req); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid request body",
-		})
-	}
-
-	notifyMap := map[string]bool{
-		"post":  req.NotifyOnPost == nil || *req.NotifyOnPost,
-		"story": req.NotifyOnStory == nil || *req.NotifyOnStory,
-		"live":  req.NotifyOnLive == nil || *req.NotifyOnLive,
-		"clip":  req.NotifyOnClip == nil || *req.NotifyOnClip,
-	}
-
-	var muteUntil *time.Time
-	if req.MuteMinutes != nil && *req.MuteMinutes > 0 {
-		t := time.Now().Add(time.Duration(*req.MuteMinutes) * time.Minute)
-		muteUntil = &t
-	}
-
-	err := c.service.SetNotificationPreference(ctx.Context(), userID, creatorID, notifyMap, muteUntil)
+	creatorID, err := httpx.UUIDParam(ctx, "creatorId")
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to set notification preference")
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "internal server error",
-		})
+		return err
 	}
-
+	req, err := httpx.BindBody[UpdateSubscriptionNotificationPreferencesRequest](ctx, c.validate)
+	if err != nil {
+		return err
+	}
+	if err := c.service.SetNotificationPreference(ctx.Context(), userID, creatorID, req); err != nil {
+		return err
+	}
 	return ctx.Status(fiber.StatusNoContent).Send(nil)
 }
 
-// GetNotificationPreference получить настройки уведомлений
-// GET /api/v1/subscriptions/:creatorId/notifications
 func (c *Controller) GetNotificationPreference(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-	creatorID := ctx.Params("creatorId")
-
+	creatorID, err := httpx.UUIDParam(ctx, "creatorId")
+	if err != nil {
+		return err
+	}
 	pref, err := c.service.GetNotificationPreference(ctx.Context(), userID, creatorID)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to get notification preference")
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "internal server error",
-		})
+		return err
 	}
-
-	return ctx.Status(fiber.StatusOK).JSON(pref)
+	return ctx.JSON(httpx.OK(pref, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
-// GetSubscriptionStats получить статистику подписок
-// GET /api/v1/subscriptions/:userId/stats
 func (c *Controller) GetSubscriptionStats(ctx *fiber.Ctx) error {
 	userID := ctx.Params("userId")
-
 	if userID == "" {
 		userID = middleware.ClaimsFromContext(ctx).UserID
+	} else if _, err := httpx.UUIDParam(ctx, "userId"); err != nil {
+		return err
 	}
-
 	stats, err := c.service.GetSubscriptionStats(ctx.Context(), userID)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to get subscription stats")
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "internal server error",
-		})
+		return err
 	}
-
-	return ctx.Status(fiber.StatusOK).JSON(stats)
+	return ctx.JSON(httpx.OK(stats, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
-// RegisterRoutes регистрирует маршруты subscriptions модуля
 func (c *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Handler) {
 	group := router.Group("/subscriptions", requireAuth)
 
-	// Literal (static) routes first to avoid being shadowed by parameter routes.
 	group.Get("/following", c.GetSubscriptions)
 	group.Post("/requests", c.RequestSubscription)
 	group.Get("/requests/pending", c.GetPendingRequests)
@@ -423,20 +276,16 @@ func (c *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Handl
 	group.Post("/requests/:requestId/reject", c.RejectSubscriptionRequest)
 	group.Post("/block", c.BlockUser)
 
-	// Основные операции подписки
 	group.Post("/:creatorId", c.Subscribe)
 	group.Delete("/:creatorId", c.Unsubscribe)
 	group.Patch("/:creatorId/type", c.ChangeSubscriptionType)
 	group.Get("/:creatorId/status", c.IsSubscribed)
 
-	// Просмотр подписчиков и подписок
 	group.Get("/:userId/subscribers", c.GetSubscribers)
 	group.Get("/:userId/stats", c.GetSubscriptionStats)
 
-	// Блокировка
 	group.Delete("/block/:userId", c.UnblockUser)
 
-	// Настройки уведомлений
 	group.Get("/:creatorId/notifications", c.GetNotificationPreference)
 	group.Put("/:creatorId/notifications", c.SetNotificationPreference)
 }

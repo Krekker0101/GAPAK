@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,6 +29,8 @@ type dbConn interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
 }
+
+const eventTypeMessageCreated = "chat.message.created"
 
 type Repository struct {
 	db dbConn
@@ -402,6 +405,29 @@ func (r *Repository) ListChatMembers(ctx context.Context, chatID string, role st
 	return members, rows.Err()
 }
 
+func (r *Repository) ListChatMemberIDs(ctx context.Context, chatID string) ([]string, error) {
+	const query = `
+		SELECT user_id
+		FROM chat_members
+		WHERE chat_id = $1 AND deleted_at IS NULL AND left_at IS NULL
+		ORDER BY user_id ASC
+	`
+	rows, err := r.db.Query(ctx, query, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (r *Repository) AssertChatMembership(ctx context.Context, chatID, userID string) error {
 	const query = `
 		SELECT 1 FROM chat_members
@@ -430,11 +456,45 @@ func (r *Repository) CreateMessage(ctx context.Context, message *model.Message) 
 	}
 	defer tx.Rollback(ctx)
 
-	message.ID = uuid.NewString()
+	created, err := (&Repository{db: tx}).createMessageOnConn(ctx, message)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+// CreateMessageInTx persists the message and chat sequence on the caller's
+// transaction. It is used by the send-message transaction so the message,
+// envelopes, attachments, receipts and realtime outbox entry commit atomically.
+func (r *Repository) CreateMessageInTx(ctx context.Context, message *model.Message) (*model.Message, error) {
+	return r.createMessageOnConn(ctx, message)
+}
+
+func (r *Repository) createMessageOnConn(ctx context.Context, message *model.Message) (*model.Message, error) {
+	if message.ID == "" {
+		message.ID = uuid.NewString()
+	}
 	message.SentAt = time.Now().UTC()
 	message.CreatedAt = time.Now().UTC()
 	message.UpdatedAt = time.Now().UTC()
 	message.Status = enums.MessageStatusSent
+
+	// Fast-path retries: the client message ID is a durable idempotency key
+	// scoped to (chat, sender). Avoid allocating another sequence number when
+	// the same request is retried after a timeout.
+	if strings.TrimSpace(message.ClientMessageID) != "" {
+		existing, err := r.GetMessageByClientMessageID(ctx, message.ChatID, message.SenderID, message.ClientMessageID)
+		if err == nil && existing != nil {
+			*message = *existing
+			return existing, nil
+		}
+		if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
+			return nil, err
+		}
+	}
 
 	const seqQuery = `
 		UPDATE chats
@@ -443,8 +503,7 @@ func (r *Repository) CreateMessage(ctx context.Context, message *model.Message) 
 		WHERE id = $1 AND deleted_at IS NULL
 		RETURNING last_sequence_number
 	`
-	err = tx.QueryRow(ctx, seqQuery, message.ChatID).Scan(&message.SequenceNumber)
-	if err != nil {
+	if err := r.db.QueryRow(ctx, seqQuery, message.ChatID).Scan(&message.SequenceNumber); err != nil {
 		return nil, err
 	}
 
@@ -466,7 +525,7 @@ func (r *Repository) CreateMessage(ctx context.Context, message *model.Message) 
 		          expires_at, sent_at, edited_at, deleted_at, deleted_by_id, created_at, updated_at
 	`
 
-	created, err := r.scanMessage(tx.QueryRow(ctx, query,
+	created, err := r.scanMessage(r.db.QueryRow(ctx, query,
 		message.ID,
 		message.ChatID,
 		message.SenderID,
@@ -494,10 +553,21 @@ func (r *Repository) CreateMessage(ctx context.Context, message *model.Message) 
 		message.UpdatedAt,
 	))
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if message.ClientMessageID != "" && errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			existing, lookupErr := r.GetMessageByClientMessageID(ctx, message.ChatID, message.SenderID, message.ClientMessageID)
+			if lookupErr == nil && existing != nil {
+				*message = *existing
+				return existing, nil
+			}
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+		}
 		return nil, err
 	}
 
-	if _, err := tx.Exec(ctx, `
+	if _, err := r.db.Exec(ctx, `
 		UPDATE chats
 		SET last_message_id = $2,
 		    last_message_at = $3,
@@ -506,11 +576,39 @@ func (r *Repository) CreateMessage(ctx context.Context, message *model.Message) 
 	`, message.ChatID, created.ID, created.SentAt); err != nil {
 		return nil, err
 	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
 	return created, nil
+}
+
+func (r *Repository) AppendChatRealtimeEvent(ctx context.Context, eventID, chatID, eventType string, payload map[string]any) error {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	const query = `
+		INSERT INTO realtime_events (
+			id, channel, aggregate_type, aggregate_id, event_type, payload_json, relay_status, updated_at
+		) VALUES ($1, $2, 'chat', $3, $4, $5::jsonb, 'PENDING', NOW())
+	`
+	_, err = r.db.Exec(ctx, query, eventID, "chat:"+chatID, chatID, eventType, raw)
+	return err
+}
+
+func (r *Repository) AppendChatMessageRealtimeEvent(ctx context.Context, eventID, chatID, messageID, senderID, senderDeviceID, clientMessageID string, sequence int64) error {
+	payload := map[string]any{
+		"eventId":   eventID,
+		"type":      eventTypeMessageCreated,
+		"chatId":    chatID,
+		"messageId": messageID,
+		"senderId":  senderID,
+		"sequence":  sequence,
+	}
+	if senderDeviceID != "" {
+		payload["senderDeviceId"] = senderDeviceID
+	}
+	if clientMessageID != "" {
+		payload["clientMessageId"] = clientMessageID
+	}
+	return r.AppendChatRealtimeEvent(ctx, eventID, chatID, eventTypeMessageCreated, payload)
 }
 
 func (r *Repository) GetMessage(ctx context.Context, messageID string) (*model.Message, error) {
@@ -525,6 +623,19 @@ func (r *Repository) GetMessage(ctx context.Context, messageID string) (*model.M
 	`
 
 	return r.scanMessage(r.db.QueryRow(ctx, query, messageID))
+}
+
+func (r *Repository) GetMessageByClientMessageID(ctx context.Context, chatID, senderID, clientMessageID string) (*model.Message, error) {
+	const query = `
+		SELECT id, chat_id, sender_id, client_message_id, sender_device_id, sequence_number, type, status,
+		       ciphertext, nonce, sender_key_id, encryption_protocol, authentication_tag,
+		       encryption_algorithm, associated_data, ratchet_counter, content, metadata,
+		       reply_to_message_id, forwarded_from_message_id, forwarded_from_chat_id,
+		       expires_at, sent_at, edited_at, deleted_at, deleted_by_id, created_at, updated_at
+		FROM messages
+		WHERE chat_id = $1 AND sender_id = $2 AND client_message_id = $3
+		LIMIT 1`
+	return r.scanMessage(r.db.QueryRow(ctx, query, chatID, senderID, clientMessageID))
 }
 
 func (r *Repository) UpdateMessage(ctx context.Context, messageID string, updates map[string]interface{}) (*model.Message, error) {
@@ -578,6 +689,40 @@ func (r *Repository) DeleteMessage(ctx context.Context, messageID, deletedByID s
 		return err
 	}
 	return nil
+}
+
+func (r *Repository) GetMessagesAfterSequence(ctx context.Context, chatID, userID string, afterSequence int64, limit int) ([]*model.Message, error) {
+	if err := r.AssertChatMembership(ctx, chatID, userID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	const query = `
+		SELECT id, chat_id, sender_id, client_message_id, sender_device_id, sequence_number, type, status,
+		       ciphertext, nonce, sender_key_id, encryption_protocol, authentication_tag,
+		       encryption_algorithm, associated_data, ratchet_counter, content, metadata,
+		       reply_to_message_id, forwarded_from_message_id, forwarded_from_chat_id,
+		       expires_at, sent_at, edited_at, deleted_at, deleted_by_id, created_at, updated_at
+		FROM messages
+		WHERE chat_id = $1 AND sequence_number > $2 AND deleted_at IS NULL
+		ORDER BY sequence_number ASC, id ASC
+		LIMIT $3
+	`
+	rows, err := r.db.Query(ctx, query, chatID, afterSequence, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]*model.Message, 0, limit)
+	for rows.Next() {
+		item, err := r.scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (r *Repository) GetMessagesCursor(ctx context.Context, chatID, userID string, cursor *time.Time, cursorID *string, limit int, before bool) ([]*model.Message, error) {
@@ -1038,6 +1183,39 @@ func (r *Repository) GetMessageVersions(ctx context.Context, messageID string) (
 // ============================================================================
 // BATCH OPERATIONS
 // ============================================================================
+
+// EnsureOwnedReadyMedia verifies every attachment references media owned by the
+// sender and already finalized. The database foreign key alone only proves the
+// media exists; it does not prove the caller is authorized to attach it.
+func (r *Repository) EnsureOwnedReadyMedia(ctx context.Context, ownerID string, mediaIDs, thumbnailIDs []string) error {
+	seen := make(map[string]struct{}, len(mediaIDs)+len(thumbnailIDs))
+	all := make([]string, 0, len(mediaIDs)+len(thumbnailIDs))
+	for _, id := range append(append([]string{}, mediaIDs...), thumbnailIDs...) {
+		if _, ok := seen[id]; ok || strings.TrimSpace(id) == "" {
+			continue
+		}
+		seen[id] = struct{}{}
+		all = append(all, id)
+	}
+	if len(all) == 0 {
+		return nil
+	}
+	const query = `
+		SELECT COUNT(*)
+		FROM media_files
+		WHERE id = ANY($1::uuid[])
+		  AND owner_id = $2
+		  AND deleted_at IS NULL
+		  AND status = 'READY'`
+	var count int
+	if err := r.db.QueryRow(ctx, query, all, ownerID).Scan(&count); err != nil {
+		return err
+	}
+	if count != len(all) {
+		return apperrors.ErrForbidden
+	}
+	return nil
+}
 
 func (r *Repository) CreateAttachmentsBatch(ctx context.Context, attachments []*model.Attachment) error {
 	if len(attachments) == 0 {

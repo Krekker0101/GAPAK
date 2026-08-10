@@ -1,4 +1,0 @@
-./auth.go
-./csrf.go
-./rate_limit.go
-./request_logger.go

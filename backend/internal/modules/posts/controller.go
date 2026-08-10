@@ -1,6 +1,8 @@
 package posts
 
 import (
+	apperrors "github.com/gapak/backend/internal/platform/errors"
+	"github.com/gapak/backend/internal/platform/pagination"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 
@@ -43,6 +45,24 @@ func (ctl *Controller) clips(c *fiber.Ctx) error {
 	}
 	query.ContentType = "CLIP"
 	claims := middleware.ClaimsFromContext(c)
+	if query.Cursor != "" {
+		cursor, err := pagination.Decode(query.Cursor)
+		if err != nil {
+			return apperrors.New(400, "posts.cursor_invalid", "Invalid cursor")
+		}
+		response, next, err := ctl.service.FeedCursor(c.UserContext(), claims.UserID, &cursor, query.Limit, query.ContentType)
+		if err != nil {
+			return err
+		}
+		if next != nil {
+			encoded, encodeErr := pagination.Encode(*next)
+			if encodeErr != nil {
+				return encodeErr
+			}
+			c.Set("X-Next-Cursor", encoded)
+		}
+		return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+	}
 	response, err := ctl.service.Feed(c.UserContext(), claims.UserID, query.Page, query.Limit, query.ContentType)
 	if err != nil {
 		return err
@@ -56,6 +76,24 @@ func (ctl *Controller) feed(c *fiber.Ctx) error {
 		return err
 	}
 	claims := middleware.ClaimsFromContext(c)
+	if query.Cursor != "" {
+		cursor, err := pagination.Decode(query.Cursor)
+		if err != nil {
+			return apperrors.New(400, "posts.cursor_invalid", "Invalid cursor")
+		}
+		response, next, err := ctl.service.FeedCursor(c.UserContext(), claims.UserID, &cursor, query.Limit, query.ContentType)
+		if err != nil {
+			return err
+		}
+		if next != nil {
+			encoded, encodeErr := pagination.Encode(*next)
+			if encodeErr != nil {
+				return encodeErr
+			}
+			c.Set("X-Next-Cursor", encoded)
+		}
+		return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+	}
 	response, err := ctl.service.Feed(c.UserContext(), claims.UserID, query.Page, query.Limit, query.ContentType)
 	if err != nil {
 		return err

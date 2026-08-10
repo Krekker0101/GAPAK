@@ -7,10 +7,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
 )
+
+func nullableStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
 
 func metadataToBytes(metadata map[string]interface{}) ([]byte, error) {
 	if metadata == nil {
@@ -253,6 +262,9 @@ func (s *Service) UpdateChatMember(ctx context.Context, chatID, targetUserID, re
 	if targetUserID == requestingUserID && req.Role != "" {
 		return ChatMemberResponse{}, apperrors.ErrForbidden
 	}
+	if req.Role != "" && !canGrantChatRole(requestingMember.Role, enums.ChatMemberRole(req.Role)) {
+		return ChatMemberResponse{}, apperrors.ErrForbidden
+	}
 
 	updates := make(map[string]interface{})
 	if req.Role != "" {
@@ -271,6 +283,20 @@ func (s *Service) UpdateChatMember(ctx context.Context, chatID, targetUserID, re
 	}
 
 	return s.toChatMemberResponse(updatedMember), nil
+}
+
+func canGrantChatRole(actor, requested enums.ChatMemberRole) bool {
+	if requested == enums.ChatRoleOwner {
+		return false
+	}
+	switch actor {
+	case enums.ChatRoleOwner:
+		return requested == enums.ChatRoleAdmin || requested == enums.ChatRoleModerator || requested == enums.ChatRoleMember
+	case enums.ChatRoleAdmin:
+		return requested == enums.ChatRoleModerator || requested == enums.ChatRoleMember
+	default:
+		return false
+	}
 }
 
 func (s *Service) RemoveChatMember(ctx context.Context, chatID, targetUserID, requestingUserID string) error {
@@ -324,6 +350,17 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 	if err := s.validateKeyEnvelopeRecipients(ctx, chatID, req.KeyEnvelopes); err != nil {
 		return MessageResponse{}, err
 	}
+	mediaIDs := make([]string, 0, len(req.Attachments))
+	thumbnailIDs := make([]string, 0, len(req.Attachments))
+	for _, attachment := range req.Attachments {
+		mediaIDs = append(mediaIDs, attachment.MediaFileID)
+		if strings.TrimSpace(attachment.ThumbnailFileID) != "" {
+			thumbnailIDs = append(thumbnailIDs, attachment.ThumbnailFileID)
+		}
+	}
+	if err := s.repo.EnsureOwnedReadyMedia(ctx, userID, mediaIDs, thumbnailIDs); err != nil {
+		return MessageResponse{}, err
+	}
 	if req.SenderDeviceID != "" {
 		device, err := s.repo.GetTrustedDevice(ctx, req.SenderDeviceID)
 		if err != nil {
@@ -345,7 +382,9 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		return MessageResponse{}, err
 	}
 
+	candidateMessageID := uuid.NewString()
 	message := &model.Message{
+		ID:                     candidateMessageID,
 		ChatID:                 chatID,
 		SenderID:               userID,
 		ClientMessageID:        req.ClientMessageID,
@@ -376,9 +415,15 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 
 	repoTx := s.repo.WithTx(tx)
 
-	createdMessage, err := repoTx.CreateMessage(ctx, message)
+	createdMessage, err := repoTx.CreateMessageInTx(ctx, message)
 	if err != nil {
 		return MessageResponse{}, err
+	}
+	// A retry can race with the first request. CreateMessage returns the
+	// already-persisted row in that case. Do not create duplicate envelopes,
+	// attachments, receipts, sequence numbers, or realtime events.
+	if createdMessage.ID != candidateMessageID {
+		return s.toMessageResponse(ctx, createdMessage, userID, nil, nil)
 	}
 	if len(req.KeyEnvelopes) > 0 {
 		envelopes, err := s.toMessageKeyModels(createdMessage.ID, req.SenderDeviceID, req.KeyEnvelopes)
@@ -432,6 +477,11 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		if err := repoTx.MarkMessagesAsDeliveredBatch(ctx, createdMessage.ID, recipientIDs); err != nil {
 			return MessageResponse{}, err
 		}
+	}
+
+	eventID := uuid.NewString()
+	if err := repoTx.AppendChatMessageRealtimeEvent(ctx, eventID, createdMessage.ChatID, createdMessage.ID, createdMessage.SenderID, nullableStringValue(createdMessage.SenderDeviceID), createdMessage.ClientMessageID, createdMessage.SequenceNumber); err != nil {
+		return MessageResponse{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -536,6 +586,14 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 		}
 	}
 
+	eventID := uuid.NewString()
+	if err := repoTx.AppendChatRealtimeEvent(ctx, eventID, message.ChatID, "chat.message.edited", map[string]any{
+		"eventId": eventID, "type": "chat.message.edited", "chatId": message.ChatID,
+		"messageId": updatedMessage.ID, "senderId": updatedMessage.SenderID, "sequence": updatedMessage.SequenceNumber,
+	}); err != nil {
+		return MessageResponse{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return MessageResponse{}, err
 	}
@@ -554,7 +612,57 @@ func (s *Service) DeleteMessage(ctx context.Context, messageID, userID string, r
 		return apperrors.ErrForbidden
 	}
 
-	return s.repo.DeleteMessage(ctx, messageID, userID, req.DeleteForEveryone)
+	if !req.DeleteForEveryone {
+		return nil
+	}
+	tx, err := s.repo.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	repoTx := s.repo.WithTx(tx)
+	if err := repoTx.DeleteMessage(ctx, messageID, userID, true); err != nil {
+		return err
+	}
+	eventID := uuid.NewString()
+	if err := repoTx.AppendChatRealtimeEvent(ctx, eventID, message.ChatID, "chat.message.deleted", map[string]any{
+		"eventId": eventID, "type": "chat.message.deleted", "chatId": message.ChatID,
+		"messageId": message.ID, "senderId": message.SenderID, "sequence": message.SequenceNumber,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// GetMessagesAfterSequence recovers messages missed while a client was offline.
+// Sequence numbers are monotonic per chat, so this is deterministic and avoids
+// timestamp ambiguity during reconnect.
+func (s *Service) GetMessagesAfterSequence(ctx context.Context, chatID, userID string, afterSequence int64, limit int) ([]MessageResponse, error) {
+	messages, err := s.repo.GetMessagesAfterSequence(ctx, chatID, userID, afterSequence, limit)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(messages))
+	for i, message := range messages {
+		ids[i] = message.ID
+	}
+	attachmentMap, err := s.repo.GetAttachmentsByMessageIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	keyEnvelopeMap, err := s.repo.GetMessageKeyEnvelopesForUsers(ctx, ids, userID)
+	if err != nil {
+		return nil, err
+	}
+	response := make([]MessageResponse, 0, len(messages))
+	for _, message := range messages {
+		item, err := s.toMessageResponse(ctx, message, userID, attachmentMap[message.ID], keyEnvelopeMap[message.ID])
+		if err != nil {
+			return nil, err
+		}
+		response = append(response, item)
+	}
+	return response, nil
 }
 
 func (s *Service) GetMessages(ctx context.Context, chatID, userID string, query ListMessagesQuery) ([]MessageResponse, *CursorPaginationResponse, error) {
@@ -707,6 +815,13 @@ func (s *Service) GetReactions(ctx context.Context, messageID, userID string, qu
 // ============================================================================
 // READ/DELIVERY RECEIPT OPERATIONS
 // ============================================================================
+
+func (s *Service) ListChatMemberIDs(ctx context.Context, chatID, userID string) ([]string, error) {
+	if err := s.repo.AssertChatMembership(ctx, chatID, userID); err != nil {
+		return nil, err
+	}
+	return s.repo.ListChatMemberIDs(ctx, chatID)
+}
 
 func (s *Service) MarkAsRead(ctx context.Context, chatID, userID string, req MarkAsReadRequest) (ReadReceiptResponse, error) {
 	message, err := s.repo.GetMessage(ctx, req.MessageID)

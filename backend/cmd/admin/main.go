@@ -28,7 +28,7 @@ func main() {
 		exitf("%v", err)
 	}
 
-	db, err := database.NewPostgres(ctx, cfg.Database)
+	db, err := database.NewPostgres(ctx, cfg.Database, nil)
 	if err != nil {
 		exitf("connect postgres: %v", err)
 	}

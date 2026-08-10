@@ -6,13 +6,13 @@ import "time"
 type MentionType string
 
 const (
-	MentionTypeChat          MentionType = "chat"
-	MentionTypeComment       MentionType = "comment"
-	MentionTypePost          MentionType = "post"
-	MentionTypeStory         MentionType = "story"
-	MentionTypeRoom          MentionType = "room"
-	MentionTypeCommunity     MentionType = "community"
-	MentionTypeProject       MentionType = "project"
+	MentionTypeChat            MentionType = "chat"
+	MentionTypeComment         MentionType = "comment"
+	MentionTypePost            MentionType = "post"
+	MentionTypeStory           MentionType = "story"
+	MentionTypeRoom            MentionType = "room"
+	MentionTypeCommunity       MentionType = "community"
+	MentionTypeProject         MentionType = "project"
 	MentionTypeAICollaboration MentionType = "ai_collaboration"
 )
 
@@ -29,18 +29,18 @@ const (
 
 // Mention represents a user mention in content
 type Mention struct {
-	ID                  string       `json:"id" db:"id"`
-	MentionedUserID      string       `json:"mentioned_user_id" db:"mentioned_user_id"`
-	MentionedByUsername  string       `json:"mentioned_by_username" db:"mentioned_by_username"`
-	MentionedByDisplayName string     `json:"mentioned_by_display_name" db:"mentioned_by_display_name"`
-	MentionedByAvatar    *string      `json:"mentioned_by_avatar,omitempty" db:"mentioned_by_avatar"`
-	Type                MentionType  `json:"type" db:"type"`
-	Content             string       `json:"content" db:"content"`
-	ContextID           string       `json:"context_id" db:"context_id"`
-	ContextType         string       `json:"context_type" db:"context_type"`
-	CreatedAt           time.Time    `json:"created_at" db:"created_at"`
-	IsRead              bool         `json:"is_read" db:"is_read"`
-	
+	ID                     string      `json:"id" db:"id"`
+	MentionedUserID        string      `json:"mentioned_user_id" db:"mentioned_user_id"`
+	MentionedByUsername    string      `json:"mentioned_by_username" db:"mentioned_by_username"`
+	MentionedByDisplayName string      `json:"mentioned_by_display_name" db:"mentioned_by_display_name"`
+	MentionedByAvatar      *string     `json:"mentioned_by_avatar,omitempty" db:"mentioned_by_avatar"`
+	Type                   MentionType `json:"type" db:"type"`
+	Content                string      `json:"content" db:"content"`
+	ContextID              string      `json:"context_id" db:"context_id"`
+	ContextType            string      `json:"context_type" db:"context_type"`
+	CreatedAt              time.Time   `json:"created_at" db:"created_at"`
+	IsRead                 bool        `json:"is_read" db:"is_read"`
+
 	// Optional metadata for navigation
 	PostID      *string `json:"post_id,omitempty" db:"post_id"`
 	CommentID   *string `json:"comment_id,omitempty" db:"comment_id"`

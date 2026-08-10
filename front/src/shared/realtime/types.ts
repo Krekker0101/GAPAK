@@ -1,0 +1,4 @@
+export type RealtimeConnectionState = 'DISCONNECTED'|'CONNECTING'|'CONNECTED'|'RECONNECTING'|'AUTHENTICATION_FAILED'|'SERVER_SHUTDOWN'|'OFFLINE';
+export type RealtimeEventType = 'connection.state'|'chat.subscribe'|'chat.unsubscribe'|'message.new'|'message.ack'|'message.status'|'message.updated'|'message.deleted'|'notification.new'|'notification.updated'|'presence.update'|'typing.update'|'receipt.update'|'story.update'|'live.update'|'live.chat.message'|'security.alert'|'connection.update'|'system.ping'|'system.pong'|'error';
+export interface RealtimeEvent<T=unknown>{id:string;type:RealtimeEventType;timestamp:string;payload:T;correlationId?:string;chatId?:string;version?:number}
+export interface RealtimeEnvelope<T=unknown>{id?:string;type:string;timestamp?:string;payload?:T;correlationId?:string;chatId?:string;version?:number}

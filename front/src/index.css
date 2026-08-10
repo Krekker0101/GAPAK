@@ -1,0 +1,15 @@
+@import "tailwindcss";
+@import "./shared/design-system/tokens.css";
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::-webkit-scrollbar { width: 7px; height: 7px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--color-border-strong); border-radius: var(--radius-pill); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+}

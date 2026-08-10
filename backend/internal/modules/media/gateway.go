@@ -1,13 +1,16 @@
 package media
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -43,6 +46,8 @@ type ProtectedObject struct {
 	FileName string
 }
 
+const maxHLSPlaylistBytes = 1 << 20
+
 func (s *Service) UploadPart(ctx context.Context, query SignedUploadQuery, body io.Reader, partSize int64, requestContentType string) (string, error) {
 	expiresAt, err := parseSignedExpiry(query.ExpiresAt)
 	if err != nil {
@@ -58,6 +63,7 @@ func (s *Service) UploadPart(ctx context.Context, query SignedUploadQuery, body 
 		query.ObjectKey,
 		query.UploadSessionID,
 		strconv.Itoa(query.PartNumber),
+		query.ContentType,
 		query.ExpiresAt,
 	)
 	if !secureEqual(query.Signature, expectedSignature) {
@@ -75,9 +81,9 @@ func (s *Service) UploadPart(ctx context.Context, query SignedUploadQuery, body 
 		return "", apperrors.New(400, "media.part_number_out_of_range", "Upload part number is outside the allowed range")
 	}
 
-	expectedContentType := strings.TrimSpace(query.ContentType)
-	if expectedContentType == "" {
-		expectedContentType = session.MimeType
+	expectedContentType := strings.TrimSpace(session.MimeType)
+	if !strings.EqualFold(strings.TrimSpace(query.ContentType), expectedContentType) {
+		return "", apperrors.New(403, "media.content_type_signature_invalid", "Signed content type is invalid")
 	}
 	if requestContentType != "" && !strings.EqualFold(strings.TrimSpace(requestContentType), expectedContentType) {
 		return "", apperrors.New(400, "media.content_type_mismatch", "Uploaded part content type does not match the signed request")
@@ -130,6 +136,28 @@ func (s *Service) FinalizeUploadedObject(ctx context.Context, session *model.Upl
 	}
 
 	if err := s.store.ComposeObject(ctx, session.Bucket, session.ObjectKey, partKeys); err != nil {
+		return err
+	}
+
+	reader, objectSize, _, err := s.store.GetObject(ctx, session.Bucket, session.ObjectKey)
+	if err != nil {
+		_ = s.store.DeleteObjects(ctx, session.Bucket, []string{session.ObjectKey})
+		return apperrors.New(400, "media.object_verification_failed", "Uploaded object could not be verified")
+	}
+	hash := sha256.New()
+	written, copyErr := io.Copy(hash, reader)
+	_ = reader.Close()
+	if copyErr != nil || written != session.SizeBytes || objectSize != session.SizeBytes {
+		_ = s.store.DeleteObjects(ctx, session.Bucket, []string{session.ObjectKey})
+		return apperrors.New(400, "media.object_size_invalid", "Uploaded object size does not match the declared size")
+	}
+	checksum := hex.EncodeToString(hash.Sum(nil))
+	if sessionChecksum, ok := s.repo.GetMediaChecksum(ctx, session.MediaFileID); ok && sessionChecksum != "" && !secureEqual(sessionChecksum, checksum) {
+		_ = s.store.DeleteObjects(ctx, session.Bucket, []string{session.ObjectKey})
+		return apperrors.New(400, "media.checksum_mismatch", "Uploaded object checksum does not match the declared checksum")
+	}
+	if err := s.repo.UpdateMediaChecksum(ctx, session.MediaFileID, checksum); err != nil {
+		_ = s.store.DeleteObjects(ctx, session.Bucket, []string{session.ObjectKey})
 		return err
 	}
 
@@ -208,12 +236,124 @@ func (s *Service) ResolvePlayback(ctx context.Context, query SignedPlaybackQuery
 		mime = playbackMIMEType(mediaFile.ObjectKey, mediaFile.MimeType)
 	}
 
+	if mime == "application/vnd.apple.mpegurl" || strings.HasSuffix(strings.ToLower(query.ObjectKey), ".m3u8") {
+		playlist, err := s.rewriteHLSPlaylist(ctx, query, mediaFile.ID, reader)
+		if err != nil {
+			_ = reader.Close()
+			return nil, err
+		}
+		_ = reader.Close()
+		return &ProtectedObject{
+			Body:     io.NopCloser(bytes.NewReader(playlist)),
+			Size:     int64(len(playlist)),
+			MIMEType: "application/vnd.apple.mpegurl",
+			FileName: fileName,
+		}, nil
+	}
+
 	return &ProtectedObject{
 		Body:     reader,
 		Size:     size,
 		MIMEType: mime,
 		FileName: fileName,
 	}, nil
+}
+
+// rewriteHLSPlaylist converts only relative, database-authorized HLS object
+// references into short-lived signed gateway URLs. Static playlists cannot
+// safely point at unsigned segment paths, and a per-request playback session
+// must remain valid across every segment request.
+func (s *Service) rewriteHLSPlaylist(ctx context.Context, query SignedPlaybackQuery, mediaID string, reader io.Reader) ([]byte, error) {
+	limited := io.LimitReader(reader, maxHLSPlaylistBytes+1)
+	raw, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, apperrors.New(400, "media.hls_playlist_read_failed", "Playback playlist could not be read")
+	}
+	if len(raw) > maxHLSPlaylistBytes {
+		return nil, apperrors.New(413, "media.hls_playlist_too_large", "Playback playlist exceeds the allowed size")
+	}
+
+	baseObject := query.ObjectKey
+	baseDir := path.Dir(baseObject)
+	lines := strings.Split(string(raw), "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#EXT-X-VERSION") || strings.HasPrefix(trimmed, "#EXTM3U") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			rewritten, err := rewriteURIAttribute(line, func(uri string) (string, error) {
+				return s.signHLSObject(ctx, query, mediaID, baseDir, uri)
+			})
+			if err != nil {
+				return nil, err
+			}
+			lines[i] = rewritten
+			continue
+		}
+		signed, err := s.signHLSObject(ctx, query, mediaID, baseDir, trimmed)
+		if err != nil {
+			return nil, err
+		}
+		lines[i] = strings.Replace(line, trimmed, signed, 1)
+	}
+	return []byte(strings.Join(lines, "\n")), nil
+}
+
+func rewriteURIAttribute(line string, sign func(string) (string, error)) (string, error) {
+	const prefix = `URI="`
+	start := 0
+	for {
+		rel := strings.Index(line[start:], prefix)
+		if rel < 0 {
+			return line, nil
+		}
+		rel += start
+		valueStart := rel + len(prefix)
+		valueEndRel := strings.IndexByte(line[valueStart:], '"')
+		if valueEndRel < 0 {
+			return "", apperrors.New(403, "media.hls_uri_invalid", "Playback playlist contains a malformed URI attribute")
+		}
+		valueEnd := valueStart + valueEndRel
+		uri := line[valueStart:valueEnd]
+		signed, err := sign(uri)
+		if err != nil {
+			return "", err
+		}
+		line = line[:valueStart] + signed + line[valueEnd:]
+		start = valueStart + len(signed) + 1
+	}
+}
+
+func (s *Service) signHLSObject(ctx context.Context, query SignedPlaybackQuery, mediaID, baseDir, rawURI string) (string, error) {
+	rawURI = strings.TrimSpace(rawURI)
+	parsed, err := url.Parse(rawURI)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || strings.HasPrefix(parsed.Path, "/") {
+		return "", apperrors.New(403, "media.hls_uri_invalid", "Playback playlist contains an invalid object reference")
+	}
+	if parsed.Path == "" {
+		return "", apperrors.New(403, "media.hls_uri_invalid", "Playback playlist contains an empty object reference")
+	}
+	objectKey := path.Clean(path.Join(baseDir, parsed.Path))
+	if objectKey == "." || strings.HasPrefix(objectKey, "../") || objectKey == ".." {
+		return "", apperrors.New(403, "media.hls_uri_invalid", "Playback playlist contains an unsafe object reference")
+	}
+	allowed, err := s.repo.playbackObjectAllowed(ctx, mediaID, query.Bucket, query.ObjectKey, query.Bucket, objectKey)
+	if err != nil {
+		return "", err
+	}
+	if !allowed {
+		return "", apperrors.ErrForbidden
+	}
+	base := strings.TrimRight(s.config.Storage.ProtectedBaseURL, "/")
+	values := url.Values{}
+	values.Set("bucket", query.Bucket)
+	values.Set("objectKey", objectKey)
+	values.Set("grantId", query.GrantID)
+	values.Set("viewerUserId", query.ViewerUserID)
+	values.Set("expiresAt", query.ExpiresAt)
+	values.Set("signature", s.gatewaySignature("GET", query.Bucket, objectKey, query.GrantID, query.ViewerUserID, query.ExpiresAt))
+	return base + "/object?" + values.Encode(), nil
 }
 
 func playbackMIMEType(path, fallback string) string {

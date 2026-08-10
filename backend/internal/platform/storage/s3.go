@@ -203,6 +203,23 @@ func (s *S3Storage) DeleteObjects(ctx context.Context, bucket string, objectKeys
 	return nil
 }
 
+func (s *S3Storage) ListObjects(ctx context.Context, bucket, prefix string, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 10000
+	}
+	items := make([]string, 0, minInt(limit, 128))
+	for item := range s.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if item.Err != nil {
+			return nil, item.Err
+		}
+		items = append(items, item.Key)
+		if len(items) >= limit {
+			break
+		}
+	}
+	return items, nil
+}
+
 func (s *S3Storage) ResolvePartKey(objectKey string, partNumber int) string {
 	return fmt.Sprintf("%s.part.%d", objectKey, partNumber)
 }

@@ -50,11 +50,11 @@ func (s *Service) RequestMeta(c *fiber.Ctx, deviceName, deviceFingerprint string
 }
 
 func (s *Service) RateLimitKey(c *fiber.Ctx) string {
-	return s.HashToken(strings.Join([]string{
-		strings.TrimSpace(s.ClientIP(c)),
-		strings.TrimSpace(c.Get(fiber.HeaderUserAgent)),
-		strings.TrimSpace(c.Get(fiber.HeaderAcceptLanguage)),
-	}, "|"))
+	// Security rate limits must not depend on attacker-controlled headers such
+	// as User-Agent or Accept-Language; otherwise rotating them trivially
+	// creates a new bucket. Proxy headers are only trusted when explicitly
+	// enabled by the deployment configuration.
+	return s.HashToken(strings.TrimSpace(s.ClientIP(c)))
 }
 
 func (s *Service) ClientIP(c *fiber.Ctx) string {

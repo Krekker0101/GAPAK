@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +32,7 @@ func (r *Repository) FindUserByLogin(ctx context.Context, login string) (*model.
 	const query = `
 		SELECT id, email, username, display_name, password_hash, role, account_status,
 		       is_anonymous, two_factor_enabled, two_factor_secret_ciphertext, two_factor_secret_nonce,
+		       failed_login_attempts, locked_until,
 		       created_at, updated_at, deleted_at
 		FROM users
 		WHERE deleted_at IS NULL AND (email = $1 OR username = $1)
@@ -50,6 +53,31 @@ func (r *Repository) FindUserByID(ctx context.Context, userID string) (*model.Us
 
 	row := r.db.QueryRow(ctx, query, userID)
 	return scanUserPublic(row)
+}
+
+func (r *Repository) IncrementFailedLoginAttempts(ctx context.Context, userID string, maxAttempts int, lockoutDuration time.Duration) (bool, error) {
+	const query = `
+		UPDATE users
+		SET failed_login_attempts = failed_login_attempts + 1,
+		    locked_until = CASE
+		        WHEN failed_login_attempts + 1 >= $2 THEN NOW() + $3::interval
+		        ELSE locked_until
+		    END,
+		    updated_at = NOW()
+		WHERE id = $1
+		RETURNING failed_login_attempts, (locked_until IS NOT NULL AND locked_until > NOW()) AS is_locked`
+	var attempts int
+	var isLocked bool
+	if err := r.db.QueryRow(ctx, query, userID, maxAttempts, fmt.Sprintf("%d seconds", int(lockoutDuration.Seconds()))).Scan(&attempts, &isLocked); err != nil {
+		return false, err
+	}
+	return isLocked, nil
+}
+
+func (r *Repository) ResetFailedLoginAttempts(ctx context.Context, userID string) error {
+	const query = `UPDATE users SET failed_login_attempts = 0, locked_until = NULL, updated_at = NOW() WHERE id = $1`
+	_, err := r.db.Exec(ctx, query, userID)
+	return err
 }
 
 func (r *Repository) CreateUser(ctx context.Context, req RegisterRequest, email *string, passwordHash string, isAnonymous bool, defaults privacy.PrivacyDefaults) (*model.User, error) {
@@ -144,12 +172,18 @@ func (r *Repository) FindSessionByID(ctx context.Context, sessionID string) (*mo
 	return scanSession(row)
 }
 
-func (r *Repository) RotateSession(ctx context.Context, sessionID, refreshTokenHash string, expiresAt time.Time) error {
+func (r *Repository) RotateSession(ctx context.Context, sessionID, expectedRefreshTokenHash, nextRefreshTokenHash string, expiresAt time.Time) error {
+	// Compare-and-swap the refresh-token hash so a refresh token can only be
+	// rotated once. A plain UPDATE by session ID is vulnerable to concurrent
+	// refresh requests both succeeding with the same old token.
 	const query = `
 		UPDATE device_sessions
-		SET refresh_token_hash = $2, last_used_at = NOW(), expires_at = $3
-		WHERE id = $1 AND revoked_at IS NULL`
-	tag, err := r.db.Exec(ctx, query, sessionID, refreshTokenHash, expiresAt)
+		SET refresh_token_hash = $3, last_used_at = NOW(), expires_at = $4
+		WHERE id = $1
+		  AND refresh_token_hash = $2
+		  AND revoked_at IS NULL
+		  AND expires_at > NOW()`
+	tag, err := r.db.Exec(ctx, query, sessionID, expectedRefreshTokenHash, nextRefreshTokenHash, expiresAt)
 	if err != nil {
 		return err
 	}
@@ -217,6 +251,51 @@ func (r *Repository) MarkPasswordResetUsed(ctx context.Context, tokenID string) 
 	const query = `UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1`
 	_, err := r.db.Exec(ctx, query, tokenID)
 	return err
+}
+
+// ResetPasswordWithToken atomically validates and consumes a password reset
+// token while changing the password. This prevents two concurrent requests
+// from both successfully using the same reset token.
+func (r *Repository) ResetPasswordWithToken(ctx context.Context, tokenHash, passwordHash string) (string, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+
+	var tokenID, userID string
+	var expiresAt time.Time
+	var usedAt sql.NullTime
+	if err := tx.QueryRow(ctx, `
+		SELECT id, user_id, expires_at, used_at
+		FROM password_reset_tokens
+		WHERE token_hash = $1
+		FOR UPDATE`, tokenHash).Scan(&tokenID, &userID, &expiresAt, &usedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", apperrors.ErrNotFound
+		}
+		return "", err
+	}
+	if usedAt.Valid || !expiresAt.After(time.Now().UTC()) {
+		return "", apperrors.ErrNotFound
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE users
+		SET password_hash = $2, password_changed_at = NOW(), updated_at = NOW()
+		WHERE id = $1`, userID, passwordHash); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE password_reset_tokens
+		SET used_at = NOW()
+		WHERE id = $1 AND used_at IS NULL`, tokenID); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return userID, nil
 }
 
 func (r *Repository) UpsertTwoFactorSetupChallenge(ctx context.Context, userID, sessionID, secretCiphertext, secretNonce string, expiresAt time.Time, maxAttempts int) error {
@@ -383,6 +462,7 @@ func scanUser(row pgx.Row) (*model.User, error) {
 	var email sql.NullString
 	var twoFactorCiphertext sql.NullString
 	var twoFactorNonce sql.NullString
+	var lockedUntil sql.NullTime
 	if err := row.Scan(
 		&user.ID,
 		&email,
@@ -395,6 +475,8 @@ func scanUser(row pgx.Row) (*model.User, error) {
 		&user.TwoFactorEnabled,
 		&twoFactorCiphertext,
 		&twoFactorNonce,
+		&user.FailedLoginAttempts,
+		&lockedUntil,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 		&user.DeletedAt,
@@ -414,6 +496,9 @@ func scanUser(row pgx.Row) (*model.User, error) {
 	}
 	if twoFactorNonce.Valid {
 		user.TwoFactorSecretNonce = &twoFactorNonce.String
+	}
+	if lockedUntil.Valid {
+		user.LockedUntil = &lockedUntil.Time
 	}
 	return &user, nil
 }
@@ -470,4 +555,185 @@ func scanSession(row pgx.Row) (*model.DeviceSession, error) {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func (r *Repository) FindSocialAccount(ctx context.Context, provider, providerUserID string) (*model.SocialAccount, error) {
+	const query = `
+		SELECT id, user_id, provider, provider_user_id, email, display_name, avatar_url, created_at, updated_at
+		FROM social_accounts
+		WHERE provider = $1 AND provider_user_id = $2
+		LIMIT 1`
+	row := r.db.QueryRow(ctx, query, provider, providerUserID)
+	return scanSocialAccount(row)
+}
+
+func (r *Repository) FindSocialAccountByEmail(ctx context.Context, provider, email string) (*model.SocialAccount, error) {
+	const query = `
+		SELECT id, user_id, provider, provider_user_id, email, display_name, avatar_url, created_at, updated_at
+		FROM social_accounts
+		WHERE provider = $1 AND email = $2
+		LIMIT 1`
+	row := r.db.QueryRow(ctx, query, provider, email)
+	return scanSocialAccount(row)
+}
+
+func (r *Repository) CreateSocialAccount(ctx context.Context, userID, provider, providerUserID, email, displayName, avatarURL string) (*model.SocialAccount, error) {
+	const query = `
+		INSERT INTO social_accounts (id, user_id, provider, provider_user_id, email, display_name, avatar_url, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+		RETURNING id, user_id, provider, provider_user_id, email, display_name, avatar_url, created_at, updated_at`
+	id := uuid.NewString()
+	row := r.db.QueryRow(ctx, query, id, userID, provider, providerUserID,
+		nullIfEmpty(email), nullIfEmpty(displayName), nullIfEmpty(avatarURL))
+	return scanSocialAccount(row)
+}
+
+func (r *Repository) CreateUserFromOAuth(ctx context.Context, email, displayName, avatarURL, username string) (*model.User, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	userID := uuid.NewString()
+	const userQuery = `
+		INSERT INTO users (id, email, username, display_name, password_hash, role, account_status, is_anonymous, email_verified_at, updated_at)
+		VALUES ($1, $2, $3, $4, '', $5, $6, false, NOW(), NOW())
+		RETURNING id, email, username, display_name, role, account_status,
+		          is_anonymous, two_factor_enabled, created_at, updated_at, deleted_at`
+
+	user, err := scanUserPublic(tx.QueryRow(ctx, userQuery,
+		userID,
+		nullIfEmpty(email),
+		username,
+		displayName,
+		string(enums.RoleUser),
+		string(enums.AccountStatusActive),
+	))
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, apperrors.ErrConflict
+		}
+		return nil, err
+	}
+
+	const privacyQuery = `
+		INSERT INTO user_privacy_settings
+			(user_id, profile_visibility, last_seen_visibility, allow_friend_requests, allow_trusted_invites,
+			 searchable_by_email, searchable_by_username, post_default_privacy, show_online_status, updated_at)
+		VALUES ($1, 'CONNECTIONS', 'CONNECTIONS', true, true, false, true, 'FRIENDS', true, NOW())`
+
+	if _, err := tx.Exec(ctx, privacyQuery, userID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+func (r *Repository) FindUserByEmail(ctx context.Context, email string) (*model.User, error) {
+	const query = `
+		SELECT id, email, username, display_name, role, account_status,
+		       is_anonymous, two_factor_enabled,
+		       created_at, updated_at, deleted_at
+		FROM users
+		WHERE deleted_at IS NULL AND email = $1
+		LIMIT 1`
+	row := r.db.QueryRow(ctx, query, email)
+	return scanUserPublic(row)
+}
+
+func (r *Repository) LinkSocialAccount(ctx context.Context, userID, provider, providerUserID, email, displayName, avatarURL string) error {
+	const query = `
+		INSERT INTO social_accounts (id, user_id, provider, provider_user_id, email, display_name, avatar_url, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+		ON CONFLICT (provider, provider_user_id) DO UPDATE SET
+			email = EXCLUDED.email,
+			display_name = EXCLUDED.display_name,
+			avatar_url = EXCLUDED.avatar_url,
+			updated_at = NOW()`
+	_, err := r.db.Exec(ctx, query, uuid.NewString(), userID, provider, providerUserID,
+		nullIfEmpty(email), nullIfEmpty(displayName), nullIfEmpty(avatarURL))
+	return err
+}
+
+func (r *Repository) GenerateUniqueUsername(ctx context.Context, base string) (string, error) {
+	base = strings.ToLower(strings.TrimSpace(base))
+	if base == "" {
+		base = "user"
+	}
+	// Remove non-alphanumeric characters
+	cleaned := ""
+	for _, c := range base {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+			cleaned += string(c)
+		}
+	}
+	if cleaned == "" {
+		cleaned = "user"
+	}
+	if len(cleaned) > 28 {
+		cleaned = cleaned[:28]
+	}
+
+	candidate := cleaned
+	for i := 0; i < 100; i++ {
+		var exists bool
+		err := r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)`, candidate).Scan(&exists)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+		candidate = fmt.Sprintf("%s%d", cleaned[:min(len(cleaned), 24)], i+1)
+	}
+	return "", fmt.Errorf("unable to generate unique username for base: %s", base)
+}
+
+func scanSocialAccount(row pgx.Row) (*model.SocialAccount, error) {
+	var sa model.SocialAccount
+	var email, displayName, avatarURL sql.NullString
+	if err := row.Scan(
+		&sa.ID,
+		&sa.UserID,
+		&sa.Provider,
+		&sa.ProviderUserID,
+		&email,
+		&displayName,
+		&avatarURL,
+		&sa.CreatedAt,
+		&sa.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	if email.Valid {
+		sa.Email = &email.String
+	}
+	if displayName.Valid {
+		sa.DisplayName = &displayName.String
+	}
+	if avatarURL.Valid {
+		sa.AvatarURL = &avatarURL.String
+	}
+	return &sa, nil
+}
+
+func nullIfEmpty(s string) interface{} {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

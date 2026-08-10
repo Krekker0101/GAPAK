@@ -76,4 +76,5 @@ var (
 	ErrDependencyUnavailable = New(http.StatusServiceUnavailable, "dependency.unavailable", "Required dependency is temporarily unavailable")
 	ErrInternal              = New(http.StatusInternalServerError, "internal.server_error", "Internal server error")
 	ErrNotImplemented        = New(http.StatusNotImplemented, "feature.not_implemented", "Feature is scaffolded but not fully implemented yet")
+	ErrAccountLocked         = New(http.StatusTooManyRequests, "auth.account_locked", "Account is temporarily locked. Try again later")
 )

@@ -5,7 +5,7 @@
 ### ✅ Fixed Issues
 1. **Database Connection Error (SQLSTATE 28P01)** - Authentication failed
    - **Root Cause**: `.env` file used `postgresql://postgres@127.0.0.1:5432/gapak` (wrong user)
-   - **Fix**: Changed to `postgresql://gapak:gapak@127.0.0.1:5432/gapak` to match docker-compose credentials
+   - **Fix**: Changed to `postgresql://gapak@127.0.0.1:5432/gapak` to match docker-compose credentials
    
 2. **Configuration Validation Errors**
    - **JWT Secrets**: Were too short (< 32 chars) ✅ Fixed
@@ -60,7 +60,7 @@ DATABASE_URL=postgres://user:password@db.example.com:5432/postgres?sslmode=requi
 
 # Previous configurations (for reference):
 # DATABASE_URL=postgresql://postgres:5433@127.0.0.1:5432/gapak?sslmode=disable
-# DATABASE_URL=postgresql://gapak:gapak@127.0.0.1:5432/gapak?sslmode=disable
+# DATABASE_URL=postgresql://gapak@127.0.0.1:5432/gapak?sslmode=disable
 
 # Secrets (ALL must be present and at least minimum length)
 JWT_ACCESS_SECRET=<minimum 32 characters>
@@ -258,7 +258,7 @@ backend/
 
 | Variable | Purpose | Min Length | Example |
 |----------|---------|-----------|---------|
-| DATABASE_URL | PostgreSQL connection | - | postgresql://gapak:gapak@localhost/gapak |
+| DATABASE_URL | PostgreSQL connection | - | postgresql://gapak@localhost/gapak |
 | JWT_ACCESS_SECRET | Access token signing key | 32 | random-32-character-string-here-123 |
 | JWT_REFRESH_SECRET | Refresh token signing key | 32 | different-random-32-character-string-456 |
 | PASSWORD_PEPPER | Password hashing pepper | 16 | pepper-16-chars |

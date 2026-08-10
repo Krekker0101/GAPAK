@@ -58,3 +58,37 @@ func TestManagerRejectsRefreshTokenAsAccessToken(t *testing.T) {
 		t.Fatal("expected refresh token to be rejected as access token")
 	}
 }
+
+func TestManagerRejectsUnknownKeyID(t *testing.T) {
+	manager := NewJWTManager(JWTConfig{
+		Issuer:        "gapak.api",
+		Audience:      "gapak.clients",
+		AccessSecret:  "12345678901234567890123456789012",
+		RefreshSecret: "abcdefghijklmnopqrstuvwxyzABCDEF",
+		AccessTTL:     15 * time.Minute,
+		RefreshTTL:    24 * time.Hour,
+	})
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		UserID:    "user-1",
+		SessionID: "session-1",
+		Role:      "USER",
+		TokenType: string(TokenTypeAccess),
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "gapak.api",
+			Audience:  []string{"gapak.clients"},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+		},
+	})
+	token.Header["kid"] = "attacker-controlled-key"
+	raw, err := token.SignedString([]byte("12345678901234567890123456789012"))
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	if _, err := manager.ParseAccessToken(raw); err == nil {
+		t.Fatal("expected unknown kid to be rejected")
+	}
+}

@@ -183,12 +183,30 @@ func (r *Repository) AddMember(ctx context.Context, actorUserID, roomID string, 
 		return apperrors.ErrForbidden
 	}
 
+	if !allowedMemberRole(enums.TrustRoomRole(role), enums.TrustRoomRole(req.Role)) {
+		return apperrors.ErrForbidden
+	}
+
 	const insertQuery = `
 		INSERT INTO trust_room_members (room_id, user_id, role, joined_at, invited_by_user_id)
 		VALUES ($1, $2, $3, NOW(), $4)
 		ON CONFLICT (room_id, user_id) DO UPDATE SET role = EXCLUDED.role, deleted_at = NULL`
 	_, err := r.db.Exec(ctx, insertQuery, roomID, req.UserID, req.Role, actorUserID)
 	return err
+}
+
+func allowedMemberRole(actorRole, requestedRole enums.TrustRoomRole) bool {
+	// There is intentionally no client-driven ownership transfer. An admin may
+	// manage members but cannot mint another owner or administrator; only the
+	// room owner may grant ADMIN. OWNER remains reserved for room creation.
+	if requestedRole == enums.TrustRoleOwner {
+		return false
+	}
+	if actorRole == enums.TrustRoleAdmin && requestedRole == enums.TrustRoleAdmin {
+		return false
+	}
+	return requestedRole == enums.TrustRoleAdmin || requestedRole == enums.TrustRoleModerator ||
+		requestedRole == enums.TrustRoleMember || requestedRole == enums.TrustRoleAuditor
 }
 
 func scanRoom(row interface{ Scan(dest ...any) error }) (*model.TrustRoom, error) {

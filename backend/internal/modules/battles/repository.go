@@ -132,8 +132,12 @@ func (r *Repository) Respond(ctx context.Context, userID, battleID string, accep
 		    accepted_at = CASE WHEN $3 = 'ACCEPTED' THEN NOW() ELSE accepted_at END,
 		    updated_at = NOW()
 		WHERE id = $1 AND opponent_user_id = $2`
-	if _, err := tx.Exec(ctx, query, battleID, userID, status); err != nil {
+	tag, err := tx.Exec(ctx, query, battleID, userID, status)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
 	}
 
 	if accept {
@@ -156,11 +160,19 @@ func (r *Repository) Vote(ctx context.Context, battleID, voterUserID string, req
 	}
 	const query = `
 		INSERT INTO battle_votes (id, battle_id, battle_round_id, voter_user_id, vote, weight)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		SELECT $1, $2, br.id, $4, $5, $6
+		FROM battle_rounds br
+		WHERE br.id = $3 AND br.battle_id = $2
 		ON CONFLICT (battle_id, voter_user_id, battle_round_id)
 		DO UPDATE SET vote = EXCLUDED.vote, weight = EXCLUDED.weight`
-	_, err := r.db.Exec(ctx, query, uuid.NewString(), battleID, req.BattleRoundID, voterUserID, req.Vote, weight)
-	return err
+	tag, err := r.db.Exec(ctx, query, uuid.NewString(), battleID, req.BattleRoundID, voterUserID, req.Vote, weight)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
 }
 
 func (r *Repository) Participants(ctx context.Context, battleID string) ([]model.BattleParticipant, error) {

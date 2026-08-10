@@ -19,7 +19,7 @@ func New(environment string) zerolog.Logger {
 		level = zerolog.DebugLevel
 	}
 
-	globalLogger = zerolog.New(os.Stdout).Level(level).With().Timestamp().Logger()
+	globalLogger = zerolog.New(os.Stdout).Level(level).With().Timestamp().Str("service", "gapak-backend").Str("environment", environment).Logger()
 	return globalLogger
 }
 
