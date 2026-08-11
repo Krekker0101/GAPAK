@@ -10,6 +10,8 @@ export class AuthManager {
 
   setAccessToken(token: string | null): void { tokenManager.setAccessToken(token); }
 
+  setCsrfToken(token: string | null): void { httpClient.setCsrfToken(token); }
+
   async refreshSession(): Promise<string> {
     if (!this.refreshPromise) {
       this.refreshPromise = httpClient.refreshSession().finally(() => {
@@ -21,13 +23,28 @@ export class AuthManager {
 
   clearSession(): void {
     tokenManager.clear();
+    httpClient.setCsrfToken(null);
+  }
+
+  async ensureCsrf(): Promise<string> {
+    return httpClient.get<{ csrfToken: string }>('/api/auth/csrf', { skipAuth: true }).then((response) => {
+      if (!response || typeof response.csrfToken !== 'string' || response.csrfToken.length < 16) {
+        throw new ApiError('CSRF bootstrap failed', 502, 'CSRF_BOOTSTRAP_FAILED');
+      }
+      httpClient.setCsrfToken(response.csrfToken);
+      return response.csrfToken;
+    });
   }
 
   async requireSession(): Promise<string> {
     const token = this.getAccessToken();
     if (token) return token;
-    try { return await this.refreshSession(); }
-    catch (error) { throw error instanceof ApiError ? error : new ApiError('Session unavailable', 401, 'SESSION_UNAVAILABLE'); }
+    try {
+      // The refresh endpoint is protected by double-submit CSRF. Bootstrap the
+      // CSRF cookie + matching in-memory header before sending refresh.
+      await this.ensureCsrf();
+      return await this.refreshSession();
+    } catch (error) { throw error instanceof ApiError ? error : new ApiError('Session unavailable', 401, 'SESSION_UNAVAILABLE'); }
   }
 }
 
