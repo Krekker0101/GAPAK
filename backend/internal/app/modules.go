@@ -72,6 +72,7 @@ func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 		deps.Validate,
 		deps.Config.Security,
 		deps.Privacy,
+		deps.Config.App.CORSOrigins...,
 	)
 	authController.RegisterRoutes(api, requireAuth, authLimiter, passwordLimiter, idempotency)
 

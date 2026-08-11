@@ -15,7 +15,7 @@ import (
 func TestValidateCSRFForMutationsRequiresCookieAndMatchingHeader(t *testing.T) {
 	cfg := config.SecurityConfig{CSRFCookieName: "csrf"}
 	app := fiber.New(fiber.Config{ErrorHandler: httpx.FiberErrorHandler(logger.New("test"))})
-	app.Post("/mutate", ValidateCSRFForMutations(cfg), func(c *fiber.Ctx) error {
+	app.Post("/mutate", ValidateCSRFForMutations(cfg, "https://gapak.vercel.app"), func(c *fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 
@@ -26,7 +26,7 @@ func TestValidateCSRFForMutationsRequiresCookieAndMatchingHeader(t *testing.T) {
 		wantStatus int
 	}{
 		{"missing both", "", "", fiber.StatusForbidden},
-		{"header only", "", "token", fiber.StatusForbidden},
+		{"header only", "", "token", fiber.StatusNoContent},
 		{"cookie only", "token", "", fiber.StatusForbidden},
 		{"mismatch", "cookie", "header", fiber.StatusForbidden},
 		{"match", "token", "token", fiber.StatusNoContent},
@@ -40,6 +40,9 @@ func TestValidateCSRFForMutationsRequiresCookieAndMatchingHeader(t *testing.T) {
 			}
 			if tc.header != "" {
 				req.Header.Set("X-CSRF-Token", tc.header)
+			}
+			if tc.name == "header only" {
+				req.Header.Set("Origin", "https://gapak.vercel.app")
 			}
 			resp, err := app.Test(req)
 			if err != nil {
