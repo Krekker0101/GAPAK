@@ -2,6 +2,7 @@ import React, { Suspense, lazy } from 'react';
 import { Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom';
 import { useAuth } from '../../domains/auth/AuthContext';
 import { AppShell } from '../shell/AppShell';
+import { LoginPage, RegisterPage } from '../../pages/AuthPage';
 const FeedPage = lazy(() => import('../../pages/FeedPage').then(m => ({ default: m.FeedPage })));
 const ProfilePage = lazy(() => import('../../pages/ProfilePage').then(m => ({ default: m.ProfilePage })));
 const ConnectionsPage = lazy(() => import('../../pages/ConnectionsPage').then(m => ({ default: m.ConnectionsPage })));
@@ -24,7 +25,7 @@ import { PostCard } from '../../domains/posts/PostCard';
 const AuthGate: React.FC = () => {
   const { state, user } = useAuth();
   if (state === 'UNKNOWN' || state === 'AUTHENTICATING' || state === 'REFRESHING') return <PageLoading label="Restoring GAPAK session…" />;
-  if (!user) return <ContractPage title="Authentication required" description="No active GAPAK session is available. Connect the login surface to the real authentication backend before accessing protected application routes." endpoint="POST /api/auth/login" />;
+  if (!user) return <Navigate to="/login" replace />;
   return <AppShell><Outlet /></AppShell>;
 };
 
@@ -39,10 +40,11 @@ const PostPage: React.FC = () => {
 };
 
 const requireParams = () => useParams<{ postId: string }>();
-
 const NotFound = () => <ContractPage title="404 — Page not found" description="This GAPAK route does not exist. Use the navigation or return to the feed." />;
 
 export const AppRouter: React.FC = () => <Suspense fallback={<PageLoading label="Loading GAPAK…" />}><Routes>
+  <Route path="/login" element={<LoginPage />} />
+  <Route path="/register" element={<RegisterPage />} />
   <Route element={<AuthGate />}>
     <Route path="/" element={<Navigate to="/posts" replace />} />
     <Route path="/posts" element={<FeedPage />} />
