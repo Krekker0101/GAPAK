@@ -125,7 +125,7 @@ class E2EECryptoEngineService {
       const info = utf8(`gapak-e2ee-v1|wrap|${params.chatId}|${messageId}|${bundle.deviceId}`);
       const wrappingKey = await deriveAesKey(ephemeral.privateKey, bundle.agreementPublicKey, salt, info);
       const wrapped = await encryptWithKey(wrappingKey, messageKeyRaw, utf8(canonicalJson({ chatId: params.chatId, messageId, recipientDeviceId: bundle.deviceId })));
-      keyEnvelopes[bundle.deviceId] = JSON.stringify({ recipientDeviceId: bundle.deviceId, ephemeralPublicKey, salt: bytesToHex(salt), wrappedKey: wrapped.ciphertext, wrappedIv: wrapped.iv, identityKeyId: bundle.identityKeyId });
+      keyEnvelopes[bundle.deviceId] = JSON.stringify({ recipientDeviceId: bundle.deviceId, recipientUserId: bundle.userId, ephemeralPublicKey, salt: bytesToHex(salt), wrappedKey: wrapped.ciphertext, wrappedIv: wrapped.iv, identityKeyId: bundle.identityKeyId });
     }
 
     const envelopeBase = {

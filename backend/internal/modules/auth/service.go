@@ -409,6 +409,24 @@ func (s *Service) VerifyTwoFactor(ctx context.Context, userID, sessionID string,
 	return AcceptedResponse{Accepted: true}, nil
 }
 
+func (s *Service) DisableTwoFactor(ctx context.Context, userID, sessionID string) (AcceptedResponse, error) {
+	user, err := s.repo.FindUserByID(ctx, userID)
+	if err != nil {
+		return AcceptedResponse{}, err
+	}
+	if err := ensureUserActive(user); err != nil {
+		return AcceptedResponse{}, err
+	}
+	if !user.TwoFactorEnabled {
+		return AcceptedResponse{Accepted: true}, nil
+	}
+	if err := s.repo.DisableTwoFactor(ctx, userID); err != nil {
+		return AcceptedResponse{}, err
+	}
+	_ = s.repo.CreateAuditEvent(ctx, &userID, &sessionID, "auth.2fa_disabled", "user", userID, s.privacy.SanitizeAuditMetadata(map[string]any{"method": "totp"}))
+	return AcceptedResponse{Accepted: true}, nil
+}
+
 func (s *Service) issueSession(ctx context.Context, user *model.User, meta common.RequestMeta) (AuthResponse, string, error) {
 	sessionID := uuid.NewString()
 	pair, err := s.jwt.Issue(user.ID, sessionID, string(user.Role), nil)

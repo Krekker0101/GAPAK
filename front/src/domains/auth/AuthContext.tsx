@@ -15,8 +15,8 @@ export interface AuthContextValue {
   error: ApiError | null;
   requires2FA: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (data: { email: string; password: string; username: string; displayName: string }) => Promise<void>;
-  anonymousRegister: (data: { email: string; password: string; username: string; displayName: string }) => Promise<void>;
+  register: (data: { email?: string; password: string; username: string; displayName: string; preferAnonymous?: boolean }) => Promise<void>;
+  anonymousRegister: (data: { email?: string; password: string; username: string; displayName: string; preferAnonymous?: boolean }) => Promise<void>;
   verify2FA: (code: string) => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
   resetPassword: (token: string, newPass: string) => Promise<void>;
@@ -111,7 +111,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [applyAuthResponse, hydrateAfterAuth]);
 
-  const register = useCallback(async (data: { email: string; password: string; username: string; displayName: string }) => {
+  const register = useCallback(async (data: { email?: string; password: string; username: string; displayName: string; preferAnonymous?: boolean }) => {
     setState('AUTHENTICATING'); setError(null);
     try {
       await authManager.ensureCsrf();
@@ -124,7 +124,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [applyAuthResponse, hydrateAfterAuth]);
 
-  const anonymousRegister = useCallback(async (data: { email: string; password: string; username: string; displayName: string }) => {
+  const anonymousRegister = useCallback(async (data: { email?: string; password: string; username: string; displayName: string; preferAnonymous?: boolean }) => {
     setState('AUTHENTICATING'); setError(null);
     try {
       await authManager.ensureCsrf();

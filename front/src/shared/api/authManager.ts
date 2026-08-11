@@ -6,6 +6,7 @@ import { httpClient } from './httpClient';
 export class AuthManager {
   private refreshPromise: Promise<string> | null = null;
   private csrfPromise: Promise<string> | null = null;
+  private hasServerSession = false;
 
   getAccessToken(): string | null { return tokenManager.getAccessToken(); }
   setAccessToken(token: string | null): void { tokenManager.setAccessToken(token); }
@@ -39,16 +40,18 @@ export class AuthManager {
   clearSession(): void {
     tokenManager.clear();
     httpClient.setCsrfToken(null);
+    this.hasServerSession = false;
   }
 
   async ensureCsrf(force = false): Promise<string> {
     if (!force && this.csrfPromise) return this.csrfPromise;
-    this.csrfPromise = httpClient.get<{ csrfToken: string }>('/auth/csrf', { skipAuth: true })
+    this.csrfPromise = httpClient.get<{ csrfToken: string; hasSession?: boolean }>('/auth/csrf', { skipAuth: true })
       .then((response) => {
         if (!response || typeof response.csrfToken !== 'string' || response.csrfToken.length < 16) {
           throw new ApiError('CSRF bootstrap failed', 502, 'CSRF_BOOTSTRAP_FAILED');
         }
         httpClient.setCsrfToken(response.csrfToken);
+        this.hasServerSession = response.hasSession === true;
         return response.csrfToken;
       })
       .finally(() => { this.csrfPromise = null; });
@@ -59,6 +62,7 @@ export class AuthManager {
     const token = this.getAccessToken();
     if (token) return token;
     await this.ensureCsrf();
+    if (!this.hasServerSession) return '';
     return this.refreshSession();
   }
 }

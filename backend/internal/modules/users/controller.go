@@ -20,9 +20,22 @@ func NewController(service *Service, validate *validator.Validate) *Controller {
 func (ctl *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Handler) {
 	group := router.Group("/users", requireAuth)
 	group.Get("/me", ctl.getMe)
+	group.Get("/:userId", ctl.getPublic)
 	group.Patch("/me", ctl.updateMe)
 	group.Patch("/me/privacy", ctl.updatePrivacy)
 	group.Patch("/me/theme", ctl.updateTheme)
+}
+
+func (ctl *Controller) getPublic(c *fiber.Ctx) error {
+	userID, err := httpx.UUIDParam(c, "userId")
+	if err != nil {
+		return err
+	}
+	response, err := ctl.service.GetPublicProfile(c.UserContext(), userID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
 func (ctl *Controller) getMe(c *fiber.Ctx) error {

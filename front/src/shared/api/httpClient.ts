@@ -208,7 +208,7 @@ class HttpClient {
       fullUrl, method, headers, data, signal, retryCount, idempotencyKey, requestId,
     );
 
-    if (responseStatus === 401 && !skipAuth && !authRetry && !url.endsWith('/api/auth/refresh')) {
+    if (responseStatus === 401 && !skipAuth && !authRetry && !url.endsWith('/api/auth/refresh') && !url.includes('/auth/login') && !url.includes('/auth/register')) {
       try {
         const newAccessToken = await this.refreshSession();
         return this.request<T>({

@@ -15,6 +15,17 @@ type ProfileResponse struct {
 	Privacy          PrivacyResponse `json:"privacy"`
 }
 
+type PublicProfileResponse struct {
+	ID           string          `json:"id"`
+	Username     string          `json:"username"`
+	DisplayName  string          `json:"displayName"`
+	Bio          string          `json:"bio,omitempty"`
+	AvatarFileID string          `json:"avatarFileId,omitempty"`
+	Role         string          `json:"role"`
+	IsAnonymous  bool            `json:"isAnonymous"`
+	Privacy      PrivacyResponse `json:"privacySettings"`
+}
+
 type UpdateProfileRequest struct {
 	DisplayName   *string `json:"displayName" validate:"omitempty,min=2,max=80"`
 	Bio           *string `json:"bio" validate:"omitempty,max=600"`

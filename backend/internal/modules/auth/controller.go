@@ -43,6 +43,7 @@ func (ctl *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Han
 	group.Post("/logout", requireAuth, ctl.logout)
 	group.Post("/2fa/setup", requireAuth, ctl.setupTwoFactor)
 	group.Post("/2fa/verify", requireAuth, ctl.verifyTwoFactor)
+	group.Post("/2fa/disable", requireAuth, ctl.disableTwoFactor)
 
 	group.Get("/oauth/:provider", ctl.oauthRedirect)
 	group.Post("/oauth/:provider", ctl.oauthLogin)
@@ -56,7 +57,7 @@ func (ctl *Controller) csrf(c *fiber.Ctx) error {
 	}
 	expiresAt := time.Now().Add(15 * time.Minute)
 	authplatform.SetCSRFCookie(c, ctl.config, csrfToken, expiresAt)
-	return c.JSON(httpx.OK(map[string]string{"csrfToken": csrfToken}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+	return c.JSON(httpx.OK(map[string]any{"csrfToken": csrfToken, "hasSession": strings.TrimSpace(c.Cookies(ctl.config.RefreshCookieName)) != ""}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
 func (ctl *Controller) register(c *fiber.Ctx) error {
@@ -119,7 +120,7 @@ func (ctl *Controller) refresh(c *fiber.Ctx) error {
 		rawToken = cookieRefreshToken
 	}
 	if rawToken == "" {
-		return fiber.ErrUnauthorized
+		return apperrors.ErrUnauthorized
 	}
 
 	if cookieRefreshToken != "" {
@@ -205,6 +206,15 @@ func (ctl *Controller) verifyTwoFactor(c *fiber.Ctx) error {
 	}
 	claims := middleware.ClaimsFromContext(c)
 	response, err := ctl.service.VerifyTwoFactor(c.UserContext(), claims.UserID, claims.SessionID, payload)
+	if err != nil {
+		return err
+	}
+	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+}
+
+func (ctl *Controller) disableTwoFactor(c *fiber.Ctx) error {
+	claims := middleware.ClaimsFromContext(c)
+	response, err := ctl.service.DisableTwoFactor(c.UserContext(), claims.UserID, claims.SessionID)
 	if err != nil {
 		return err
 	}

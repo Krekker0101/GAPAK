@@ -1,0 +1,4 @@
+576c56595698453042885bd739d86264294c48a48366af01f2252d7351b01034  backend/internal/platform/auth/cookies.go
+78f35772edaa2843ba82a6c9cb67d41e148205536211132d17dcdee134bf2536  backend/internal/modules/auth/controller.go
+ee86640652d3933eb15ff0b2e9ab09a31726a2c0ea9074b71889b87e626db10d  front/src/shared/api/authManager.ts
+968058cdca60675d4c4ba5c7e081c40997ad4ec2f6cb62a9bad0d0ccc4493eac  front/src/domains/auth/api/authApi.ts

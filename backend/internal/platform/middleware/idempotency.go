@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/redis/go-redis/v9
+	"github.com/redis/go-redis/v9"
 )
 
 const idempotencyTTL = 5 * time.Minute

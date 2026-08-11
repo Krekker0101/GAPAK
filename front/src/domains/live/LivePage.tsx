@@ -5,7 +5,6 @@ import { liveApi } from './api/liveApi';
 import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import { PageError, PageLoading } from '../../pages/common';
 import { VideoPlayer } from '../media/VideoPlayer';
-import { PlaybackGrantService } from '../media/PlaybackGrantService';
 import { LiveChatMessage } from '../../shared/types/live';
 import { useAuth } from '../auth/AuthContext';
 import { useToast } from '../../shared/ux/ToastContext';
@@ -69,25 +68,13 @@ export const LivePage: React.FC<{ streamId?: string }> = ({ streamId }) => {
 };
 
 const LiveRoom: React.FC<{ stream: import('../../shared/types/live').LiveStream; chat: LiveChatMessage[]; chatText: string; setChatText: (v: string) => void; onSend: () => void }> = ({ stream, chat, chatText, setChatText, onSend }) => {
-  const [grant, setGrant] = useState<import('../../shared/types/media').PlaybackGrant>();
-  const [grantError, setGrantError] = useState<Error>();
-
-  useEffect(() => {
-    if (stream.state !== 'LIVE') return;
-    let active = true;
-    void liveApi.requestPlaybackGrant(stream.id).then(response => { if (active) setGrant(response.grant); }).catch(e => { if (active) setGrantError(e instanceof Error ? e : new Error('Playback authorization failed')); });
-    return () => { active = false; };
-  }, [stream.id, stream.state]);
-
   return <div className="mx-auto max-w-6xl space-y-4">
     <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
       <section className="overflow-hidden rounded-[var(--radius-3xl)] border border-subtle bg-app shadow-token-sm">
-        <div className="aspect-video grid place-items-center">
-          {stream.state === 'LIVE' && grant ? <VideoPlayer src={grant.masterManifestUrl} poster={stream.coverImageUrl} playbackGrant={grant} title={stream.title} playbackContext="LIVE_REPLAY" autoPlay /> :
-           stream.state === 'LIVE' && !grantError ? <RefreshCw className="animate-spin text-white" /> :
-           <div className="text-center text-white"><Radio className="mx-auto" /><p className="mt-3 font-semibold">{stream.state === 'SCHEDULED' ? 'Stream scheduled' : stream.state === 'PREPARING' ? 'Preparing stream…' : stream.state === 'ENDED' ? 'Stream ended' : 'Stream unavailable'}</p>{grantError && <p className="mt-1 text-xs text-white/60">{grantError.message}</p>}</div>}
+        <div className="aspect-video grid place-items-center bg-surface-subtle">
+          <div className="text-center text-secondary"><Radio className="mx-auto" /><p className="mt-3 font-semibold">{stream.state === 'SCHEDULED' ? 'Stream scheduled' : stream.state === 'PREPARING' ? 'Preparing stream…' : stream.state === 'ENDED' ? 'Stream ended' : 'Live stream'}</p><p className="mt-1 text-xs text-muted">Playback is controlled by the server streaming layer.</p></div>
         </div>
-        <div className="p-5 text-white"><h1 className="text-xl font-bold">{stream.title}</h1><div className="mt-2 flex flex-wrap gap-3 text-xs text-white/60"><span className="inline-flex items-center gap-1"><Eye size={14} /> {stream.currentViewersCount} viewers</span><span>{stream.state}</span></div></div>
+        <div className="p-5"><h1 className="text-xl font-bold">{stream.title}</h1><div className="mt-2 flex flex-wrap gap-3 text-xs text-muted"><span className="inline-flex items-center gap-1"><Eye size={14} /> {stream.currentViewersCount} viewers</span><span>{stream.state}</span></div></div>
       </section>
       <section className="flex min-h-[520px] flex-col rounded-[var(--radius-3xl)] border border-subtle bg-surface shadow-token-sm">
         <div className="border-b border-subtle p-4"><div className="flex items-center gap-2 font-semibold"><MessageCircle size={18} /> Live chat</div></div>

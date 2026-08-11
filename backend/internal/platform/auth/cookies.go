@@ -16,7 +16,7 @@ func SetRefreshCookie(c *fiber.Ctx, cfg config.SecurityConfig, token string, exp
 		Path:     "/api/v1/auth",
 		HTTPOnly: true,
 		Secure:   cfg.CookieSecure,
-		SameSite: "Strict",
+		SameSite: parseSameSite(cfg.CookieSameSite),
 		Domain:   cookieDomain(cfg.CookieDomain),
 		Expires:  expiresAt,
 	})
@@ -29,7 +29,7 @@ func SetCSRFCookie(c *fiber.Ctx, cfg config.SecurityConfig, csrf string, expires
 		Path:     "/",
 		HTTPOnly: true,
 		Secure:   cfg.CookieSecure,
-		SameSite: "Strict",
+		SameSite: parseSameSite(cfg.CookieSameSite),
 		Domain:   cookieDomain(cfg.CookieDomain),
 		Expires:  expiresAt,
 	})

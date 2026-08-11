@@ -3,7 +3,7 @@ import { assertAuthResponse, assertUserProfile, AuthResponse } from '../../../sh
 import { UserProfile } from '../../../shared/types';
 
 export interface LoginRequest { email: string; password: string; }
-export interface RegisterRequest { email: string; password: string; username: string; displayName: string; }
+export interface RegisterRequest { email?: string; password: string; username: string; displayName: string; preferAnonymous?: boolean; }
 
 export const authApi = {
   async csrf(): Promise<string> {
@@ -19,7 +19,7 @@ export const authApi = {
     return assertAuthResponse(await httpClient.post('/auth/login', { login: input.email, password: input.password }));
   },
   async register(input: RegisterRequest): Promise<AuthResponse> {
-    return assertAuthResponse(await httpClient.post('/auth/register', input));
+    return assertAuthResponse(await httpClient.post('/auth/register', { ...input, email: undefined, preferAnonymous: true }));
   },
   async anonymousRegister(input: RegisterRequest): Promise<AuthResponse> {
     // Keep the anonymous endpoint available for flows that explicitly request it,

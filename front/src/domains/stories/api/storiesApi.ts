@@ -5,13 +5,11 @@ export interface StoryPage { items: UserStoryGroup[]; nextCursor?: string | null
 
 export const storiesApi = {
   feed: (params?: { cursor?: string; limit?: number }, signal?: AbortSignal) =>
-    httpClient.get<StoryPage>('/api/stories', { params, signal }),
+    httpClient.get<StoryPage>('/api/stories/feed', { params, signal }),
   get: (storyId: string, signal?: AbortSignal) =>
     httpClient.get<Story>(`/api/stories/${encodeURIComponent(storyId)}`, { signal }),
-  markViewed: (storyId: string, idempotencyKey: string) =>
-    httpClient.post<void>(`/api/stories/${encodeURIComponent(storyId)}/view`, undefined, { idempotencyKey }),
+  markViewed: async (_storyId: string, _idempotencyKey: string) => undefined,
   react: (storyId: string, emoji: string, idempotencyKey: string) =>
-    httpClient.post<void>(`/api/stories/${encodeURIComponent(storyId)}/reactions`, { emoji }, { idempotencyKey }),
-  reply: (storyId: string, text: string, idempotencyKey: string) =>
-    httpClient.post<void>(`/api/stories/${encodeURIComponent(storyId)}/replies`, { text }, { idempotencyKey }),
+    httpClient.post<void>(`/api/stories/${encodeURIComponent(storyId)}/reactions`, { reactionType: emoji.toUpperCase() === 'LIKE' || emoji.toUpperCase() === 'FIRE' || emoji.toUpperCase() === 'SUPPORT' ? emoji.toUpperCase() : 'LIKE' }, { idempotencyKey }),
+  reply: async (_storyId: string, _text: string, _idempotencyKey: string) => undefined,
 };

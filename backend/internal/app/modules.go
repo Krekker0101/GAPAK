@@ -17,6 +17,7 @@ import (
 	"github.com/gapak/backend/internal/modules/live"
 	"github.com/gapak/backend/internal/modules/media"
 	"github.com/gapak/backend/internal/modules/moderation"
+	"github.com/gapak/backend/internal/modules/notifications"
 	"github.com/gapak/backend/internal/modules/posts"
 	"github.com/gapak/backend/internal/modules/presence"
 	"github.com/gapak/backend/internal/modules/security"
@@ -86,6 +87,7 @@ func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 		RegisterRoutes(api, requireAuth)
 	security.NewController(security.NewService(security.NewRepository(deps.DB), deps.Privacy), deps.Validate).
 		RegisterRoutes(api, requireAuth)
+	notifications.NewController(deps.DB).RegisterRoutes(api, requireAuth)
 	friends.NewController(friends.NewService(friends.NewRepository(deps.DB)), deps.Validate).
 		RegisterRoutes(api, requireAuth)
 	subscriptions.NewController(subscriptions.NewService(subscriptions.NewRepository(deps.DB)), deps.Validate).

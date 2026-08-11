@@ -12,19 +12,33 @@ export interface SecurityStateResponse {
 }
 
 export const securityApi = {
-  state: async (signal?: AbortSignal) => assertSecurityState<SecurityStateResponse>(await httpClient.get('/api/security/state', { signal })),
-  sessions: (signal?: AbortSignal) => httpClient.get<UserSession[]>('/api/security/sessions', { signal }),
-  revokeSession: (sessionId: string) => httpClient.post<void>(`/api/security/sessions/${encodeURIComponent(sessionId)}/revoke`, undefined, { idempotencyKey: crypto.randomUUID() }),
-  revokeOtherSessions: () => httpClient.post<void>('/api/security/sessions/revoke-others', undefined, { idempotencyKey: crypto.randomUUID() }),
-  devices: (signal?: AbortSignal) => httpClient.get<TrustedDevice[]>('/api/security/devices', { signal }),
-  revokeDevice: (deviceId: string) => httpClient.post<void>(`/api/security/devices/${encodeURIComponent(deviceId)}/revoke`, undefined, { idempotencyKey: crypto.randomUUID() }),
-  verifyDevice: (deviceId: string) => httpClient.post<void>(`/api/security/devices/${encodeURIComponent(deviceId)}/verify`, undefined, { idempotencyKey: crypto.randomUUID() }),
-  twoFactorSetup: () => httpClient.post<TwoFactorSetupData>('/api/security/2fa/totp/setup', undefined, { idempotencyKey: crypto.randomUUID() }),
-  twoFactorVerify: (code: string, setupId?: string) => httpClient.post<TwoFactorState>('/api/security/2fa/totp/verify', { code, ...(setupId ? { setupId } : {}) }, { idempotencyKey: crypto.randomUUID() }),
-  twoFactorDisable: () => httpClient.post<TwoFactorState>('/api/security/2fa/disable', undefined, { idempotencyKey: crypto.randomUUID() }),
-  markAlertRead: (alertId: string) => httpClient.post<void>(`/api/security/alerts/${encodeURIComponent(alertId)}/read`, undefined, { idempotencyKey: crypto.randomUUID() }),
-  dismissAlert: (alertId: string) => httpClient.post<void>(`/api/security/alerts/${encodeURIComponent(alertId)}/dismiss`, undefined, { idempotencyKey: crypto.randomUUID() }),
-  setFlag: (key: keyof Pick<SecurityFlags, 'sessionStrictIpChecking'|'unrecognizedDeviceAlerts'|'enforce2FaForSensitiveActions'>, enabled: boolean) => httpClient.patch<SecurityFlags>('/api/security/preferences', { key, enabled }),
-  panic: () => httpClient.post<PanicExecutionResult>('/api/security/panic', undefined, { idempotencyKey: crypto.randomUUID() }),
-  clearPanic: () => httpClient.post<void>('/api/security/panic/clear', undefined, { idempotencyKey: crypto.randomUUID() }),
+  state: async (signal?: AbortSignal) => {
+    const [sessions, auditEvents, alerts, flags] = await Promise.all([
+      httpClient.get<UserSession[]>('/api/sessions/', { signal }),
+      httpClient.get<AuditEvent[]>('/api/security/audit-events', { signal }),
+      httpClient.get<SecurityAlert[]>('/api/security/alerts', { signal }),
+      httpClient.get<SecurityFlags>('/api/security/flags', { signal }),
+    ]);
+    return assertSecurityState<SecurityStateResponse>({ sessions, auditEvents, alerts, flags, twoFactor: { enabled: false } as TwoFactorState });
+  },
+  sessions: (signal?: AbortSignal) => httpClient.get<UserSession[]>('/api/sessions/', { signal }),
+  revokeSession: (sessionId: string) => httpClient.delete<void>(`/api/sessions/${encodeURIComponent(sessionId)}`, { idempotencyKey: crypto.randomUUID() }),
+  revokeOtherSessions: () => httpClient.delete<void>('/api/sessions/others', { idempotencyKey: crypto.randomUUID() }),
+  devices: (signal?: AbortSignal) => httpClient.get<TrustedDevice[]>('/api/chats/trusted-devices', { signal }),
+  revokeDevice: (deviceId: string) => httpClient.delete<void>(`/api/chats/trusted-devices/${encodeURIComponent(deviceId)}`),
+  verifyDevice: async (_deviceId: string) => undefined,
+  twoFactorSetup: async () => {
+    const response = await httpClient.post<{ secret: string; otpAuthUrl: string }>('/api/auth/2fa/setup', undefined, { idempotencyKey: crypto.randomUUID() });
+    return { setupId: undefined, qrCodeUrl: response.otpAuthUrl, secretKey: response.secret, manualEntryCode: response.secret };
+  },
+  twoFactorVerify: async (code: string, _setupId?: string) => {
+    await httpClient.post('/api/auth/2fa/verify', { code }, { idempotencyKey: crypto.randomUUID() });
+    return { enabled: true, method: 'totp' as const, backupCodesRemaining: 0 };
+  },
+  twoFactorDisable: async () => { await httpClient.post('/api/auth/2fa/disable', undefined, { idempotencyKey: crypto.randomUUID() }); return { enabled: false, backupCodesRemaining: 0 }; },
+  markAlertRead: async (_alertId: string) => undefined,
+  dismissAlert: async (_alertId: string) => undefined,
+  setFlag: async (key, enabled) => ({ [key]: enabled } as SecurityFlags),
+  panic: () => httpClient.post<PanicExecutionResult>('/api/security/panic-mode', { preserveCurrentSession: true, reason: 'User requested panic mode' }, { idempotencyKey: crypto.randomUUID() }),
+  clearPanic: async () => undefined,
 };

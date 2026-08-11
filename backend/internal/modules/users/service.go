@@ -34,6 +34,18 @@ func (s *Service) GetMe(ctx context.Context, userID string) (ProfileResponse, er
 	return s.toProfileResponse(user, privacy, theme), nil
 }
 
+func (s *Service) GetPublicProfile(ctx context.Context, userID string) (PublicProfileResponse, error) {
+	user, err := s.repo.FindProfile(ctx, userID)
+	if err != nil {
+		return PublicProfileResponse{}, err
+	}
+	privacy, err := s.repo.FindPrivacy(ctx, userID)
+	if err != nil {
+		return PublicProfileResponse{}, err
+	}
+	return PublicProfileResponse{ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, Bio: deref(user.Bio), AvatarFileID: deref(user.AvatarFileID), Role: string(user.Role), IsAnonymous: user.IsAnonymous, Privacy: PrivacyResponse{ProfileVisibility: string(privacy.ProfileVisibility), SearchableByUsername: privacy.SearchableByUsername}}, nil
+}
+
 func (s *Service) UpdateMe(ctx context.Context, userID string, req UpdateProfileRequest) (ProfileResponse, error) {
 	if req.AvatarFileID != nil && s.mediaRepo != nil {
 		if err := s.mediaRepo.ValidateAvatarMediaOwnership(ctx, userID, *req.AvatarFileID); err != nil {

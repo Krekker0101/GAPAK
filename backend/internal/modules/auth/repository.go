@@ -407,6 +407,11 @@ func (r *Repository) CompleteTwoFactorSetup(ctx context.Context, userID, ciphert
 	return tx.Commit(ctx)
 }
 
+func (r *Repository) DisableTwoFactor(ctx context.Context, userID string) error {
+	_, err := r.db.Exec(ctx, `UPDATE users SET two_factor_enabled = false, two_factor_secret_ciphertext = NULL, two_factor_secret_nonce = NULL, updated_at = NOW() WHERE id = $1`, userID)
+	return err
+}
+
 func (r *Repository) CreateAuditEvent(ctx context.Context, actorUserID, actorSessionID *string, action, resourceType, resourceID string, metadata map[string]any) error {
 	const query = `
 		INSERT INTO audit_events (id, actor_user_id, actor_session_id, action, resource_type, resource_id, severity, metadata_json)

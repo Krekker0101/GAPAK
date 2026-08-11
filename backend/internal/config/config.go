@@ -179,7 +179,7 @@ func Load() (Config, error) {
 		},
 		HTTP: HTTPConfig{
 			Host:         getEnv("APP_HOST", "0.0.0.0"),
-			Port:         getEnv("APP_PORT", "8080"),
+			Port:         getEnv("PORT", getEnv("APP_PORT", "8080")),
 			ReadTimeout:  getEnvDuration("HTTP_READ_TIMEOUT", 15*time.Second),
 			WriteTimeout: getEnvDuration("HTTP_WRITE_TIMEOUT", 15*time.Second),
 			IdleTimeout:  getEnvDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),
@@ -438,7 +438,7 @@ func getEnvSlice(key string, fallback []string) []string {
 	parts := strings.Split(raw, ",")
 	result := make([]string, 0, len(parts))
 	for _, part := range parts {
-		part = strings.TrimSpace(part)
+		part = strings.TrimRight(strings.TrimSpace(part), "/")
 		if part != "" {
 			result = append(result, part)
 		}

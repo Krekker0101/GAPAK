@@ -128,27 +128,15 @@ class GlobalUploadManager {
         processingStep: init.mode === 'multipart' ? 'Uploading signed parts…' : 'Uploading to signed URL…',
       });
 
-      if (init.mode === 'single') {
-        if (!init.uploadUrl) throw new Error('Backend did not provide a signed upload URL.');
-        const controller = new AbortController();
-        runtime.controllers.add(controller);
-        const started = Date.now();
-        await putSigned(init.uploadUrl, runtime.file, init.uploadHeaders, controller.signal, loaded => {
-          const elapsed = Math.max(1, (Date.now() - started) / 1000);
-          const speed = loaded / elapsed;
-          this.patch(id, { uploadedBytes: loaded, progress: Math.round((loaded / runtime.file.size) * 100), speedBytesPerSec: speed, timeRemainingSec: Math.ceil((runtime.file.size - loaded) / Math.max(1, speed)) });
-        });
-        runtime.controllers.delete(controller);
-        await this.complete(id, []);
-        return;
-      }
-
-      const parts = init.parts ?? [];
-      if (!parts.length) throw new Error('Backend did not provide multipart signed parts.');
-      await this.uploadParts(id, parts);
+      await this.uploadParts(id, init.parts ?? []);
       if (this.sessions.find(s => s.id === id)?.state === 'PAUSED') return;
 
-      const completed = Array.from(runtime.completedParts.entries()).map(([partNumber, etag]) => ({ partNumber, etag }));
+      const chunkSize = runtime.init.chunkSizeBytes || CHUNK_FALLBACK;
+      const totalParts = runtime.init.totalParts ?? Math.ceil(runtime.file.size / chunkSize);
+      const completed = Array.from(runtime.completedParts.entries()).map(([partNumber, etag]) => ({
+        partNumber, etag, sizeBytes: Math.min(chunkSize, Math.max(0, runtime.file.size - (partNumber - 1) * chunkSize)),
+      }));
+      if (completed.length !== totalParts) throw new Error('Upload did not complete all required parts.');
       await this.complete(id, completed);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -160,11 +148,17 @@ class GlobalUploadManager {
     }
   }
 
-  private async uploadParts(id: string, parts: NonNullable<UploadInitResponse['parts']>) {
+  private async uploadParts(id: string, initialParts: NonNullable<UploadInitResponse['parts']>) {
     const runtime = this.runtimes.get(id);
     if (!runtime || !runtime.init) return;
     const chunkSize = runtime.init.chunkSizeBytes || CHUNK_FALLBACK;
-    const pending = parts.filter(part => !runtime.completedParts.has(part.partNumber));
+    const totalParts = runtime.init.totalParts ?? Math.ceil(runtime.file.size / chunkSize);
+    const parts = new Map<number, NonNullable<UploadInitResponse['parts']>[number]>();
+    initialParts.forEach(part => parts.set(part.partNumber, part));
+    for (let n = 1; n <= totalParts; n++) {
+      if (!parts.has(n)) parts.set(n, await mediaApi.requestUploadPart(runtime.init.uploadId, n));
+    }
+    const pending = Array.from(parts.values()).filter(part => !runtime.completedParts.has(part.partNumber));
     let cursor = 0;
 
     const worker = async () => {
@@ -177,13 +171,8 @@ class GlobalUploadManager {
         runtime.controllers.add(controller);
         const etag = await putSigned(part.url, blob, part.headers, controller.signal, loaded => {
           runtime.partLoaded.set(part.partNumber, loaded);
-          const completedBytes = Array.from(runtime.completedParts.keys()).reduce((sum, n) => {
-            const start = (n - 1) * chunkSize;
-            return sum + Math.min(chunkSize, Math.max(0, runtime.file.size - start));
-          }, 0);
-          const inFlightBytes = Array.from(runtime.partLoaded.entries()).reduce((sum, [n, value]) => {
-            return runtime.completedParts.has(n) ? sum : sum + value;
-          }, 0);
+          const completedBytes = Array.from(runtime.completedParts.keys()).reduce((sum, n) => sum + Math.min(chunkSize, Math.max(0, runtime.file.size - (n - 1) * chunkSize)), 0);
+          const inFlightBytes = Array.from(runtime.partLoaded.entries()).reduce((sum, [n, value]) => runtime.completedParts.has(n) ? sum : sum + value, 0);
           const uploaded = Math.min(runtime.file.size, completedBytes + inFlightBytes);
           const elapsed = Math.max(1, (Date.now() - runtime.startedAt) / 1000);
           const speed = uploaded / elapsed;
@@ -194,11 +183,10 @@ class GlobalUploadManager {
         runtime.controllers.delete(controller);
       }
     };
-
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pending.length) }, () => worker()));
   }
 
-  private async complete(id: string, parts: Array<{ partNumber: number; etag: string }>) {
+  private async complete(id: string, parts: Array<{ partNumber: number; etag: string; sizeBytes: number }>) {
     const runtime = this.runtimes.get(id);
     if (!runtime?.init) return;
     this.patch(id, { state: 'PROCESSING', progress: 100, processingStep: 'Waiting for server-side media processing…' });
