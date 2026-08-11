@@ -16,7 +16,7 @@ export interface AuthContextValue {
   requires2FA: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (data: { email: string; password: string; username: string; displayName: string }) => Promise<void>;
-  anonymousRegister: () => Promise<void>;
+  anonymousRegister: (data: { email: string; password: string; username: string; displayName: string }) => Promise<void>;
   verify2FA: (code: string) => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
   resetPassword: (token: string, newPass: string) => Promise<void>;
@@ -41,9 +41,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setState('AUTHENTICATING');
     try {
       const token = await authManager.requireSession();
-      // Empty token means the refresh endpoint correctly reported that this
-      // browser has no active session. Stay anonymous and do not call protected
-      // profile endpoints just to rediscover the same 401.
       if (!token) {
         authManager.clearSession();
         setUser(null);
@@ -127,11 +124,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [applyAuthResponse, hydrateAfterAuth]);
 
-  const anonymousRegister = useCallback(async () => {
+  const anonymousRegister = useCallback(async (data: { email: string; password: string; username: string; displayName: string }) => {
     setState('AUTHENTICATING'); setError(null);
     try {
       await authManager.ensureCsrf();
-      const response = await authApi.anonymousRegister();
+      const response = await authApi.anonymousRegister(data);
       if (applyAuthResponse(response)) await hydrateAfterAuth();
       telemetry.record('auth', 'anonymous_registration_succeeded', 'info');
     } catch (err) {
