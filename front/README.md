@@ -68,3 +68,10 @@ See:
 - `docs/MEDIA.md`
 - `docs/TESTING.md`
 - `docs/DEPLOYMENT.md`
+
+
+## Production deployment note
+
+The production API is deployed on Railway while the SPA is deployed on Vercel. The browser client always uses credentialed requests. The API uses a strict double-submit CSRF cookie when available and a CORS-origin-bound header fallback when browsers block cross-site cookies. Keep the production CORS origin restricted to the exact Vercel application origin.
+
+If the Vercel project is configured with the repository root as its Root Directory, the repository-level `vercel.json` builds `front` and rewrites all SPA routes to `front/dist/index.html`. If the Vercel Root Directory is already `front`, the existing `front/vercel.json` provides the SPA rewrite.
