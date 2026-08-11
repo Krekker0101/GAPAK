@@ -19,15 +19,18 @@ export interface AuthResponse {
   user?: UserProfile;
   requires2FA?: boolean;
   challengeId?: string;
+  csrfToken?: string;
 }
 
 export const assertAuthResponse = (value: unknown): AuthResponse => {
   if (!isObject(value)) throw new ApiSchemaError('Invalid authentication response');
   if (value.requires2FA === true) {
     if (value.challengeId !== undefined && typeof value.challengeId !== 'string') throw new ApiSchemaError('Invalid 2FA challengeId');
+    if (value.csrfToken !== undefined && typeof value.csrfToken !== 'string') throw new ApiSchemaError('Invalid CSRF token');
     return value as unknown as AuthResponse;
   }
   if (typeof value.accessToken !== 'string') throw new ApiSchemaError('Authentication response is missing accessToken');
+  if (value.csrfToken !== undefined && typeof value.csrfToken !== 'string') throw new ApiSchemaError('Invalid CSRF token');
   return value as unknown as AuthResponse;
 };
 
