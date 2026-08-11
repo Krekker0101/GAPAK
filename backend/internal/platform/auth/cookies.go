@@ -80,6 +80,10 @@ func ClearAuthCookies(c *fiber.Ctx, cfg config.SecurityConfig) {
 	})
 }
 
+func ParseSameSite(raw string) string {
+	return parseSameSite(raw)
+}
+
 func parseSameSite(raw string) string {
 	switch raw {
 	case "strict":

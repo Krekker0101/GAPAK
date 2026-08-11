@@ -12,6 +12,7 @@ import (
 	"github.com/gapak/backend/internal/config"
 	"github.com/gapak/backend/internal/domain/common"
 	authplatform "github.com/gapak/backend/internal/platform/auth"
+	apperrors "github.com/gapak/backend/internal/platform/errors"
 	"github.com/gapak/backend/internal/platform/httpx"
 	"github.com/gapak/backend/internal/platform/middleware"
 	"github.com/gapak/backend/internal/platform/privacy"

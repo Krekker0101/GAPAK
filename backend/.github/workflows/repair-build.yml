@@ -1,0 +1,129 @@
+name: Repair production build
+
+on:
+  push:
+    paths:
+      - .github/workflows/repair-build.yml
+      - internal/platform/database/postgres.go
+      - internal/services/websocket/service.go
+      - internal/modules/subscriptions/repository.go
+      - internal/modules/admin/repository.go
+      - internal/modules/chats/repository.go
+      - internal/modules/chats/service.go
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Apply compile fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, expected=1):
+              p = Path(path)
+              s = p.read_text()
+              n = s.count(old)
+              if n != expected:
+                  raise SystemExit(f'{path}: expected {expected} occurrence(s), found {n}: {old!r}')
+              p.write_text(s.replace(old, new))
+
+          # pgxpool.Stat exposes AcquireCount as int64. Keep the metrics
+          # registry's stable uint64 representation and remove fields that
+          # were referenced before being part of the public DBStats contract.
+          replace(
+              'internal/platform/database/postgres.go',
+              'AcquireCount: s.AcquireCount(), AcquiredConns: s.AcquiredConns(), IdleConns: s.IdleConns(), TotalConns: s.TotalConns(), MaxConns: s.MaxConns(), AcquireDurationSeconds: s.AcquireDuration().Seconds(), EmptyAcquireCount: s.EmptyAcquireCount(), CanceledAcquireCount: s.CanceledAcquireCount(),',
+              'AcquireCount: uint64(s.AcquireCount()), AcquiredConns: s.AcquiredConns(), IdleConns: s.IdleConns(), TotalConns: s.TotalConns(), MaxConns: s.MaxConns(),',
+          )
+
+          # enqueue returns an error; enqueueRaw is the boolean fast path.
+          replace(
+              'internal/services/websocket/service.go',
+              'if !s.enqueue(conn, data) {',
+              'if err := s.enqueue(conn, data); err != nil {',
+          )
+          replace(
+              'internal/services/websocket/service.go',
+              'var messages []interface{}\n\tif raw, ok := data["after_sequence"]; ok {',
+              'var messages []interface{}\n\tvar err error\n\tif raw, ok := data["after_sequence"]; ok {',
+          )
+
+          replace(
+              'internal/modules/subscriptions/repository.go',
+              'import (\n\t"context"\n',
+              'import (\n\t"context"\n\t"errors"\n\t"time"\n',
+          )
+          replace(
+              'internal/modules/subscriptions/repository.go',
+              '\t"github.com/gapak/backend/internal/domain/model"\n',
+              '\t"github.com/gapak/backend/internal/domain/model"\n\tapperrors "github.com/gapak/backend/internal/platform/errors"\n',
+          )
+
+          replace(
+              'internal/modules/admin/repository.go',
+              '\t"fmt"\n',
+              '\t"fmt"\n\t"net/http"\n',
+          )
+
+          replace(
+              'internal/modules/chats/repository.go',
+              '\t"encoding/hex"\n',
+              '\t"encoding/hex"\n\t"encoding/json"\n',
+          )
+          replace(
+              'internal/modules/chats/repository.go',
+              'message.ClientMessageID != nil && strings.TrimSpace(*message.ClientMessageID) != ""',
+              'strings.TrimSpace(message.ClientMessageID) != ""',
+          )
+          replace(
+              'internal/modules/chats/repository.go',
+              'message.ChatID, message.SenderID, *message.ClientMessageID',
+              'message.ChatID, message.SenderID, message.ClientMessageID',
+              expected=2,
+          )
+          replace(
+              'internal/modules/chats/repository.go',
+              'message.ClientMessageID != nil && errors.As(err, &pgErr)',
+              'message.ClientMessageID != "" && errors.As(err, &pgErr)',
+          )
+
+          replace(
+              'internal/modules/chats/service.go',
+              'nullableStringValue(createdMessage.ClientMessageID)',
+              'nullableStringValue(&createdMessage.ClientMessageID)',
+          )
+          PY
+
+      - name: Format
+        run: gofmt -w internal/platform/database/postgres.go internal/services/websocket/service.go internal/modules/subscriptions/repository.go internal/modules/admin/repository.go internal/modules/chats/repository.go internal/modules/chats/service.go
+
+      - name: Compile all packages
+        run: go test ./... -run '^$'
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Commit repaired source
+        run: |
+          git config user.name 'gapak-ci'
+          git config user.email 'gapak-ci@users.noreply.github.com'
+          git add internal/platform/database/postgres.go internal/services/websocket/service.go internal/modules/subscriptions/repository.go internal/modules/admin/repository.go internal/modules/chats/repository.go internal/modules/chats/service.go
+          if git diff --cached --quiet; then
+            echo 'No source changes required.'
+            exit 0
+          fi
+          git commit -m 'fix: repair production compile errors'
+          git push origin HEAD:main
