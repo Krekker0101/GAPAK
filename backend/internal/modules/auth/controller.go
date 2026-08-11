@@ -12,35 +12,35 @@ import (
 	"github.com/gapak/backend/internal/config"
 	"github.com/gapak/backend/internal/domain/common"
 	authplatform "github.com/gapak/backend/internal/platform/auth"
-	apperrors "github.com/gapak/backend/internal/platform/errors"
 	"github.com/gapak/backend/internal/platform/httpx"
 	"github.com/gapak/backend/internal/platform/middleware"
 	"github.com/gapak/backend/internal/platform/privacy"
 )
 
 type Controller struct {
-	service  *Service
-	validate *validator.Validate
-	config   config.SecurityConfig
-	privacy  *privacy.Service
+	service        *Service
+	validate       *validator.Validate
+	config         config.SecurityConfig
+	privacy        *privacy.Service
+	allowedOrigins []string
 }
 
-func NewController(service *Service, validate *validator.Validate, cfg config.SecurityConfig, privacyService *privacy.Service) *Controller {
-	return &Controller{service: service, validate: validate, config: cfg, privacy: privacyService}
+func NewController(service *Service, validate *validator.Validate, cfg config.SecurityConfig, privacyService *privacy.Service, allowedOrigins ...string) *Controller {
+	return &Controller{service: service, validate: validate, config: cfg, privacy: privacyService, allowedOrigins: allowedOrigins}
 }
 
 func (ctl *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Handler, authLimiter fiber.Handler, passwordLimiter fiber.Handler, idempotency fiber.Handler) {
 	group := router.Group("/auth")
 	group.Get("/csrf", ctl.csrf)
-	group.Post("/register", idempotency, authLimiter, middleware.ValidateCSRFForMutations(ctl.config), ctl.register)
-	group.Post("/register-anonymous", idempotency, authLimiter, middleware.ValidateCSRFForMutations(ctl.config), ctl.registerAnonymous)
-	group.Post("/login", idempotency, authLimiter, middleware.ValidateCSRFForMutations(ctl.config), ctl.login)
+	group.Post("/register", idempotency, authLimiter, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.register)
+	group.Post("/register-anonymous", idempotency, authLimiter, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.registerAnonymous)
+	group.Post("/login", idempotency, authLimiter, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.login)
 	// Refresh performs conditional CSRF validation itself when a refresh cookie is used.
 	// Do not wrap it in the unconditional mutation middleware: a first-load request
 	// without a refresh cookie must return 401 rather than an unrelated CSRF 403.
 	group.Post("/refresh", idempotency, authLimiter, ctl.refresh)
-	group.Post("/forgot-password", idempotency, passwordLimiter, middleware.ValidateCSRFForMutations(ctl.config), ctl.forgotPassword)
-	group.Post("/reset-password", idempotency, passwordLimiter, middleware.ValidateCSRFForMutations(ctl.config), ctl.resetPassword)
+	group.Post("/forgot-password", idempotency, passwordLimiter, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.forgotPassword)
+	group.Post("/reset-password", idempotency, passwordLimiter, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.resetPassword)
 	group.Post("/logout", requireAuth, ctl.logout)
 	group.Post("/2fa/setup", requireAuth, ctl.setupTwoFactor)
 	group.Post("/2fa/verify", requireAuth, ctl.verifyTwoFactor)
