@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os/signal"
 	"syscall"
@@ -14,7 +15,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("gapak startup version=%s commit=%s build_time=%s", version.Version, version.Commit, version.BuildTime)
+	// stdout is classified as informational by Railway; keep normal startup
+	// metadata out of stderr so a healthy boot is not rendered as an error.
+	fmt.Printf("gapak startup version=%s commit=%s build_time=%s\n", version.Version, version.Commit, version.BuildTime)
 
 	application, err := app.New(ctx)
 	if err != nil {
