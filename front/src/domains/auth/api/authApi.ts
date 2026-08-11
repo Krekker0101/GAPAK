@@ -19,7 +19,8 @@ export const authApi = {
     return assertAuthResponse(await httpClient.post('/auth/login', { login: input.email, password: input.password }));
   },
   async register(input: RegisterRequest): Promise<AuthResponse> {
-    return assertAuthResponse(await httpClient.post('/auth/register', { ...input, email: undefined, preferAnonymous: true }));
+    const { preferAnonymous: _preferAnonymous, ...payload } = input;
+    return assertAuthResponse(await httpClient.post('/auth/register', payload));
   },
   async anonymousRegister(input: RegisterRequest): Promise<AuthResponse> {
     // Keep the anonymous endpoint available for flows that explicitly request it,

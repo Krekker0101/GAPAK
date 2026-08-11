@@ -37,3 +37,10 @@ test('production WebSocket transport does not use URL tokens', () => {
   assert.doesNotMatch(ws, /[?&](token|access_token|refresh_token)=/i);
   assert.match(ws, /gapak\.realtime\.v1/);
 });
+
+test('email registration preserves email and does not force anonymous mode', () => {
+  const authApi = readFileSync(join(process.cwd(), 'src/domains/auth/api/authApi.ts'), 'utf8');
+  assert.doesNotMatch(authApi, /email:\s*undefined/);
+  assert.match(authApi, /preferAnonymous:\s*_preferAnonymous/);
+  assert.doesNotMatch(authApi, /preferAnonymous:\s*true/);
+});
