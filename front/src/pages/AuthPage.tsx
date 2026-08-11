@@ -24,7 +24,12 @@ const AuthPage: React.FC = () => {
     setSubmitError(null);
     try {
       if (isRegister) {
-        await register({ email: loginValue.trim(), password, username: username.trim(), displayName: displayName.trim() });
+        await register({
+          email: loginValue.trim(),
+          password,
+          username: username.trim(),
+          displayName: displayName.trim(),
+        });
       } else {
         await login(loginValue.trim(), password);
       }
@@ -38,7 +43,20 @@ const AuthPage: React.FC = () => {
     clearError();
     setSubmitError(null);
     try {
-      await anonymousRegister();
+      // Anonymous accounts still require a server-valid username/password in the
+      // current backend contract. Generate them locally so the guest action never
+      // sends an empty JSON body (which previously produced request.invalid_json).
+      const random = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID().replaceAll('-', '')
+        : `${Date.now()}${Math.random().toString(36).slice(2)}`;
+      const generatedUsername = `guest${random.slice(0, 20)}`;
+      const generatedPassword = `${random}${random.slice(0, 12)}!A1`;
+      await anonymousRegister({
+        email: '',
+        password: generatedPassword,
+        username: generatedUsername,
+        displayName: 'GAPAK Guest',
+      });
       navigate('/posts', { replace: true });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Anonymous registration failed');
