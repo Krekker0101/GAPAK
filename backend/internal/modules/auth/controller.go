@@ -34,14 +34,16 @@ func (ctl *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Han
 	group.Post("/register", idempotency, authLimiter, middleware.ValidateCSRFForMutations(ctl.config), ctl.register)
 	group.Post("/register-anonymous", idempotency, authLimiter, middleware.ValidateCSRFForMutations(ctl.config), ctl.registerAnonymous)
 	group.Post("/login", idempotency, authLimiter, middleware.ValidateCSRFForMutations(ctl.config), ctl.login)
-	group.Post("/refresh", idempotency, authLimiter, middleware.ValidateCSRFForMutations(ctl.config), ctl.refresh)
+	// Refresh performs conditional CSRF validation itself when a refresh cookie is used.
+	// Do not wrap it in the unconditional mutation middleware: a first-load request
+	// without a refresh cookie must return 401 rather than an unrelated CSRF 403.
+	group.Post("/refresh", idempotency, authLimiter, ctl.refresh)
 	group.Post("/forgot-password", idempotency, passwordLimiter, middleware.ValidateCSRFForMutations(ctl.config), ctl.forgotPassword)
 	group.Post("/reset-password", idempotency, passwordLimiter, middleware.ValidateCSRFForMutations(ctl.config), ctl.resetPassword)
 	group.Post("/logout", requireAuth, ctl.logout)
 	group.Post("/2fa/setup", requireAuth, ctl.setupTwoFactor)
 	group.Post("/2fa/verify", requireAuth, ctl.verifyTwoFactor)
 
-	// OAuth routes
 	group.Get("/oauth/:provider", ctl.oauthRedirect)
 	group.Post("/oauth/:provider", ctl.oauthLogin)
 	group.Get("/callback/:provider", ctl.oauthCallback)
@@ -52,7 +54,7 @@ func (ctl *Controller) csrf(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	expiresAt := time.Now().Add(15 * time.Minute) // Short-lived for unauthenticated
+	expiresAt := time.Now().Add(15 * time.Minute)
 	authplatform.SetCSRFCookie(c, ctl.config, csrfToken, expiresAt)
 	return c.JSON(httpx.OK(map[string]string{"csrfToken": csrfToken}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
@@ -131,7 +133,8 @@ func (ctl *Controller) refresh(c *fiber.Ctx) error {
 		return err
 	}
 	authplatform.SetRefreshCookie(c, ctl.config, refreshToken, response.RefreshUntil)
-	authplatform.SetCSRFCookie(c, ctl.config, response.CSRFToken, response.RefreshUntil)
+	// Keep the CSRF token stable during refresh. Login/register establish a fresh token,
+	// while /auth/csrf can explicitly renew it when the client has no usable token.
 	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
@@ -149,19 +152,15 @@ func (ctl *Controller) logout(c *fiber.Ctx) error {
 			return err
 		}
 	}
-
 	claims := middleware.ClaimsFromContext(c)
 	if err := ctl.service.Logout(c.UserContext(), claims.UserID, claims.SessionID, payload.AllDevices); err != nil {
 		return err
 	}
-
-	// Revoke the current access token (or all access tokens for the user).
 	if payload.AllDevices {
 		_ = ctl.service.RevokeUserTokens(c.UserContext(), claims.UserID)
 	} else {
 		_ = ctl.service.RevokeAccessToken(c.UserContext(), claims.ID)
 	}
-
 	authplatform.ClearAuthCookies(c, ctl.config)
 	return c.JSON(httpx.OK(AcceptedResponse{Accepted: true}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
@@ -216,12 +215,7 @@ func (ctl *Controller) requestMeta(c *fiber.Ctx, deviceName, deviceFingerprint s
 	if ctl.privacy != nil {
 		return ctl.privacy.RequestMeta(c, deviceName, deviceFingerprint)
 	}
-	return common.RequestMeta{
-		IP:                c.IP(),
-		UserAgent:         c.Get(fiber.HeaderUserAgent),
-		DeviceName:        deviceName,
-		DeviceFingerprint: deviceFingerprint,
-	}
+	return common.RequestMeta{IP: c.IP(), UserAgent: c.Get(fiber.HeaderUserAgent), DeviceName: deviceName, DeviceFingerprint: deviceFingerprint}
 }
 
 func (ctl *Controller) oauthRedirect(c *fiber.Ctx) error {
@@ -229,7 +223,6 @@ func (ctl *Controller) oauthRedirect(c *fiber.Ctx) error {
 	if provider == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "Provider is required")
 	}
-
 	state, err := authplatform.RandomToken(32)
 	if err != nil {
 		return err
@@ -240,33 +233,12 @@ func (ctl *Controller) oauthRedirect(c *fiber.Ctx) error {
 	}
 	hash := sha256.Sum256([]byte(codeVerifier))
 	codeChallenge := base64.RawURLEncoding.EncodeToString(hash[:])
-
-	c.Cookie(&fiber.Cookie{
-		Name:     "oauth_state",
-		Value:    state,
-		Path:     "/",
-		MaxAge:   600,
-		HTTPOnly: true,
-		Secure:   ctl.config.CookieSecure,
-		SameSite: fiber.CookieSameSiteLaxMode,
-		Domain:   authplatform.CookieDomain(ctl.config.CookieDomain),
-	})
-	c.Cookie(&fiber.Cookie{
-		Name:     "oauth_pkce",
-		Value:    codeVerifier,
-		Path:     "/",
-		MaxAge:   600,
-		HTTPOnly: true,
-		Secure:   ctl.config.CookieSecure,
-		SameSite: fiber.CookieSameSiteLaxMode,
-		Domain:   authplatform.CookieDomain(ctl.config.CookieDomain),
-	})
-
+	c.Cookie(&fiber.Cookie{Name: "oauth_state", Value: state, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: authplatform.CookieDomain(ctl.config.CookieDomain)})
+	c.Cookie(&fiber.Cookie{Name: "oauth_pkce", Value: codeVerifier, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: authplatform.CookieDomain(ctl.config.CookieDomain)})
 	redirectURL, err := ctl.service.GetOAuthRedirectURL(c.UserContext(), provider, state, codeChallenge)
 	if err != nil {
 		return err
 	}
-
 	return c.JSON(httpx.OK(map[string]string{"url": redirectURL}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
@@ -275,7 +247,6 @@ func (ctl *Controller) oauthLogin(c *fiber.Ctx) error {
 	if provider == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "Provider is required")
 	}
-
 	state, err := authplatform.RandomToken(32)
 	if err != nil {
 		return err
@@ -286,33 +257,12 @@ func (ctl *Controller) oauthLogin(c *fiber.Ctx) error {
 	}
 	hash := sha256.Sum256([]byte(codeVerifier))
 	codeChallenge := base64.RawURLEncoding.EncodeToString(hash[:])
-
-	c.Cookie(&fiber.Cookie{
-		Name:     "oauth_state",
-		Value:    state,
-		Path:     "/",
-		MaxAge:   600,
-		HTTPOnly: true,
-		Secure:   ctl.config.CookieSecure,
-		SameSite: fiber.CookieSameSiteLaxMode,
-		Domain:   authplatform.CookieDomain(ctl.config.CookieDomain),
-	})
-	c.Cookie(&fiber.Cookie{
-		Name:     "oauth_pkce",
-		Value:    codeVerifier,
-		Path:     "/",
-		MaxAge:   600,
-		HTTPOnly: true,
-		Secure:   ctl.config.CookieSecure,
-		SameSite: fiber.CookieSameSiteLaxMode,
-		Domain:   authplatform.CookieDomain(ctl.config.CookieDomain),
-	})
-
+	c.Cookie(&fiber.Cookie{Name: "oauth_state", Value: state, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: authplatform.CookieDomain(ctl.config.CookieDomain)})
+	c.Cookie(&fiber.Cookie{Name: "oauth_pkce", Value: codeVerifier, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: authplatform.CookieDomain(ctl.config.CookieDomain)})
 	redirectURL, err := ctl.service.GetOAuthRedirectURL(c.UserContext(), provider, state, codeChallenge)
 	if err != nil {
 		return err
 	}
-
 	return c.JSON(httpx.OK(map[string]string{"url": redirectURL}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
@@ -320,59 +270,24 @@ func (ctl *Controller) oauthCallback(c *fiber.Ctx) error {
 	provider := c.Params("provider")
 	code := c.Query("code")
 	state := c.Query("state")
-
-	// Validate state parameter
 	savedState := c.Cookies("oauth_state")
 	codeVerifier := c.Cookies("oauth_pkce")
 	if savedState == "" || state == "" || savedState != state || codeVerifier == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "Invalid OAuth state")
 	}
-
 	for _, name := range []string{"oauth_state", "oauth_pkce"} {
-		c.Cookie(&fiber.Cookie{
-			Name:     name,
-			Value:    "",
-			Path:     "/",
-			MaxAge:   -1,
-			HTTPOnly: true,
-			Secure:   ctl.config.CookieSecure,
-			SameSite: fiber.CookieSameSiteLaxMode,
-			Domain:   authplatform.CookieDomain(ctl.config.CookieDomain),
-		})
+		c.Cookie(&fiber.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: authplatform.CookieDomain(ctl.config.CookieDomain)})
 	}
-
 	if code == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "Authorization code is required")
 	}
-
-	meta := common.RequestMeta{
-		IP:        c.IP(),
-		UserAgent: c.Get(fiber.HeaderUserAgent),
-	}
-
+	meta := common.RequestMeta{IP: c.IP(), UserAgent: c.Get(fiber.HeaderUserAgent)}
 	response, refreshToken, err := ctl.service.HandleOAuthCallback(c.UserContext(), provider, code, codeVerifier, meta)
 	if err != nil {
-		// Redirect to frontend login with error
-		frontendURL := "/login?error=oauth_failed"
-		return c.Redirect(frontendURL, fiber.StatusTemporaryRedirect)
+		return c.Redirect("/login?error=oauth_failed", fiber.StatusTemporaryRedirect)
 	}
-
 	authplatform.SetRefreshCookie(c, ctl.config, refreshToken, response.RefreshUntil)
 	authplatform.SetCSRFCookie(c, ctl.config, response.CSRFToken, response.RefreshUntil)
-
-	// Set access token in HTTP-only cookie for secure transfer
-	c.Cookie(&fiber.Cookie{
-		Name:     "gapak_at",
-		Value:    response.AccessToken,
-		Path:     "/",
-		HTTPOnly: true,
-		Secure:   ctl.config.CookieSecure,
-		SameSite: "Lax",
-		Domain:   authplatform.CookieDomain(ctl.config.CookieDomain),
-		MaxAge:   300, // 5 minutes - should be consumed immediately by frontend
-	})
-
-	// Redirect to frontend without tokens in URL
-	frontendURL := "/auth/callback"
-	return c.Redirect(frontendURL, fiber.StatusTemporaryRedirect)
+	c.Cookie(&fiber.Cookie{Name: "gapak_at", Value: response.AccessToken, Path: "/", HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: authplatform.ParseSameSite(ctl.config.CookieSameSite), Domain: authplatform.CookieDomain(ctl.config.CookieDomain), MaxAge: 300})
+	return c.Redirect("/auth/callback", fiber.StatusTemporaryRedirect)
 }
