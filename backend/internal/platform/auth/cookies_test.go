@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -25,10 +26,7 @@ func TestCookiesHonorConfiguredSameSite(t *testing.T) {
 		SetCSRFCookie(c, cfg, "csrf", time.Now().Add(time.Hour))
 		return nil
 	})
-	req := fiber.AcquireRequest()
-	defer fiber.ReleaseRequest(req)
-	req.Header.SetMethod(fiber.MethodGet)
-	req.SetRequestURI("/")
+	req := httptest.NewRequest(fiber.MethodGet, "/", nil)
 	resp, err := app.Test(req, -1)
 	if err != nil {
 		t.Fatal(err)
