@@ -14,18 +14,26 @@ export class AuthManager {
 
   async refreshSession(): Promise<string> {
     if (!this.refreshPromise) {
-      this.refreshPromise = httpClient.refreshSession()
-        .then(async (token) => {
-          // Refresh rotates the CSRF cookie too. Re-bootstrap it so the next
-          // state-changing request sends the token that matches the new cookie.
-          await this.ensureCsrf();
-          return token;
-        })
+      this.refreshPromise = this.performRefreshWithCsrfRecovery()
         .finally(() => {
           this.refreshPromise = null;
         });
     }
     return this.refreshPromise;
+  }
+
+  private async performRefreshWithCsrfRecovery(): Promise<string> {
+    try {
+      return await httpClient.refreshSession();
+    } catch (error) {
+      // A CSRF cookie can legitimately expire before the long-lived refresh
+      // cookie. Re-bootstrap the CSRF pair once, then retry the refresh.
+      if (error instanceof ApiError && (error.status === 403 || error.code === 'CSRF_INVALID' || error.code === 'CSRF_FAILED')) {
+        await this.ensureCsrf();
+        return await httpClient.refreshSession();
+      }
+      throw error;
+    }
   }
 
   clearSession(): void {
@@ -34,7 +42,7 @@ export class AuthManager {
   }
 
   async ensureCsrf(): Promise<string> {
-    return httpClient.get<{ csrfToken: string }>('/api/auth/csrf', { skipAuth: true }).then((response) => {
+    return httpClient.get<{ csrfToken: string }>('/api/v1/auth/csrf', { skipAuth: true }).then((response) => {
       if (!response || typeof response.csrfToken !== 'string' || response.csrfToken.length < 16) {
         throw new ApiError('CSRF bootstrap failed', 502, 'CSRF_BOOTSTRAP_FAILED');
       }
