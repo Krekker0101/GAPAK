@@ -6,6 +6,14 @@ export interface LoginRequest { email: string; password: string; }
 export interface RegisterRequest { email: string; password: string; username: string; displayName: string; }
 
 export const authApi = {
+  async csrf(): Promise<string> {
+    const response = await httpClient.get<{ csrfToken: string }>('/api/auth/csrf', { skipAuth: true });
+    if (!response || typeof response.csrfToken !== 'string' || response.csrfToken.length < 16) {
+      throw new Error('CSRF bootstrap failed');
+    }
+    httpClient.setCsrfToken(response.csrfToken);
+    return response.csrfToken;
+  },
   async login(input: LoginRequest): Promise<AuthResponse> {
     return assertAuthResponse(await httpClient.post('/api/auth/login', input));
   },
