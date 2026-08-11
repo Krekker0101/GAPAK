@@ -21,8 +21,11 @@ export const authApi = {
   async register(input: RegisterRequest): Promise<AuthResponse> {
     return assertAuthResponse(await httpClient.post('/auth/register', input));
   },
-  async anonymousRegister(): Promise<AuthResponse> {
-    return assertAuthResponse(await httpClient.post('/auth/register-anonymous'));
+  async anonymousRegister(input: RegisterRequest): Promise<AuthResponse> {
+    // Keep the anonymous endpoint available for flows that explicitly request it,
+    // but send a valid JSON RegisterRequest. The backend intentionally converts
+    // this request into an anonymous account and ignores the email address.
+    return assertAuthResponse(await httpClient.post('/auth/register-anonymous', input));
   },
   async verify2FA(code: string, challengeId?: string): Promise<AuthResponse> {
     return assertAuthResponse(await httpClient.post('/auth/2fa/verify', { code, ...(challengeId ? { challengeId } : {}) }));
