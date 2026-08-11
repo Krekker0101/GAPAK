@@ -14,9 +14,16 @@ export class AuthManager {
 
   async refreshSession(): Promise<string> {
     if (!this.refreshPromise) {
-      this.refreshPromise = httpClient.refreshSession().finally(() => {
-        this.refreshPromise = null;
-      });
+      this.refreshPromise = httpClient.refreshSession()
+        .then(async (token) => {
+          // Refresh rotates the CSRF cookie too. Re-bootstrap it so the next
+          // state-changing request sends the token that matches the new cookie.
+          await this.ensureCsrf();
+          return token;
+        })
+        .finally(() => {
+          this.refreshPromise = null;
+        });
     }
     return this.refreshPromise;
   }
