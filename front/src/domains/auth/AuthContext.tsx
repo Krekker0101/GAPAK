@@ -40,8 +40,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const hydrateSession = useCallback(async () => {
     setState('AUTHENTICATING');
     try {
-      // Refresh uses a double-submit CSRF token. requireSession bootstraps the
-      // CSRF cookie and matching in-memory header before touching the refresh cookie.
       await authManager.requireSession();
       const profile = await authApi.me();
       setUser(profile);
@@ -87,65 +85,74 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return true;
   }, []);
 
+  const hydrateAfterAuth = useCallback(async () => {
+    // The auth response contains a compact auth user. Fetch the canonical profile
+    // immediately so the application receives all fields required by protected UI.
+    const profile = await authApi.me();
+    setUser(profile);
+    setState('AUTHENTICATED');
+  }, []);
+
   const login = useCallback(async (email: string, password: string) => {
     setState('AUTHENTICATING');
     setError(null);
     try {
-      // A page can reach the login screen before the initial session hydration
-      // finishes. Make the CSRF dependency explicit instead of relying on timing.
       await authManager.ensureCsrf();
       const response = await authApi.login({ email, password });
-      applyAuthResponse(response);
+      if (applyAuthResponse(response)) await hydrateAfterAuth();
       telemetry.record('auth', 'login_succeeded', 'info');
     } catch (err) {
       const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : 'Login failed', 401);
       setError(apiErr); setState('AUTH_ERROR'); telemetry.trackError('Login failed', apiErr); throw apiErr;
     }
-  }, [applyAuthResponse]);
+  }, [applyAuthResponse, hydrateAfterAuth]);
 
   const register = useCallback(async (data: { email: string; password: string; username: string; displayName: string }) => {
     setState('AUTHENTICATING'); setError(null);
     try {
       await authManager.ensureCsrf();
-      applyAuthResponse(await authApi.register(data));
+      const response = await authApi.register(data);
+      if (applyAuthResponse(response)) await hydrateAfterAuth();
       telemetry.record('auth', 'registration_succeeded', 'info');
     } catch (err) {
       const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : 'Registration failed', 400);
       setError(apiErr); setState('AUTH_ERROR'); throw apiErr;
     }
-  }, [applyAuthResponse]);
+  }, [applyAuthResponse, hydrateAfterAuth]);
 
   const anonymousRegister = useCallback(async () => {
     setState('AUTHENTICATING'); setError(null);
     try {
       await authManager.ensureCsrf();
-      applyAuthResponse(await authApi.anonymousRegister());
+      const response = await authApi.anonymousRegister();
+      if (applyAuthResponse(response)) await hydrateAfterAuth();
       telemetry.record('auth', 'anonymous_registration_succeeded', 'info');
     } catch (err) {
       const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : 'Anonymous registration failed', 400);
       setError(apiErr); setState('AUTH_ERROR'); throw apiErr;
     }
-  }, [applyAuthResponse]);
+  }, [applyAuthResponse, hydrateAfterAuth]);
 
   const verify2FA = useCallback(async (code: string) => {
     setState('AUTHENTICATING'); setError(null);
     try {
-      applyAuthResponse(await authApi.verify2FA(code, twoFactorChallengeId.current));
+      const response = await authApi.verify2FA(code, twoFactorChallengeId.current);
+      if (applyAuthResponse(response)) await hydrateAfterAuth();
       telemetry.record('auth', 'two_factor_verification_succeeded', 'info');
     } catch (err) {
       const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : '2FA verification failed', 400);
       setError(apiErr); setState('AUTH_ERROR'); throw apiErr;
     }
-  }, [applyAuthResponse]);
+  }, [applyAuthResponse, hydrateAfterAuth]);
 
   const forgotPassword = useCallback(async (email: string) => { await authManager.ensureCsrf(); await authApi.forgotPassword(email); telemetry.record('auth', 'password_reset_requested', 'info'); }, []);
   const resetPassword = useCallback(async (token: string, newPass: string) => { await authManager.ensureCsrf(); await authApi.resetPassword(token, newPass); telemetry.record('auth', 'password_reset_succeeded', 'info'); }, []);
 
   const handleOAuthCallback = useCallback(async (provider: string, code: string) => {
     setState('AUTHENTICATING'); setError(null);
-    try { await authManager.ensureCsrf(); applyAuthResponse(await authApi.oauthCallback(provider, code)); telemetry.record('auth', 'oauth_login_succeeded', 'info'); }
+    try { await authManager.ensureCsrf(); const response = await authApi.oauthCallback(provider, code); if (applyAuthResponse(response)) await hydrateAfterAuth(); telemetry.record('auth', 'oauth_login_succeeded', 'info'); }
     catch (err) { const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : 'OAuth login failed', 401); setError(apiErr); setState('AUTH_ERROR'); throw apiErr; }
-  }, [applyAuthResponse]);
+  }, [applyAuthResponse, hydrateAfterAuth]);
 
   const logout = useCallback(async () => {
     try { await authApi.logout(); } catch (err) { telemetry.trackError('Logout request failed', err); }
@@ -156,9 +163,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try { await authApi.logoutAll(); } finally { realtimeManager.disconnect('logout'); realtimeManager.clearChatSubscriptions(); realtimeManager.broadcastLogout(); await deviceCryptoManager.destroyAll(); authManager.clearSession(); queryClient.clear(); setUser(null); setRequires2FA(false); twoFactorChallengeId.current = undefined; setState('UNAUTHENTICATED'); telemetry.record('auth', 'logout_all_completed', 'info'); }
   }, [queryClient]);
 
-  const setPresenceStatus = useCallback((presence: PresenceStatus) => {
-    setUser((prev) => prev ? { ...prev, presence } : prev);
-  }, []);
+  const setPresenceStatus = useCallback((presence: PresenceStatus) => { setUser((prev) => prev ? { ...prev, presence } : prev); }, []);
 
   return (
     <AuthContext.Provider value={{ state, user, error, requires2FA, login, register, anonymousRegister, verify2FA, forgotPassword, resetPassword, handleOAuthCallback, logout, logoutAllDevices, setPresenceStatus, clearError: () => setError(null) }}>
