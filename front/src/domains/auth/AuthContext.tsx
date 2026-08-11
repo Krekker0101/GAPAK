@@ -40,7 +40,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const hydrateSession = useCallback(async () => {
     setState('AUTHENTICATING');
     try {
-      await authManager.requireSession();
+      const token = await authManager.requireSession();
+      // Empty token means the refresh endpoint correctly reported that this
+      // browser has no active session. Stay anonymous and do not call protected
+      // profile endpoints just to rediscover the same 401.
+      if (!token) {
+        authManager.clearSession();
+        setUser(null);
+        setState('UNAUTHENTICATED');
+        return;
+      }
       const profile = await authApi.me();
       setUser(profile);
       setState('AUTHENTICATED');
@@ -86,8 +95,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const hydrateAfterAuth = useCallback(async () => {
-    // The auth response contains a compact auth user. Fetch the canonical profile
-    // immediately so the application receives all fields required by protected UI.
     const profile = await authApi.me();
     setUser(profile);
     setState('AUTHENTICATED');
