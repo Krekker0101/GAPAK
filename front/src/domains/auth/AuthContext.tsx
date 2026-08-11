@@ -40,8 +40,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const hydrateSession = useCallback(async () => {
     setState('AUTHENTICATING');
     try {
-      // This works after a full page reload because refresh/session credentials are
-      // expected to be HttpOnly cookies, not localStorage values.
+      // Refresh uses a double-submit CSRF token. requireSession bootstraps the
+      // CSRF cookie and matching in-memory header before touching the refresh cookie.
       await authManager.requireSession();
       const profile = await authApi.me();
       setUser(profile);
@@ -67,10 +67,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return () => window.removeEventListener('gapak:cross-tab-logout', handleCrossTabLogout);
   }, []);
 
-
-  const applyAuthResponse = useCallback((response: { accessToken?: string; user?: UserProfile; requires2FA?: boolean; challengeId?: string }) => {
+  const applyAuthResponse = useCallback((response: { accessToken?: string; user?: UserProfile; requires2FA?: boolean; challengeId?: string; csrfToken?: string }) => {
     if (response.requires2FA) {
       twoFactorChallengeId.current = response.challengeId;
+      if (response.csrfToken) authManager.setCsrfToken(response.csrfToken);
       setRequires2FA(true);
       setState('AUTHENTICATING');
       return false;
@@ -79,6 +79,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       throw new ApiError('Authentication response is incomplete', 502, 'INVALID_AUTH_RESPONSE');
     }
     authManager.setAccessToken(response.accessToken);
+    if (response.csrfToken) authManager.setCsrfToken(response.csrfToken);
     setUser(response.user);
     setRequires2FA(false);
     twoFactorChallengeId.current = undefined;
@@ -90,6 +91,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setState('AUTHENTICATING');
     setError(null);
     try {
+      // A page can reach the login screen before the initial session hydration
+      // finishes. Make the CSRF dependency explicit instead of relying on timing.
+      await authManager.ensureCsrf();
       const response = await authApi.login({ email, password });
       applyAuthResponse(response);
       telemetry.record('auth', 'login_succeeded', 'info');
@@ -102,6 +106,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const register = useCallback(async (data: { email: string; password: string; username: string; displayName: string }) => {
     setState('AUTHENTICATING'); setError(null);
     try {
+      await authManager.ensureCsrf();
       applyAuthResponse(await authApi.register(data));
       telemetry.record('auth', 'registration_succeeded', 'info');
     } catch (err) {
@@ -113,6 +118,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const anonymousRegister = useCallback(async () => {
     setState('AUTHENTICATING'); setError(null);
     try {
+      await authManager.ensureCsrf();
       applyAuthResponse(await authApi.anonymousRegister());
       telemetry.record('auth', 'anonymous_registration_succeeded', 'info');
     } catch (err) {
@@ -132,23 +138,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [applyAuthResponse]);
 
-  const forgotPassword = useCallback(async (email: string) => { await authApi.forgotPassword(email); telemetry.record('auth', 'password_reset_requested', 'info'); }, []);
-  const resetPassword = useCallback(async (token: string, newPass: string) => { await authApi.resetPassword(token, newPass); telemetry.record('auth', 'password_reset_succeeded', 'info'); }, []);
+  const forgotPassword = useCallback(async (email: string) => { await authManager.ensureCsrf(); await authApi.forgotPassword(email); telemetry.record('auth', 'password_reset_requested', 'info'); }, []);
+  const resetPassword = useCallback(async (token: string, newPass: string) => { await authManager.ensureCsrf(); await authApi.resetPassword(token, newPass); telemetry.record('auth', 'password_reset_succeeded', 'info'); }, []);
 
   const handleOAuthCallback = useCallback(async (provider: string, code: string) => {
     setState('AUTHENTICATING'); setError(null);
-    try { applyAuthResponse(await authApi.oauthCallback(provider, code)); telemetry.record('auth', 'oauth_login_succeeded', 'info'); }
+    try { await authManager.ensureCsrf(); applyAuthResponse(await authApi.oauthCallback(provider, code)); telemetry.record('auth', 'oauth_login_succeeded', 'info'); }
     catch (err) { const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : 'OAuth login failed', 401); setError(apiErr); setState('AUTH_ERROR'); throw apiErr; }
   }, [applyAuthResponse]);
 
   const logout = useCallback(async () => {
     try { await authApi.logout(); } catch (err) { telemetry.trackError('Logout request failed', err); }
     finally { realtimeManager.disconnect('logout'); realtimeManager.clearChatSubscriptions(); realtimeManager.broadcastLogout(); await deviceCryptoManager.destroyAll(); authManager.clearSession(); queryClient.clear(); setUser(null); setRequires2FA(false); twoFactorChallengeId.current = undefined; setState('UNAUTHENTICATED'); telemetry.record('auth', 'logout_completed', 'info'); }
-  }, []);
+  }, [queryClient]);
 
   const logoutAllDevices = useCallback(async () => {
     try { await authApi.logoutAll(); } finally { realtimeManager.disconnect('logout'); realtimeManager.clearChatSubscriptions(); realtimeManager.broadcastLogout(); await deviceCryptoManager.destroyAll(); authManager.clearSession(); queryClient.clear(); setUser(null); setRequires2FA(false); twoFactorChallengeId.current = undefined; setState('UNAUTHENTICATED'); telemetry.record('auth', 'logout_all_completed', 'info'); }
-  }, []);
+  }, [queryClient]);
 
   const setPresenceStatus = useCallback((presence: PresenceStatus) => {
     setUser((prev) => prev ? { ...prev, presence } : prev);
