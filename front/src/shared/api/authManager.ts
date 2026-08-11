@@ -26,6 +26,12 @@ export class AuthManager {
         await this.ensureCsrf(true);
         return await httpClient.refreshSession();
       }
+      // A refresh without a refresh cookie is the normal anonymous bootstrap
+      // state. Do not surface it as an application error or start a retry loop.
+      if (error instanceof ApiError && error.status === 401) {
+        tokenManager.clear();
+        return '';
+      }
       throw error;
     }
   }
