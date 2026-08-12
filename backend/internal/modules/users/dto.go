@@ -7,10 +7,16 @@ type ProfileResponse struct {
 	DisplayName      string          `json:"displayName"`
 	Bio              string          `json:"bio,omitempty"`
 	AvatarFileID     string          `json:"avatarFileId,omitempty"`
+	AvatarURL        string          `json:"avatarUrl,omitempty"`
 	StatusMessage    string          `json:"statusMessage,omitempty"`
 	Role             string          `json:"role"`
+	Status           string          `json:"status"`
+	Presence         string          `json:"presence"`
+	TrustScore       int             `json:"trustScore"`
+	Permissions      []string        `json:"permissions"`
 	IsAnonymous      bool            `json:"isAnonymous"`
 	TwoFactorEnabled bool            `json:"twoFactorEnabled"`
+	CreatedAt        string          `json:"createdAt"`
 	Theme            string          `json:"theme"`
 	Privacy          PrivacyResponse `json:"privacy"`
 }

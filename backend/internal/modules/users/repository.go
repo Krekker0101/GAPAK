@@ -76,13 +76,44 @@ func (r *Repository) FindProfile(ctx context.Context, userID string) (*model.Use
 
 func (r *Repository) FindPrivacy(ctx context.Context, userID string) (*model.UserPrivacySettings, error) {
 	const query = `
+		INSERT INTO user_privacy_settings
+			(user_id, profile_visibility, last_seen_visibility, allow_friend_requests, allow_trusted_invites,
+			 searchable_by_email, searchable_by_username, post_default_privacy, show_online_status, updated_at)
+		SELECT id,
+		       CASE WHEN is_anonymous THEN 'PRIVATE'::"ProfileVisibility" ELSE 'CONNECTIONS'::"ProfileVisibility" END,
+		       CASE WHEN is_anonymous THEN 'NOBODY'::"LastSeenVisibility" ELSE 'CONNECTIONS'::"LastSeenVisibility" END,
+		       NOT is_anonymous,
+		       true,
+		       false,
+		       NOT is_anonymous,
+		       CASE WHEN is_anonymous THEN 'PRIVATE'::"PostPrivacy" ELSE 'FRIENDS'::"PostPrivacy" END,
+		       NOT is_anonymous,
+		       NOW()
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+		ON CONFLICT (user_id) DO NOTHING
+		RETURNING user_id, profile_visibility, last_seen_visibility, allow_friend_requests, allow_trusted_invites,
+		          searchable_by_email, searchable_by_username, post_default_privacy, show_online_status, created_at, updated_at`
+	row := r.db.QueryRow(ctx, query, userID)
+
+	settings, err := scanPrivacy(row)
+	if err == nil {
+		return settings, nil
+	}
+	if !errors.Is(err, apperrors.ErrNotFound) {
+		return nil, err
+	}
+
+	const selectQuery = `
 		SELECT user_id, profile_visibility, last_seen_visibility, allow_friend_requests, allow_trusted_invites,
 		       searchable_by_email, searchable_by_username, post_default_privacy, show_online_status, created_at, updated_at
 		FROM user_privacy_settings
 		WHERE user_id = $1
 		LIMIT 1`
-	row := r.db.QueryRow(ctx, query, userID)
+	return scanPrivacy(r.db.QueryRow(ctx, selectQuery, userID))
+}
 
+func scanPrivacy(row pgx.Row) (*model.UserPrivacySettings, error) {
 	var settings model.UserPrivacySettings
 	var profileVisibility, lastSeenVisibility, postDefaultPrivacy string
 	if err := row.Scan(
