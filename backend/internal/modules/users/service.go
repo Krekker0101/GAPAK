@@ -2,6 +2,7 @@ package users
 
 import (
 	"context"
+	"strings"
 
 	"github.com/gapak/backend/internal/domain/model"
 	"github.com/gapak/backend/internal/modules/media"
@@ -81,9 +82,14 @@ func (s *Service) toProfileResponse(user *model.User, privacy *model.UserPrivacy
 		Bio:              deref(user.Bio),
 		AvatarFileID:     deref(user.AvatarFileID),
 		StatusMessage:    deref(user.StatusMessage),
-		Role:             string(user.Role),
+		Role:             strings.ToLower(string(user.Role)),
+		Status:           strings.ToLower(string(user.AccountStatus)),
+		Presence:         "offline",
+		TrustScore:       0,
+		Permissions:      []string{},
 		IsAnonymous:      user.IsAnonymous,
 		TwoFactorEnabled: user.TwoFactorEnabled,
+		CreatedAt:        user.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 		Theme:            theme,
 		Privacy: PrivacyResponse{
 			ProfileVisibility:    string(privacy.ProfileVisibility),

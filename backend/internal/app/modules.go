@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -110,11 +111,7 @@ func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 		deps.Logger,
 		deps.Observability,
 	)
-	app.Get("/ws", requireAuth, func(c *fiber.Ctx) error {
-		claims := middleware.ClaimsFromContext(c)
-		c.Locals("userId", claims.UserID)
-		return c.Next()
-	}, fws.New(wsService.HandleConnection))
+	app.Get("/ws", websocketAuth(deps), fws.New(wsService.HandleConnection))
 	trustrooms.NewController(trustrooms.NewService(trustrooms.NewRepository(deps.DB)), deps.Validate).
 		RegisterRoutes(api, requireAuth)
 	media.NewController(media.NewService(media.NewRepository(deps.DB), deps.Storage, deps.ObjectStore, deps.Queue, deps.Config), deps.Validate).
@@ -129,6 +126,33 @@ func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 		RegisterRoutes(api, requireAuth, requireAdminDashboard, requireAdminUsersRead, requireAdminUsersWrite, requireAdminContentRead, requireAdminContentWrite)
 
 	return wsService
+}
+
+func websocketAuth(deps Dependencies) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		token := strings.TrimSpace(c.Query("access_token"))
+		if token == "" {
+			token = bearerToken(c.Get(fiber.HeaderAuthorization))
+		}
+		if token == "" {
+			return c.Next()
+		}
+		claims, err := deps.JWT.VerifyAccessToken(c.UserContext(), token)
+		if err != nil {
+			return c.Next()
+		}
+		c.Locals("userId", claims.UserID)
+		c.Locals("deviceId", claims.SessionID)
+		return c.Next()
+	}
+}
+
+func bearerToken(rawHeader string) string {
+	parts := strings.Fields(rawHeader)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return parts[1]
 }
 
 type wsChatAdapter struct {

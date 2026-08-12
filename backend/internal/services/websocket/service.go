@@ -482,6 +482,12 @@ func (s *Service) writePump(conn *Connection) {
 
 func (s *Service) handleMessage(ctx context.Context, conn *Connection, msg *WebSocketMessage) error {
 	switch msg.Type {
+	case "auth":
+		// Browser clients may send an auth frame immediately after opening even
+		// when the upgrade request was already authenticated via query token.
+		// Treat duplicate auth frames as idempotent so they do not poison the
+		// connection with an unknown-message error.
+		return nil
 	case "subscribe":
 		return s.handleSubscribe(ctx, conn, msg)
 	case "unsubscribe":

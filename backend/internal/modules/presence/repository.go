@@ -126,8 +126,8 @@ func (r *Repository) FindStatus(ctx context.Context, viewerID, targetUserID stri
 	const query = `
 		SELECT u.id,
 		       u.last_seen_at,
-		       ups.show_online_status,
-		       ups.last_seen_visibility,
+		       COALESCE(ups.show_online_status, NOT u.is_anonymous),
+		       COALESCE(ups.last_seen_visibility::text, CASE WHEN u.is_anonymous THEN 'NOBODY' ELSE 'CONNECTIONS' END),
 		       EXISTS (
 		         SELECT 1
 		         FROM friend_connections fc
@@ -157,7 +157,7 @@ func (r *Repository) FindStatus(ctx context.Context, viewerID, targetUserID stri
 		         WHERE upc.user_id = u.id
 		       ) AS last_heartbeat_at
 		FROM users u
-		JOIN user_privacy_settings ups ON ups.user_id = u.id
+		LEFT JOIN user_privacy_settings ups ON ups.user_id = u.id
 		WHERE u.id = $2
 		  AND u.deleted_at IS NULL
 		LIMIT 1`
