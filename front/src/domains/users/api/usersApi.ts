@@ -1,8 +1,13 @@
 import { httpClient } from '../../../shared/api/httpClient';
-import { ExtendedUserProfile } from '../../../shared/types/social';
-import { UserProfile } from '../../../shared/types';
+import type { BackendPrivacy, BackendProfile, BackendPublicProfile } from '../../../shared/api/backendContracts';
+
+export type UpdateProfileRequest = Partial<Pick<BackendProfile, 'displayName' | 'bio' | 'avatarFileId' | 'statusMessage'>>;
+export type UpdatePrivacyRequest = Partial<BackendPrivacy>;
+
 export const usersApi = {
-  me: () => httpClient.get<UserProfile>('/api/users/me'),
-  profile: (userIdOrUsername: string, signal?: AbortSignal) => httpClient.get<ExtendedUserProfile>(`/api/users/${encodeURIComponent(userIdOrUsername)}`, { signal }),
-  updateProfile: (payload: unknown, idempotencyKey: string) => httpClient.patch<UserProfile>('/api/users/me', payload, { idempotencyKey }),
+  me: (signal?: AbortSignal) => httpClient.get<BackendProfile>('/users/me', { signal }),
+  profile: (userId: string, signal?: AbortSignal) => httpClient.get<BackendPublicProfile>(`/users/${encodeURIComponent(userId)}`, { signal }),
+  updateProfile: (payload: UpdateProfileRequest, idempotencyKey: string, signal?: AbortSignal) => httpClient.patch<BackendProfile>('/users/me', payload, { idempotencyKey, signal }),
+  updatePrivacy: (payload: UpdatePrivacyRequest, idempotencyKey: string, signal?: AbortSignal) => httpClient.patch<BackendProfile>('/users/me/privacy', payload, { idempotencyKey, signal }),
+  updateTheme: (theme: 'light' | 'dark' | 'auto', idempotencyKey: string, signal?: AbortSignal) => httpClient.patch<BackendProfile>('/users/me/theme', { theme }, { idempotencyKey, signal }),
 };

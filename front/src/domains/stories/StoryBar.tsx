@@ -1,84 +1,41 @@
-/**
- * GAPAK StoryBar
- * Horizontal story circles list with active gradient rings.
- */
-
 import React from 'react';
-import { Plus, Sparkles } from 'lucide-react';
-import { UserStoryGroup, UserProfile } from '../../shared/types';
-import { Avatar } from '../../shared/design-system/primitives';
+import { Plus, ShieldCheck } from 'lucide-react';
+import type { Story, BackendProfile } from '../../shared/api/backendContracts';
 
 interface StoryBarProps {
-  storyGroups: UserStoryGroup[];
-  currentUser: UserProfile;
-  onSelectGroup: (group: UserStoryGroup, storyIndex?: number) => void;
+  stories: Story[];
+  currentUser: BackendProfile;
+  onSelectStory: (storyId: string) => void;
   onCreateStoryClick: () => void;
 }
 
-export const StoryBar: React.FC<StoryBarProps> = ({
-  storyGroups,
-  currentUser,
-  onSelectGroup,
-  onCreateStoryClick,
-}) => {
-  return (
-    <div className="flex items-center space-x-4 overflow-x-auto py-2 px-1 no-scrollbar">
-      {/* Create Story Button */}
-      <button
-        onClick={onCreateStoryClick}
-        className="flex flex-col items-center space-y-1.5 shrink-0 group focus:outline-none"
-      >
-        <div className="relative w-16 h-16 rounded-[var(--radius-pill)] bg-surface-subtle dark:bg-surface-muted border-2 border-dashed border-default dark:border-default flex items-center justify-center group-hover:border-indigo-500 transition">
-          <Avatar
-            src={currentUser.avatarUrl}
-            alt={currentUser.displayName}
-            fallback={currentUser.displayName[0]}
-            size="lg"
-            className="opacity-75 group-hover:opacity-100 transition"
-          />
-          <div className="absolute bottom-0 right-0 p-1 rounded-[var(--radius-pill)] bg-indigo-600 text-white border-2 border-white dark:border-strong">
-            <Plus className="w-3.5 h-3.5" />
-          </div>
-        </div>
-        <span className="text-[11px] font-semibold text-secondary dark:text-secondary group-hover:text-indigo-500">
-          Your Story
+const initials = (value: string) => value.slice(0, 2).toUpperCase();
+
+export const StoryBar: React.FC<StoryBarProps> = ({ stories, currentUser, onSelectStory, onCreateStoryClick }) => {
+  const byAuthor = new Map<string, Story[]>();
+  for (const story of stories) {
+    const list = byAuthor.get(story.authorId) ?? [];
+    list.push(story);
+    byAuthor.set(story.authorId, list);
+  }
+
+  return <div className="flex gap-4 overflow-x-auto pb-1" aria-label="Stories">
+    <button type="button" onClick={onCreateStoryClick} className="shrink-0 text-center" aria-label="Create story">
+      <span className="relative grid h-16 w-16 place-items-center rounded-full border-2 border-dashed border-indigo-400 bg-surface-subtle text-indigo-600">
+        <Plus size={22} />
+      </span>
+      <span className="mt-1 block max-w-16 truncate text-[11px] font-semibold text-primary">Your story</span>
+    </button>
+    {[...byAuthor.entries()].map(([authorId, authorStories]) => {
+      const first = authorStories[0];
+      const isOwner = authorId === currentUser.id;
+      const hasUnseen = authorStories.some(story => story.status === 'ACTIVE');
+      return <button key={authorId} type="button" onClick={() => onSelectStory(first.id)} className="shrink-0 text-center" aria-label={`Open story by ${isOwner ? currentUser.displayName : authorId}`}>
+        <span className={`grid h-16 w-16 place-items-center rounded-full border-2 ${hasUnseen ? 'border-indigo-500' : 'border-subtle'} bg-surface-subtle font-bold text-primary`}>
+          {isOwner ? initials(currentUser.displayName) : <ShieldCheck size={22} />}
         </span>
-      </button>
-
-      {/* Story Groups */}
-      {storyGroups.map((group) => {
-        const isSelf = group.user.id === currentUser.id;
-        if (isSelf && group.stories.length === 0) return null;
-
-        return (
-          <button
-            key={group.user.id}
-            onClick={() => onSelectGroup(group)}
-            className="flex flex-col items-center space-y-1.5 shrink-0 group focus:outline-none"
-          >
-            <div
-              className={`p-[2.5px] rounded-[var(--radius-pill)] transition-all ${
-                group.hasUnseenStories
-                  ? 'bg-gradient-to-tr from-amber-500 via-rose-500 to-indigo-600 scale-105'
-                  : 'bg-surface-hover dark:bg-surface-strong'
-              }`}
-            >
-              <div className="p-0.5 bg-surface dark:bg-surface rounded-[var(--radius-pill)]">
-                <Avatar
-                  src={group.user.avatarUrl}
-                  alt={group.user.displayName}
-                  fallback={group.user.displayName[0]}
-                  size="lg"
-                  presence={group.user.presence}
-                />
-              </div>
-            </div>
-            <span className="text-[11px] font-medium text-secondary dark:text-secondary truncate max-w-[70px]">
-              {group.user.username}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
+        <span className="mt-1 block max-w-16 truncate text-[11px] font-semibold text-primary">{isOwner ? 'You' : authorId.slice(0, 8)}</span>
+      </button>;
+    })}
+  </div>;
 };

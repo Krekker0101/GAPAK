@@ -86,6 +86,7 @@ export const PostMedia: React.FC<PostMediaProps> = ({
             muted={isMuted}
             loop
             className="w-full h-full object-contain"
+            preload="metadata"
           />
           <button
             onClick={() => setIsMuted(!isMuted)}
@@ -99,7 +100,7 @@ export const PostMedia: React.FC<PostMediaProps> = ({
           <img
             src={currentAsset.url}
             alt={currentAsset.altText || 'Post media asset'}
-            className="w-full h-full object-cover max-h-[500px]"
+            className="w-full h-full object-cover max-h-[500px]" loading="lazy" decoding="async"
           />
         </div>
       )}
@@ -108,12 +109,16 @@ export const PostMedia: React.FC<PostMediaProps> = ({
       {media.length > 1 && (
         <>
           <button
+            type="button"
+            aria-label="Previous media"
             onClick={() => setCurrentIndex((prev) => (prev > 0 ? prev - 1 : media.length - 1))}
             className="absolute left-2 top-1/2 -translate-y-1/2 p-2 rounded-[var(--radius-pill)] bg-black/50 text-white hover:bg-black/80 opacity-0 group-hover:opacity-100 transition"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
           <button
+            type="button"
+            aria-label="Previous media"
             onClick={() => setCurrentIndex((prev) => (prev < media.length - 1 ? prev + 1 : 0))}
             className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-[var(--radius-pill)] bg-black/50 text-white hover:bg-black/80 opacity-0 group-hover:opacity-100 transition"
           >

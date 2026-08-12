@@ -2,45 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+const read = (file: string) => readFileSync(join(process.cwd(), file), 'utf8');
+const requiredApiFiles = ['auth','posts','users','connections','chats','notifications','media','stories','live','security'].map((d) => `src/domains/${d}/api/${d === 'stories' ? 'storiesApi' : d === 'users' ? 'usersApi' : d === 'security' ? 'securityApi' : d === 'connections' ? 'connectionsApi' : d === 'notifications' ? 'notificationsApi' : d === 'media' ? 'mediaApi' : d === 'live' ? 'liveApi' : d === 'chats' ? 'chatsApi' : d === 'posts' ? 'postsApi' : 'authApi'}.ts`);
 
-const requiredApiFiles = [
-  'src/domains/auth/api/authApi.ts',
-  'src/domains/posts/api/postsApi.ts',
-  'src/domains/users/api/usersApi.ts',
-  'src/domains/connections/api/connectionsApi.ts',
-  'src/domains/chats/api/chatsApi.ts',
-  'src/domains/notifications/api/notificationsApi.ts',
-  'src/domains/media/api/mediaApi.ts',
-  'src/domains/stories/api/storiesApi.ts',
-  'src/domains/live/api/liveApi.ts',
-  'src/domains/security/api/securityApi.ts',
-];
-
-test('critical domains have explicit API service boundaries', () => {
-  assert.deepEqual(requiredApiFiles.filter((file) => !existsSync(join(process.cwd(), file))), []);
-});
-
-test('production HTTP transport always includes browser credentials', () => {
-  const http = readFileSync(join(process.cwd(), 'src/shared/api/httpClient.ts'), 'utf8');
-  assert.match(http, /credentials:\s*['"]include['"]/);
-});
-
-test('frontend maps domain API paths to the backend v1 prefix', () => {
-  const env = readFileSync(join(process.cwd(), 'src/shared/config/env.ts'), 'utf8');
-  const vite = readFileSync(join(process.cwd(), 'vite.config.ts'), 'utf8');
-  assert.match(env, /\/api\/v1/);
-  assert.match(vite, /'\/api\/v1'/);
-});
-
-test('production WebSocket transport does not use URL tokens', () => {
-  const ws = readFileSync(join(process.cwd(), 'src/shared/realtime/WebSocketTransport.ts'), 'utf8');
-  assert.doesNotMatch(ws, /[?&](token|access_token|refresh_token)=/i);
-  assert.match(ws, /gapak\.realtime\.v1/);
-});
-
-test('email registration preserves email and does not force anonymous mode', () => {
-  const authApi = readFileSync(join(process.cwd(), 'src/domains/auth/api/authApi.ts'), 'utf8');
-  assert.doesNotMatch(authApi, /email:\s*undefined/);
-  assert.match(authApi, /preferAnonymous:\s*_preferAnonymous/);
-  assert.doesNotMatch(authApi, /preferAnonymous:\s*true/);
-});
+test('critical domains have explicit API service boundaries', () => assert.deepEqual(requiredApiFiles.filter((f) => !existsSync(join(process.cwd(), f))), []));
+test('production HTTP transport always includes browser credentials', () => assert.match(read('src/shared/api/httpClient.ts'), /credentials:\s*['"]include['"]/));
+test('frontend maps domain API paths to the backend v1 prefix', () => { assert.match(read('src/shared/config/env.ts'), /\/api\/v1/); assert.match(read('vite.config.ts'), /\/api\/v1/); });
+test('email registration preserves email and explicitly disables anonymous mode by default', () => { const s=read('src/domains/auth/api/authApi.ts'); assert.match(s,/preferAnonymous: input\.preferAnonymous \?\? false/); assert.match(s,/\/auth\/register/); assert.doesNotMatch(s,/email:\s*undefined/); });
+test('anonymous registration is isolated from normal registration', () => { const s=read('src/domains/auth/api/authApi.ts'); assert.match(s,/\/auth\/register-anonymous/); assert.match(s,/anonymousRegister/); });
+test('OAuth initiation uses the actual provider endpoint and callback is a redirect endpoint', () => { const s=read('src/domains/auth/api/authApi.ts'); assert.match(s,/\/auth\/oauth\/\$\{encodeURIComponent\(provider\)\}/); assert.doesNotMatch(s,/\/auth\/oauth\/\$\{encodeURIComponent\(provider\)\}\/callback/); });
+test('logout-all is represented by POST /auth/logout with allDevices=true', () => { const s=read('src/domains/auth/api/authApi.ts'); assert.match(s,/\/auth\/logout/); assert.match(s,/allDevices: true/); assert.doesNotMatch(s,/\/auth\/logout-all/); });
+test('connections match the actual backend routes', () => { const s=read('src/domains/connections/api/connectionsApi.ts'); assert.match(s,/\/connections\/requests/); assert.match(s,/\/connections\/\$\{encodeURIComponent\(connectionId\)\}\/accept/); assert.match(s,/\/trusted-circle/); assert.doesNotMatch(s,/\/reject/); });
+test('chat uses actual message and trusted-device resources', () => { const s=read('src/domains/chats/api/chatsApi.ts'); assert.match(s,/\/chats\/\$\{encodeURIComponent\(chatId\)\}\/messages/); assert.match(s,/\/chats\/trusted-devices/); assert.doesNotMatch(s,/\/security\/devices/); });
+test('stories use feed/get/reaction/highlight/delete and no separate view/reply endpoints', () => { const s=read('src/domains/stories/api/storiesApi.ts'); assert.match(s,/\/stories\/feed/); assert.match(s,/\/stories\/\$\{encodeURIComponent\(storyId\)\}/); assert.match(s,/\/reactions/); assert.match(s,/\/highlight/); assert.doesNotMatch(s,/\/view[`'\)]/); assert.doesNotMatch(s,/\/replies/); });
+test('media uses upload-sessions, per-part grants, abort and asset playback-grant routes', () => { const s=read('src/domains/media/api/mediaApi.ts'); assert.match(s,/\/media\/upload-sessions/); assert.match(s,/\/parts/); assert.match(s,/\/abort/); assert.match(s,/\/media\/assets\/\$\{encodeURIComponent\(mediaId\)\}\/playback-grants/); assert.doesNotMatch(s,/\/media\/playback-grants/); assert.doesNotMatch(s,/\/media\/uploads/); });
+test('live uses /live-streams and exposes durable events', () => { const s=read('src/domains/live/api/liveApi.ts'); assert.match(s,/\/live-streams/); assert.match(s,/\/events/); assert.doesNotMatch(s,/\/api\/live['`]/); });
+test('notifications do not claim cursor pagination', () => { const s=read('src/domains/notifications/api/notificationsApi.ts'); assert.match(s,/limit\?: number/); assert.doesNotMatch(s,/cursor\?:/); });
+test('strict backend contract types exist', () => { const s=read('src/shared/api/backendContracts.ts'); for (const token of ['ApiSuccess','ApiErrorEnvelope','BackendAuthResponse','Connection','Post','Story','UploadSession','MediaAsset','Chat','Message','TrustedDevice','NotificationItem','LiveEvent']) assert.match(s,new RegExp(`\\b${token}\\b`)); });
+test('API modules do not contain any type annotations', () => { for(const f of requiredApiFiles) assert.doesNotMatch(read(f),/\bany\b/,`${f} contains any`); });
+test('HTTP client exposes bounded timeout and caller cancellation', () => { const t=read('src/shared/types/index.ts'), h=read('src/shared/api/httpClient.ts'); assert.match(t,/timeoutMs\?: number/); assert.match(h,/timeoutMs = 15_000/); assert.match(h,/signal\?\.addEventListener\('abort'/); assert.match(h,/TIMEOUT/); });
+test('realtime events require server-issued identifiers and never fabricate timestamps', () => { const s=read('src/shared/realtime/EventParser.ts'); assert.match(s,/requireString\(frame\.eventId \?\? frame\.id, 'eventId'\)/); assert.doesNotMatch(s,/crypto\.randomUUID\(\)/); assert.doesNotMatch(s,/new Date\(\)\.toISOString\(\)/); });

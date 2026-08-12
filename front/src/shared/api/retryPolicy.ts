@@ -1,4 +1,4 @@
-import { HttpMethod } from '../types';
+import type { HttpMethod } from '../types';
 
 export interface RetryDecisionContext {
   method: HttpMethod;
@@ -17,8 +17,8 @@ export const shouldRetry = ({ method, idempotencyKey, attempt, maxAttempts, erro
   return true;
 };
 
-export const retryDelayMs = (attempt: number, retryAfterMs?: number): number => {
+export const retryDelayMs = (attempt: number, retryAfterMs?: number, random: () => number = Math.random): number => {
   if (retryAfterMs !== undefined) return Math.min(30_000, Math.max(0, retryAfterMs));
   const exponential = Math.min(8_000, 250 * 2 ** attempt);
-  return exponential + Math.floor(Math.random() * 150);
+  return exponential + Math.floor(Math.max(0, Math.min(0.999999, random())) * 150);
 };

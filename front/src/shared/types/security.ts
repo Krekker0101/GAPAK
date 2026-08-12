@@ -20,7 +20,7 @@ export interface TwoFactorState {
   enabled: boolean;
   method?: 'totp' | 'security_key';
   verifiedAt?: string;
-  backupCodesRemaining: number;
+  backupCodesRemaining?: number;
 }
 
 export interface TwoFactorSetupData {

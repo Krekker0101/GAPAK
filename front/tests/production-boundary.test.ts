@@ -19,6 +19,9 @@ walk(root);
 const source = productionFiles.map((file) => ({ file, text: readFileSync(file, 'utf8') }));
 
 test('production source does not import development mocks', () => {
+  const httpClient = source.find(({ file }) => file.replaceAll('\\', '/').endsWith('shared/api/httpClient.ts'))?.text ?? '';
+  assert.equal(httpClient.includes('devtools/mocks/api/mockBackend'), false, 'production transport must not import development mocks');
+
   const violations = source.filter(({ file, text }) => file.replaceAll('\\', '/').endsWith('shared/api/httpClient.ts') ? false : /devtools\/mocks|mockBackend|MOCK_USER|MOCK_CURRENT_USER/.test(text));
   assert.deepEqual(violations.map(({ file }) => relative(process.cwd(), file)), [], 'development fixtures leaked into production source');
 });

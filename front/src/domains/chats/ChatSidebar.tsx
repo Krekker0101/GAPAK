@@ -98,7 +98,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
             <button
               key={tab.id}
               type="button"
-              onClick={() => setFilter(tab.id as any)}
+              onClick={() => setFilter(tab.id as 'ALL' | ChatType)}
               className={`px-2.5 py-1 rounded-[var(--radius-lg)] transition-colors shrink-0 ${
                 filter === tab.id
                   ? 'bg-indigo-600 text-white font-bold'

@@ -1,11 +1,11 @@
 import { httpClient } from '../../../shared/api/httpClient';
+import type { NotificationsList, NotificationItem } from '../../../shared/api/backendContracts';
 
-export type NotificationType = 'mention'|'like'|'comment'|'follow'|'connection'|'message'|'story'|'live'|'security'|'trust-room';
-export interface NotificationItem { id:string; type:NotificationType; title:string; body?:string; createdAt:string; readAt?:string|null; actor?:{id:string;username:string;displayName:string;avatarUrl?:string}; targetUrl?:string; metadata?:Record<string,unknown> }
-export interface NotificationsResponse { notifications:NotificationItem[]; nextCursor?:string; hasMore?:boolean }
-export const notificationsApi={
-  list:(params:{cursor?:string;limit?:number}={},signal?:AbortSignal)=>httpClient.request<NotificationsResponse>({url:'/api/notifications',params,signal}),
-  unreadCount:(signal?:AbortSignal)=>httpClient.request<{count:number}>({url:'/api/notifications/unread-count',signal}),
-  markRead:(id:string)=>httpClient.request<void>({url:`/api/notifications/${encodeURIComponent(id)}/read`,method:'POST',idempotencyKey:crypto.randomUUID()}),
-  markAllRead:()=>httpClient.request<void>({url:'/api/notifications/read-all',method:'POST',idempotencyKey:crypto.randomUUID()}),
+export const notificationsApi = {
+  list: (params: { limit?: number } = {}, signal?: AbortSignal) => httpClient.get<NotificationsList>('/notifications', { params, signal }),
+  unreadCount: (signal?: AbortSignal) => httpClient.get<{ count: number }>('/notifications/unread-count', { signal }),
+  markRead: (id: string, signal?: AbortSignal) => httpClient.post<void>(`/notifications/${encodeURIComponent(id)}/read`, undefined, { signal }),
+  markAllRead: (signal?: AbortSignal) => httpClient.post<void>('/notifications/read-all', undefined, { signal }),
 };
+
+export type { NotificationItem };

@@ -8,11 +8,21 @@
     "typecheck": "tsc --noEmit",
     "lint": "node scripts/lint.mjs",
     "test:static": "node --test --experimental-strip-types tests/*.test.ts",
-    "test": "npm run typecheck && npm run lint && npm run test:static",
+    "test": "npm run typecheck && npm run lint && npm run test:all",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "perf:audit": "node scripts/performance-audit.mjs",
+    "test:unit": "node --test --experimental-strip-types tests/unit/*.test.ts",
+    "test:contract": "node --test --experimental-strip-types tests/contract/*.test.ts tests/api-contract.test.ts",
+    "test:integration": "node --test --experimental-strip-types tests/integration/*.test.ts",
+    "test:security": "node --test --experimental-strip-types tests/security/*.test.ts tests/production-boundary.test.ts",
+    "test:performance": "node --test --experimental-strip-types tests/performance/*.test.ts tests/phase5-realtime-performance.test.ts",
+    "test:all": "node scripts/run-tests.mjs",
+    "ci:verify": "npm run lint && npm run typecheck && npm run test:all && npm run build",
+    "test:unit:coverage": "node --test --experimental-strip-types --experimental-test-coverage tests/unit/*.test.ts",
+    "test:e2e:required": "GAPAK_E2E_BASE_URL=${GAPAK_E2E_BASE_URL:?GAPAK_E2E_BASE_URL is required} GAPAK_E2E_AUTH_URL=${GAPAK_E2E_AUTH_URL:?GAPAK_E2E_AUTH_URL is required} playwright test"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

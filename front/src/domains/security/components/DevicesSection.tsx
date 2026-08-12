@@ -14,9 +14,10 @@ export const DevicesSection: React.FC = () => {
   const [isAddDeviceOpen, setIsAddDeviceOpen] = useState(false);
   const [newDeviceName, setNewDeviceName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    void SecurityService.getDevices().then(setDevices).catch(() => undefined);
+    void SecurityService.getDevices().then(setDevices).catch((error) => setLoadError(error instanceof Error ? error.message : 'Unable to load devices.'));
     return SecurityService.subscribe((state) => setDevices(state.devices));
   }, []);
 
@@ -24,6 +25,7 @@ export const DevicesSection: React.FC = () => {
     e.preventDefault();
     if (!newDeviceName.trim() || !user) return;
     setBusy(true);
+    setLoadError(null);
     try {
       const deviceId = `web_${crypto.randomUUID()}`;
       await deviceCryptoManager.getIdentity(deviceId);
@@ -31,6 +33,8 @@ export const DevicesSection: React.FC = () => {
       await SecurityService.getDevices();
       setNewDeviceName('');
       setIsAddDeviceOpen(false);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Device registration failed.');
     } finally { setBusy(false); }
   };
 
@@ -44,13 +48,15 @@ export const DevicesSection: React.FC = () => {
         <Button onClick={() => setIsAddDeviceOpen(true)} variant="primary" size="sm" leftIcon={<Plus className="w-4 h-4" />}>Register This Browser</Button>
       </div>
 
+      {loadError && <div role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">{loadError}</div>}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {devices.map((dev) => (
           <div key={dev.id} className="p-5 rounded-[var(--radius-2xl)] bg-surface border border-subtle flex flex-col justify-between gap-4">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="p-2.5 rounded-[var(--radius-xl)] bg-indigo-500/10 text-indigo-400"><Laptop className="w-5 h-5" /></div>
-                <Badge variant={dev.verificationStatus === 'verified' ? 'success' : 'warning'} size="sm">{dev.verificationStatus.toUpperCase()}</Badge>
+                <Badge variant={dev.verificationStatus === 'VERIFIED' ? 'success' : 'warning'} size="sm">{dev.verificationStatus.toUpperCase()}</Badge>
               </div>
               <div>
                 <h3 className="text-sm font-bold text-primary">{dev.name}</h3>

@@ -21,14 +21,15 @@ import {
   Tag,
   Calendar,
 } from 'lucide-react';
-import { ContentPrivacyLevel, PostMediaAsset, Post, UserProfile, PostContentType } from '../../shared/types';
+import { ContentPrivacyLevel, PostMediaAsset, UserProfile, PostContentType } from '../../shared/types';
+import type { CreatePostRequest } from './api/postsApi';
 import { Avatar, Button, Badge } from '../../shared/design-system/primitives';
 import { MediaUploadSubsystem } from '../media/MediaUploadSubsystem';
 import { useToast } from '../../shared/ux/ToastContext';
 
 interface PostComposerProps {
   currentUser: UserProfile;
-  onPostCreated: (post: Partial<Post>) => Promise<unknown>;
+  onPostCreated: (post: CreatePostRequest) => Promise<unknown>;
 }
 
 export const PostComposer: React.FC<PostComposerProps> = ({ currentUser, onPostCreated }) => {
@@ -114,14 +115,14 @@ export const PostComposer: React.FC<PostComposerProps> = ({ currentUser, onPostC
     }
 
     setIsSubmitting(true);
-    void onPostCreated({
+    const request: CreatePostRequest = {
       body,
-      media: uploadedMedia,
-      contentType,
+      contentType: contentType === 'clip' ? 'CLIP' : 'POST',
       privacy,
       expiresAt: privacy === 'TIMED' ? new Date(Date.now() + expirationHours * 3600 * 1000).toISOString() : undefined,
-      audienceTags,
-    }).then(() => {
+      mediaFileIds: uploadedMedia.map((media) => media.id),
+    };
+    void onPostCreated(request).then(() => {
       setBody('');
       setUploadedMedia([]);
       setShowMediaUploader(false);

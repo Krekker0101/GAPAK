@@ -16,6 +16,9 @@ interface ProfileViewProps {
   user: ExtendedUserProfile;
   currentUser: UserProfile;
   posts: Post[];
+  postsLoading?: boolean;
+  postsError?: Error | null;
+  onBlockToggle?: () => void;
   onLikeToggle: (postId: string) => void;
   onAddComment: (postId: string, text: string, parentId?: string) => void;
   onUpdateUserRelationship?: (updated: Partial<ExtendedUserProfile>) => Promise<void>;
@@ -25,6 +28,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   user,
   currentUser,
   posts,
+  postsLoading,
+  postsError,
+  onBlockToggle,
   onLikeToggle,
   onAddComment,
   onUpdateUserRelationship,
@@ -82,7 +88,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   };
 
   const handleBlockToggle = () => {
-    toast.warning('Blocking requires the backend moderation/privacy contract.');
+    if (!onBlockToggle) { toast.warning('Blocking is unavailable because the backend contract is not enabled.'); return; }
+    onBlockToggle();
   };
 
   const userPosts = posts.filter((p) => p.author.id === localUser.id || p.author.username === localUser.username);
@@ -117,7 +124,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         /* Feed / Content Grid */
         <div className="space-y-4">
           {activeTab === 'posts' && (
-            userPosts.length > 0 ? (
+            postsLoading ? <div className="p-8 text-center text-muted border border-subtle rounded-[var(--radius-3xl)] bg-surface">Loading posts…</div> : postsError ? <div className="p-8 text-center text-rose-400 border border-subtle rounded-[var(--radius-3xl)] bg-surface">Unable to load profile posts. The server did not return a usable profile-post contract.</div> : userPosts.length > 0 ? (
               userPosts.map((post) => (
                 <PostCard
                   key={post.id}

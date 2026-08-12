@@ -1,57 +1,97 @@
 import React, { useEffect, useMemo, useRef } from 'react';
-import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { FeedView } from '../domains/feed/FeedView';
-import { postsApi } from '../domains/posts/api/postsApi';
+import { CreatePostRequest, postsApi } from '../domains/posts/api/postsApi';
 import { useAuth } from '../domains/auth/AuthContext';
 import { PageError, PageLoading } from './common';
-import { Post } from '../shared/types/social';
 import { useNavigate } from 'react-router-dom';
-
-const idempotencyKey = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+import { storiesApi } from '../domains/stories/api/storiesApi';
+import { StoryComposerModal } from '../domains/stories/StoryComposerModal';
+import { UserStoryGroup } from '../shared/types/social';
+import { useToast } from '../shared/ux/ToastContext';
+import type { Post } from '../shared/api/backendContracts';
+import { idempotencyKey } from '../shared/ux/idempotencyKey';
 
 export const FeedPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const [composerOpen, setComposerOpen] = React.useState(false);
 
   const feed = useInfiniteQuery({
     queryKey: ['posts', 'feed'],
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam, signal }) => postsApi.feed({ cursor: pageParam, limit: 20 }, signal),
-    getNextPageParam: (last) => last.hasMore === false ? undefined : last.nextCursor ?? undefined,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
-  const posts = useMemo(() => feed.data?.pages.flatMap((p) => p.items) ?? [], [feed.data]);
-  const storyGroups = []; // Story backend contract is not yet approved; never fabricate story data.
+
+  const posts = useMemo(() => {
+    const seen = new Set<string>();
+    return (feed.data?.pages.flatMap((p) => p.items) ?? []).filter((post) => {
+      if (seen.has(post.id)) return false;
+      seen.add(post.id);
+      return true;
+    });
+  }, [feed.data]);
+
+  const stories = useQuery({ queryKey: ['stories', 'feed-preview'], queryFn: ({ signal }) => storiesApi.feed({ limit: 20 }, signal), staleTime: 20_000 });
+  const storyGroups: UserStoryGroup[] = stories.data?.items ?? [];
 
   const likeMutation = useMutation({
-    mutationFn: async ({ postId, liked }: { postId: string; liked: boolean }) => liked ? postsApi.like(postId, idempotencyKey()) : postsApi.unlike(postId),
+    mutationFn: async ({ postId, liked }: { postId: string; liked: boolean }) => {
+      return liked ? postsApi.like(postId, idempotencyKey()) : postsApi.unlike(postId, idempotencyKey());
+    },
     onMutate: async ({ postId, liked }) => {
       await queryClient.cancelQueries({ queryKey: ['posts', 'feed'] });
-      const previous = queryClient.getQueryData(['posts', 'feed']);
-      queryClient.setQueriesData({ queryKey: ['posts', 'feed'] }, (data: any) => {
-        if (!data?.pages) return data;
-        return { ...data, pages: data.pages.map((page: any) => ({ ...page, items: page.items.map((post: Post) => post.id === postId ? { ...post, likedByMe: liked, likesCount: Math.max(0, post.likesCount + (liked ? 1 : -1)) } : post) })) };
+      const previous = queryClient.getQueryData<InfiniteData<Awaited<ReturnType<typeof postsApi.feed>>>>(['posts', 'feed']);
+      queryClient.setQueryData<InfiniteData<Awaited<ReturnType<typeof postsApi.feed>>>>(['posts', 'feed'], (data) => {
+        if (!data) return data;
+        return {
+          ...data,
+          pages: data.pages.map((page) => ({
+            ...page,
+            items: page.items.map((post) => post.id === postId
+              ? { ...post, isLiked: liked, likeCount: Math.max(0, post.likeCount + (liked ? 1 : -1)) }
+              : post),
+          })),
+        };
       });
       return { previous };
     },
-    onError: (_err, _vars, ctx) => { if (ctx?.previous) queryClient.setQueryData(['posts', 'feed'], ctx.previous); },
+    onError: (error, _vars, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(['posts', 'feed'], ctx.previous);
+      toast.error(error instanceof Error ? error.message : 'Unable to update like');
+    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['posts', 'feed'] }),
   });
 
   const commentMutation = useMutation({
-    mutationFn: ({ postId, text, parentId }: { postId: string; text: string; parentId?: string }) => postsApi.comment(postId, { body: text, parentId }, idempotencyKey()),
+    mutationFn: ({ postId, text, parentId }: { postId: string; text: string; parentId?: string }) =>
+      postsApi.comment(postId, { content: text, parentCommentId: parentId }, idempotencyKey()),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['posts', 'feed'] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Unable to create comment'),
   });
+
   const createPost = useMutation({
-    mutationFn: (post: Partial<Post>) => postsApi.create(post, idempotencyKey()),
+    mutationFn: (post: CreatePostRequest) => postsApi.create(post, idempotencyKey()),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['posts', 'feed'] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Unable to create post'),
+  });
+
+  const deletePost = useMutation({
+    mutationFn: (postId: string) => postsApi.remove(postId, idempotencyKey()),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['posts', 'feed'] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Unable to delete post'),
   });
 
   useEffect(() => {
     const node = loadMoreRef.current;
     if (!node || !feed.hasNextPage) return;
-    const observer = new IntersectionObserver((entries) => { if (entries[0]?.isIntersecting && !feed.isFetchingNextPage) void feed.fetchNextPage(); }, { rootMargin: '500px' });
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting && !feed.isFetchingNextPage) void feed.fetchNextPage();
+    }, { rootMargin: '500px' });
     observer.observe(node);
     return () => observer.disconnect();
   }, [feed.hasNextPage, feed.isFetchingNextPage, feed.fetchNextPage]);
@@ -65,15 +105,22 @@ export const FeedPage: React.FC = () => {
       currentUser={user}
       posts={posts}
       storyGroups={storyGroups}
-      onLikeToggle={(postId) => { const post = posts.find((p) => p.id === postId); if (post) likeMutation.mutate({ postId, liked: !post.likedByMe }); }}
+      onLikeToggle={(postId) => {
+        const post = posts.find((p) => p.id === postId);
+        if (post) likeMutation.mutate({ postId, liked: !post.isLiked });
+      }}
       onAddComment={(postId, text, parentId) => commentMutation.mutate({ postId, text, parentId })}
       onCreatePost={(post) => createPost.mutateAsync(post)}
-      onCreateStory={() => undefined}
+      onCreateStory={() => setComposerOpen(true)}
       onUserClick={(userId) => navigate(`/users/${encodeURIComponent(userId)}`)}
-      onStoryReact={() => undefined}
+      onStoryReact={(storyId, emoji) => void storiesApi.react(storyId, emoji, idempotencyKey()).then(() => stories.refetch()).catch((error) => toast.error(error instanceof Error ? error.message : 'Unable to react to story'))}
+      onDeletePost={(postId) => deletePost.mutate(postId)}
       onRefresh={() => { void feed.refetch(); }}
       isRefreshing={feed.isRefetching}
     />
-    <div ref={loadMoreRef} className="h-12 grid place-items-center text-xs text-tertiary">{feed.isFetchingNextPage ? 'Loading more…' : feed.hasNextPage ? 'Scroll for more' : 'You reached the end'}</div>
+    <div ref={loadMoreRef} className="h-12 grid place-items-center text-xs text-tertiary">
+      {feed.isFetchingNextPage ? 'Loading more…' : feed.hasNextPage ? 'Scroll for more' : 'You reached the end'}
+    </div>
+    {composerOpen && <StoryComposerModal currentUser={user} onClose={() => setComposerOpen(false)} onStoryCreated={async input => { await storiesApi.create(input, idempotencyKey()); await stories.refetch(); }} />}
   </div>;
 };

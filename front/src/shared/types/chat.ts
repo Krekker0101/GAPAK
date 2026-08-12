@@ -68,7 +68,6 @@ export interface EncryptedAttachment {
   type: 'image' | 'video' | 'audio' | 'document' | 'voice' | 'sticker';
   sizeBytes: number;
   encryptedBlobUrl: string; // Local preview URL only; never a server URL.
-  key: string; // Local-only raw key material; must never be serialized into message API payloads.
   nonce: string; // Hex-encoded AES-GCM IV
   mimeType: string;
   thumbnailUrl?: string;
@@ -96,11 +95,13 @@ export interface E2EEMessageEnvelope {
   senderId: string;
   senderKeyId: string;
   content: null; // MUST remain null over network/API
-  protocolVersion?: 'gapak-e2ee-v1';
+  protocolVersion: 'gapak-e2ee-v1';
   ciphertext: string; // Hex-encoded AES-GCM ciphertext + authentication tag
   nonce: string; // Hex-encoded AES-GCM IV
   keyEnvelopes: Record<string, string>; // deviceId -> ephemeral public key + salt metadata
-  ratchetCounter: number; // Reserved protocol sequence; backend must enforce replay protection.
+  ratchetCounter: number; // Sender-device monotonic sequence; backend MUST enforce replay protection.
+  senderDeviceId: string;
+  keyVersion: number;
   authenticationTag: string; // ECDSA signature bytes encoded as hex; legacy field name retained for wire compatibility.
   attachments?: EncryptedAttachment[];
   contentType: MessageContentType;
@@ -112,13 +113,14 @@ export interface E2EEMessageEnvelope {
 // --- Decrypted Client-Side Message Model ---
 export interface ChatMessage {
   id: string;
+  clientMessageId?: string;
   chatId: string;
   sender: UserProfile;
   senderKeyId: string;
   content: string; // Decrypted text
   contentType: MessageContentType;
   state: MessageState;
-  createdAt: string;
+  createdAt?: string;
   updatedAt?: string;
   expiresAt?: string;
   replyTo?: ChatMessage;
@@ -134,7 +136,7 @@ export interface ChatMessage {
 
 // --- Trusted Devices & Pre-keys ---
 export type DeviceType = 'mobile' | 'desktop' | 'tablet' | 'web';
-export type VerificationStatus = 'verified' | 'unverified' | 'changed';
+export type VerificationStatus = 'VERIFIED' | 'UNVERIFIED' | 'CHANGED' | 'REVOKED' | 'UNKNOWN';
 
 export interface TrustedDevice {
   id: string;

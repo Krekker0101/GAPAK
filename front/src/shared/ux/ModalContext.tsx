@@ -6,7 +6,7 @@
 import React, { createContext, useContext, useState, ReactNode, ComponentType } from 'react';
 import { Dialog } from '../design-system/primitives';
 
-export interface ModalConfig<T = any> {
+export interface ModalConfig<T = unknown> {
   id: string;
   component: ComponentType<T>;
   props?: T;
@@ -23,11 +23,11 @@ interface ModalContextValue {
 const ModalContext = createContext<ModalContextValue | undefined>(undefined);
 
 export const ModalProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [modals, setModals] = useState<ModalConfig[]>([]);
+  const [modals, setModals] = useState<Array<ModalConfig<unknown>>>([]);
 
   const openModal = <T,>(component: ComponentType<T>, props?: T, title?: string): string => {
     const id = `modal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    setModals((prev) => [...prev, { id, component, props, title }]);
+    setModals((prev) => [...prev, { id, component: component as ComponentType<unknown>, props, title }]);
     return id;
   };
 
@@ -53,7 +53,7 @@ export const ModalProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             title={modal.title}
             maxWidth={modal.maxWidth || 'md'}
           >
-            <Component {...(modal.props || {})} closeModal={() => closeModal(modal.id)} />
+            <Component {...(modal.props as object || {})} closeModal={() => closeModal(modal.id)} />
           </Dialog>
         );
       })}

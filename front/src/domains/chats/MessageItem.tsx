@@ -98,7 +98,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             <span>Decryption Error</span>
           </div>
           <p className="text-[11px] text-rose-300/80">
-            Unable to decrypt message. E2EE Double Ratchet session out of synchronization.
+            Unable to authenticate or decrypt this message with the GAPAK E2EE protocol.
           </p>
         </div>
       </div>
@@ -234,7 +234,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           <div className={`flex items-center gap-1.5 justify-end text-[10px] mt-1 ${
             isMe ? 'text-indigo-200' : 'text-tertiary'
           }`}>
-            <span>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            <span>{message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Sending…'}</span>
             {isMe && renderStateIcon()}
           </div>
         </div>

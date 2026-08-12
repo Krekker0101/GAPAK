@@ -32,22 +32,34 @@ export type MediaPrivacy = 'PUBLIC' | 'CONNECTIONS' | 'TRUSTED_CIRCLE' | 'PRIVAT
 export interface MediaAsset {
   id: string;
   ownerId: string;
-  fileName: string;
+  kind: string;
+  status: string;
+  bucket: string;
+  objectKey: string;
+  originalName?: string | null;
   mimeType: string;
   sizeBytes: number;
-  kind: MediaKind;
-  privacy: MediaPrivacy;
-  encrypted: boolean;
-  createdAt: string;
-  updatedAt: string;
-  durationSeconds?: number;
-  width?: number;
-  height?: number;
-  thumbnailUrl?: string;
-  /** Server-authorized short-lived URL. Never synthesized client-side. */
-  previewUrl?: string;
-  albumId?: string | null;
-  expiresAt?: string | null;
+  isEncrypted: boolean;
+  videoAsset?: {
+    id: string;
+    status: string;
+    masterPlaylistKey?: string | null;
+    previewPlaylistKey?: string | null;
+    posterObjectKey?: string | null;
+    durationMillis?: number | null;
+    width?: number | null;
+    height?: number | null;
+    videoCodec?: string | null;
+    audioCodec?: string | null;
+    variants: Array<{
+      id: string; label: string; status: string; playlistObjectKey: string;
+      initSegmentKey?: string | null; segmentPrefix?: string | null; container: string;
+      videoCodec?: string | null; audioCodec?: string | null; width?: number | null;
+      height?: number | null; bitrateKbps?: number | null; frameRate?: number | null;
+      durationMillis?: number | null;
+    }>;
+  } | null;
+  thumbnails: Array<{ id: string; objectKey: string; mimeType: string; width: number; height: number; sizeBytes: number }>;
 }
 
 export interface MediaPage {
@@ -105,6 +117,7 @@ export interface UploadInitResponse {
   uploadId: string;
   mode: 'single' | 'multipart';
   chunkSizeBytes?: number;
+  totalParts?: number;
   uploadUrl?: string;
   uploadHeaders?: Record<string, string>;
   parts?: UploadPart[];
@@ -113,26 +126,27 @@ export interface UploadInitResponse {
 }
 
 export interface UploadCompleteResponse {
-  media: MediaAsset;
+  mediaFileId: string;
+  status?: string;
 }
 
-export interface HLSVariant {
-  resolution: '1080p' | '720p' | '480p' | '360p' | 'auto';
-  bandwidth: number;
+export interface SignedRequest {
+  method: string;
   url: string;
-  width: number;
-  height: number;
+  headers: Record<string, string>;
+  expiresAt: string;
 }
 
 export interface PlaybackGrant {
-  mediaId: string;
-  grantToken: string;
+  id: string;
+  status: string;
+  maxViews?: number | null;
+  usedViews: number;
   expiresAt: number;
-  streamType: 'hls' | 'mp4';
-  watermarkToken?: string;
-  variants: HLSVariant[];
+  mediaId: string;
+  request: SignedRequest;
   masterManifestUrl: string;
-  captions?: Array<{ language: string; label: string; url: string }>;
+  variants: Array<{ resolution: '1080p' | '720p' | '480p' | '360p' | 'auto'; url: string }>;
 }
 
 export interface PlaybackGrantResponse {

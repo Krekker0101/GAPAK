@@ -56,8 +56,8 @@ class TelemetryService {
       this.events.pop();
     }
 
-    // Console output for dev
-    if ((import.meta as any).env?.DEV) {
+    // Console output for development only; sanitized payload never contains secrets.
+    if (import.meta.env.DEV) {
       const color = severity === 'error' ? 'color: #ef4444' : severity === 'warn' ? 'color: #f59e0b' : 'color: #6366f1';
       console.log(`%c[GAPAK Telemetry:${category.toUpperCase()}] ${name}`, color, event);
     }

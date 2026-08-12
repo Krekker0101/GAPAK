@@ -1,12 +1,19 @@
-import { QueryClient } from '@tanstack/react-query';
-import { RealtimeEvent } from './types';
+import type { QueryClient } from '@tanstack/react-query';
+import { telemetry } from '../telemetry/telemetry';
+import type { RealtimeEvent } from './types';
 
 export class RealtimeEventRouter {
   private handlers = new Map<string, Set<(event: RealtimeEvent) => void>>();
-  private processed = new Set<string>();
-  private latestVersion = new Map<string, number>();
+  private processedEventIds = new Map<string, number>();
+  private processedMessageIds = new Map<string, number>();
+  private latestSequence = new Map<string, number>();
+  private readonly processedTtlMs = 10 * 60_000;
+  private readonly maxProcessed = 10_000;
+  private readonly queryClient: QueryClient;
 
-  constructor(private readonly queryClient: QueryClient) {}
+  constructor(queryClient: QueryClient) {
+    this.queryClient = queryClient;
+  }
 
   subscribe(type: string, handler: (event: RealtimeEvent) => void): () => void {
     const set = this.handlers.get(type) ?? new Set();
@@ -19,70 +26,83 @@ export class RealtimeEventRouter {
   }
 
   route(event: RealtimeEvent): boolean {
-    if (this.processed.has(event.id)) return false;
+    const now = Date.now();
+    this.prune(now);
 
-    const streamKey = `${event.type}:${event.chatId ?? 'global'}`;
-    if (typeof event.version === 'number') {
-      const previous = this.latestVersion.get(streamKey);
-      if (previous !== undefined && event.version <= previous) return false;
-      this.latestVersion.set(streamKey, event.version);
+    if (event.kind === 'event') {
+      if (this.processedEventIds.has(event.eventId)) return false;
+      this.processedEventIds.set(event.eventId, now);
+
+      if (event.messageId && event.chatId && event.type.startsWith('chat.message.')) {
+        const key = `${event.chatId}:${event.messageId}:${event.type}`;
+        if (this.processedMessageIds.has(key)) return false;
+        this.processedMessageIds.set(key, now);
+      }
+
+      if (event.chatId && typeof event.sequence === 'number') {
+        const previous = this.latestSequence.get(event.chatId);
+        if (previous !== undefined && event.sequence <= previous) return false;
+        this.latestSequence.set(event.chatId, event.sequence);
+      }
     }
 
-    this.processed.add(event.id);
-    if (this.processed.size > 5000) {
-      const oldest = this.processed.values().next().value;
-      if (oldest) this.processed.delete(oldest);
-    }
+    const handlerType = event.kind === 'history'
+      ? 'history'
+      : event.kind === 'ack'
+        ? event.type
+        : event.kind === 'error'
+          ? 'error'
+          : event.type;
 
-    this.handlers.get(event.type)?.forEach((handler) => handler(event));
-    this.handlers.get('*')?.forEach((handler) => handler(event));
+    this.invoke(handlerType, event);
+    this.invoke('*', event);
     this.project(event);
     return true;
   }
 
   clearHistory(): void {
-    this.processed.clear();
-    this.latestVersion.clear();
+    this.processedEventIds.clear();
+    this.processedMessageIds.clear();
+    this.latestSequence.clear();
+  }
+
+  private invoke(type: string, event: RealtimeEvent): void {
+    this.handlers.get(type)?.forEach((handler) => {
+      try {
+        handler(event);
+      } catch (error) {
+        telemetry.trackError('Realtime handler failed', error, { eventType: type });
+      }
+    });
   }
 
   private project(event: RealtimeEvent): void {
-    const payload = event.payload as Record<string, unknown> | undefined;
-    const chatId = event.chatId ?? (typeof payload?.chatId === 'string' ? payload.chatId : undefined);
+    if (event.kind === 'history') {
+      const chatIds = new Set(event.messages.map((message) => message.chatId));
+      chatIds.forEach((chatId) => this.queryClient.invalidateQueries({ queryKey: ['chat', 'messages', chatId] }));
+      return;
+    }
 
-    switch (event.type) {
-      case 'message.new':
-      case 'message.updated':
-      case 'message.deleted':
-      case 'message.status':
-      case 'message.ack':
-        if (chatId) this.queryClient.invalidateQueries({ queryKey: ['chat', 'messages', chatId] });
-        this.queryClient.invalidateQueries({ queryKey: ['chats'] });
-        break;
-      case 'notification.new':
-      case 'notification.updated':
-        this.queryClient.invalidateQueries({ queryKey: ['notifications'] });
-        this.queryClient.invalidateQueries({ queryKey: ['notifications', 'unread-count'] });
-        break;
-      case 'presence.update': {
-        const userId = typeof payload?.userId === 'string' ? payload.userId : undefined;
-        if (userId) this.queryClient.setQueryData(['presence', userId], payload);
-        break;
+    if (event.kind === 'event') {
+      if (event.chatId) {
+        this.queryClient.invalidateQueries({ queryKey: ['chat', 'messages', event.chatId] });
       }
-      case 'connection.update':
-        this.queryClient.invalidateQueries({ queryKey: ['connections'] });
-        break;
-      case 'story.update':
-        this.queryClient.invalidateQueries({ queryKey: ['stories'] });
-        break;
-      case 'live.update':
-      case 'live.chat.message':
-        this.queryClient.invalidateQueries({ queryKey: ['live'] });
-        break;
-      case 'security.alert':
-        this.queryClient.invalidateQueries({ queryKey: ['security'] });
-        break;
-      default:
-        break;
+      this.queryClient.invalidateQueries({ queryKey: ['chats'] });
+    }
+  }
+
+  private prune(now: number): void {
+    for (const [id, seenAt] of this.processedEventIds) {
+      if (now - seenAt > this.processedTtlMs) this.processedEventIds.delete(id);
+    }
+    for (const [id, seenAt] of this.processedMessageIds) {
+      if (now - seenAt > this.processedTtlMs) this.processedMessageIds.delete(id);
+    }
+
+    while (this.processedEventIds.size > this.maxProcessed) {
+      const oldest = this.processedEventIds.keys().next().value;
+      if (oldest) this.processedEventIds.delete(oldest);
+      else break;
     }
   }
 }

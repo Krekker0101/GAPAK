@@ -9,7 +9,9 @@ const AuthPage: React.FC = () => {
   const isRegister = location.pathname === '/register';
 
   const [loginValue, setLoginValue] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [totpCode, setTotpCode] = useState('');
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -25,13 +27,13 @@ const AuthPage: React.FC = () => {
     try {
       if (isRegister) {
         await register({
+          email: email.trim(),
           password,
           username: username.trim(),
           displayName: displayName.trim(),
-          preferAnonymous: true,
         });
       } else {
-        await login(loginValue.trim(), password);
+        await login({ login: loginValue.trim(), password, ...(totpCode.trim() ? { totpCode: totpCode.trim() } : {}) });
       }
       navigate('/posts', { replace: true });
     } catch (err) {
@@ -52,7 +54,6 @@ const AuthPage: React.FC = () => {
       const generatedUsername = `guest${random.slice(0, 20)}`;
       const generatedPassword = `${random}${random.slice(0, 12)}!A1`;
       await anonymousRegister({
-        email: '',
         password: generatedPassword,
         username: generatedUsername,
         displayName: 'GAPAK Guest',
@@ -80,6 +81,10 @@ const AuthPage: React.FC = () => {
           {isRegister && (
             <>
               <label className="block text-sm text-slate-600">
+                Email
+                <input required type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-white/30" />
+              </label>
+              <label className="block text-sm text-slate-600">
                 Username
                 <input required minLength={3} maxLength={32} pattern="[A-Za-z0-9]+" value={username} onChange={(e) => setUsername(e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-white/30" autoComplete="username" />
               </label>
@@ -96,14 +101,19 @@ const AuthPage: React.FC = () => {
               <input required value={loginValue} onChange={(e) => setLoginValue(e.target.value)} type="text" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-white/30" autoComplete="username" />
             </label>
           )}
-          {isRegister && (
-            <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">GAPAK registration is privacy-first: no email address is required.</p>
-          )}
+
 
           <label className="block text-sm text-slate-600">
             Password
             <input required minLength={12} maxLength={128} value={password} onChange={(e) => setPassword(e.target.value)} type="password" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-white/30" autoComplete={isRegister ? 'new-password' : 'current-password'} />
           </label>
+
+          {!isRegister && (
+            <label className="block text-sm text-slate-600">
+              Authenticator code (optional)
+              <input inputMode="numeric" autoComplete="one-time-code" maxLength={12} value={totpCode} onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-white/30" />
+            </label>
+          )}
 
           {message && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{message}</div>}
 

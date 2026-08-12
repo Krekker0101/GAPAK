@@ -56,6 +56,7 @@ export const Composer: React.FC<ComposerProps> = ({
   const [ephemeralTimer, setEphemeralTimer] = useState<number>(0); // 0 = off
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [showEphemeralMenu, setShowEphemeralMenu] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -112,12 +113,18 @@ export const Composer: React.FC<ComposerProps> = ({
     if (!files || files.length === 0) return;
 
     setIsUploadingAttachment(true);
+    setAttachmentError(null);
     const file = files[0];
-
-    const encryptedAttachment = await e2eeCryptoEngine.encryptAttachment(file);
-    setSelectedAttachments((prev) => [...prev, encryptedAttachment]);
-    setIsUploadingAttachment(false);
-    setShowAttachmentMenu(false);
+    try {
+      const encryptedAttachment = await e2eeCryptoEngine.encryptAttachment(file);
+      setSelectedAttachments((prev) => [...prev, encryptedAttachment]);
+      setShowAttachmentMenu(false);
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : 'Encrypted attachments are not available.');
+    } finally {
+      setIsUploadingAttachment(false);
+      e.target.value = '';
+    }
   };
 
   const handleSend = () => {
@@ -159,6 +166,12 @@ export const Composer: React.FC<ComposerProps> = ({
       )}
 
       {/* Selected Attachments Preview */}
+      {attachmentError && (
+        <div role="alert" className="mb-2 rounded-[var(--radius-xl)] border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
+          {attachmentError}
+        </div>
+      )}
+
       {selectedAttachments.length > 0 && (
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           {selectedAttachments.map((att) => (

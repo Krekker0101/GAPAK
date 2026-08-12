@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+const read=(f:string)=>readFileSync(join(process.cwd(),f),'utf8');
+
+test('critical business APIs remain server-backed', () => { for(const f of ['src/domains/auth/api/authApi.ts','src/domains/connections/api/connectionsApi.ts','src/domains/media/api/mediaApi.ts','src/domains/stories/api/storiesApi.ts','src/domains/chats/api/chatsApi.ts','src/domains/notifications/api/notificationsApi.ts','src/domains/security/api/securityApi.ts']) { const s=read(f); assert.doesNotMatch(s,/success:\s*true/); } });
+test('critical APIs do not fabricate server metadata', () => { for(const f of ['src/domains/media/api/mediaApi.ts','src/domains/connections/api/connectionsApi.ts','src/domains/stories/api/storiesApi.ts']) { const s=read(f); assert.doesNotMatch(s,/new Date\(\)\.toISOString\(\)|ownerId:\s*''|email:\s*''|trustScore:\s*0/); } });
+test('stories expose only backend-supported lifecycle operations', () => { const s=read('src/domains/stories/api/storiesApi.ts'); assert.match(s,/\/stories\/feed/); assert.match(s,/\/highlight/); assert.match(s,/\/reactions/); assert.doesNotMatch(s,/\/replies/); });
+test('profile API does not invent a user-posts backend route', () => { const users=read('src/domains/users/api/usersApi.ts'); assert.doesNotMatch(users,/UnsupportedUserContractError|posts-by-user|\/users\/\$\{encodeURIComponent\(userId\)\}\/posts/); });
+test('connections do not claim unsupported reject/cancel routes', () => { const api=read('src/domains/connections/api/connectionsApi.ts'); assert.doesNotMatch(api,/reject|cancel/i); assert.doesNotMatch(api,/\/requests\/\$\{encodeURIComponent\(requestId\)\}\/reject/); });
+test('notifications use the actual limit/hasMore contract', () => { const shell=read('src/app/shell/AppShell.tsx'); const api=read('src/domains/notifications/api/notificationsApi.ts'); assert.match(api,/limit\?: number/); assert.doesNotMatch(shell,/useInfiniteQuery/); assert.doesNotMatch(shell,/fetchNextPage/); assert.match(shell,/notification\.new/); assert.doesNotMatch(shell,/success:\s*true/); });
+test('production business domains contain no obvious fake-success callbacks', () => { for(const file of ['src/pages/FeedPage.tsx','src/pages/ProfilePage.tsx','src/pages/ConnectionsPage.tsx','src/domains/stories/api/storiesApi.ts','src/domains/media/api/mediaApi.ts','src/domains/connections/api/connectionsApi.ts']) { const source=read(file); assert.doesNotMatch(source,/=> undefined/); assert.doesNotMatch(source,/success:\s*true/); } });

@@ -93,7 +93,7 @@ export const PlatformSandbox: React.FC<{ currentDomain: DomainKey; onNavigate: (
   currentDomain,
   onNavigate,
 }) => {
-  const { state: authState, user, login, logout, anonymousRegister, verify2FA, handleOAuthCallback } = useAuth();
+  const { state: authState, user, login, logout, anonymousRegister, verify2FA, startOAuth } = useAuth();
   const perm = usePermission();
   const toast = useToast();
   const { openModal } = useModal();
@@ -549,16 +549,10 @@ export const PlatformSandbox: React.FC<{ currentDomain: DomainKey; onNavigate: (
               <div className="space-y-2 pt-2">
                 <h4 className="text-xs font-semibold text-slate-300">Trigger State Machine Transitions:</h4>
                 <div className="grid grid-cols-2 gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => login('alex@gapak.io', 'pass123')}>
-                    Login Session
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={anonymousRegister}>
-                    Anonymous Reg
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={() => verify2FA('123456')}>
-                    Verify 2FA
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={() => handleOAuthCallback('github', 'mock_code')}>
+                  <p className="col-span-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
+                    Authentication transitions are exercised through the real Auth page and backend; this sandbox does not submit fabricated credentials or OTP codes.
+                  </p>
+                  <Button variant="secondary" size="sm" onClick={() => void startOAuth('github')}>
                     OAuth (GitHub)
                   </Button>
                 </div>

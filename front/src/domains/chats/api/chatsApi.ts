@@ -1,24 +1,111 @@
 import { httpClient } from '../../../shared/api/httpClient';
-import { Chat, ChatMessage, ChatType, PaginatedMessagesResponse, TrustedDevice } from '../../../shared/types';
+import type {
+  Chat,
+  Message,
+  SendMessageRequest,
+  TrustedDevice,
+  RegisterTrustedDeviceRequest,
+  PublishPreKeyRequest,
+  PreKeyBundle,
+  AcceptedResponse,
+} from '../../../shared/api/backendContracts';
 
-export interface ChatListResponse { chats: Chat[]; nextCursor?: string; hasMore?: boolean }
-export interface CreateChatRequest { type: ChatType; title?: string; description?: string; memberIds: string[] }
-export interface SendMessageRequest { clientMessageId: string; contentType: string; envelope: any; replyToMessageId?: string; attachments?: unknown[] }
+export type { SendMessageRequest };
+
+export interface CreateChatRequest {
+  type: Chat['type'];
+  title?: string;
+  description?: string;
+  avatarFileId?: string;
+  encryptionProtocol?: 'SIGNAL' | 'OMEMO' | 'TRUSTED_CHAT' | 'NONE';
+  trustedChat: boolean;
+  messageTtlSeconds?: number;
+  participantIds: string[];
+  metadata?: Record<string, unknown>;
+}
 
 export const chatsApi = {
-  list: (signal?: AbortSignal) => httpClient.request<ChatListResponse | Chat[]>({ url: '/api/chats', signal }),
-  messages: (chatId: string, params: { before?: string; after?: string; limit?: number }, signal?: AbortSignal) =>
-    httpClient.request<PaginatedMessagesResponse>({ url: `/api/chats/${encodeURIComponent(chatId)}/messages`, params, signal }),
-  create: (data: CreateChatRequest) => httpClient.request<Chat>({ url: '/api/chats', method: 'POST', data, idempotencyKey: crypto.randomUUID() }),
-  sendMessage: (chatId: string, data: SendMessageRequest) => {
-    const envelope = data.envelope as any;
-    const keyEnvelopes = Object.values(envelope.keyEnvelopes ?? {}).map((raw: any) => { const item = typeof raw === 'string' ? JSON.parse(raw) : raw; return { recipientUserId: item.recipientUserId, recipientDeviceId: item.recipientDeviceId, keyId: item.identityKeyId || envelope.senderKeyId, algorithm: 'AES-GCM', encryptedKey: item.wrappedKey, nonce: item.wrappedIv, keyVersion: 1 }; });
-    return httpClient.request<ChatMessage>({ url: `/api/chats/${encodeURIComponent(chatId)}/messages`, method: 'POST', data: { clientMessageId: data.clientMessageId, type: String(data.contentType).toUpperCase(), ciphertext: envelope.ciphertext, nonce: envelope.nonce, senderKeyId: envelope.senderKeyId, encryptionProtocol: 'SIGNAL', encryptionAlgorithm: 'AES-GCM', associatedData: '', ratchetCounter: envelope.ratchetCounter ?? 0, authenticationTag: envelope.authenticationTag, replyToMessageId: data.replyToMessageId, keyEnvelopes, content: '', attachments: [] }, idempotencyKey: data.clientMessageId });
+  list: (
+    params: { type?: Chat['type']; limit?: number; offset?: number; unreadOnly?: boolean; pinnedOnly?: boolean } = {},
+    signal?: AbortSignal,
+  ) => httpClient.get<Chat[]>('/chats', { params, signal }),
+
+  get: (chatId: string, signal?: AbortSignal) =>
+    httpClient.get<Chat>(`/chats/${encodeURIComponent(chatId)}`, { signal }),
+
+  update: (chatId: string, data: Partial<Pick<Chat, 'title' | 'description' | 'messageTtlSeconds'>>, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.patch<Chat>(`/chats/${encodeURIComponent(chatId)}`, data, { idempotencyKey }),
+
+  remove: (chatId: string, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.delete<void>(`/chats/${encodeURIComponent(chatId)}`, { idempotencyKey }),
+
+  create: (data: CreateChatRequest, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.post<Chat>('/chats', data, { idempotencyKey }),
+
+  messages: (
+    chatId: string,
+    params: { cursor?: string; cursorId?: string; limit?: number; before?: boolean; withReplies?: boolean; withAttachments?: boolean } = {},
+    signal?: AbortSignal,
+  ) => httpClient.get<Message[]>(`/chats/${encodeURIComponent(chatId)}/messages`, { params, signal }),
+
+  sendMessage: (chatId: string, data: SendMessageRequest) =>
+    httpClient.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, data, { idempotencyKey: data.clientMessageId }),
+
+  getMessage: (messageId: string, signal?: AbortSignal) =>
+    httpClient.get<Message>(`/chats/messages/${encodeURIComponent(messageId)}`, { signal }),
+
+  editMessage: (
+    messageId: string,
+    data: Partial<Pick<SendMessageRequest, 'ciphertext' | 'nonce' | 'authenticationTag' | 'metadata' | 'attachments'>>,
+    idempotencyKey = crypto.randomUUID(),
+  ) => httpClient.patch<Message>(`/chats/messages/${encodeURIComponent(messageId)}`, data, { idempotencyKey }),
+
+  deleteMessage: (messageId: string, deleteForEveryone = true, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.delete<void>(`/chats/messages/${encodeURIComponent(messageId)}`, {
+      idempotencyKey,
+      data: { deleteForEveryone },
+    }),
+
+  react: (messageId: string, reactionType: string, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.post<AcceptedResponse>(`/chats/messages/${encodeURIComponent(messageId)}/reactions`, { reactionType }, { idempotencyKey }),
+
+  removeReaction: (messageId: string, reactionType: string, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.delete<void>(`/chats/messages/${encodeURIComponent(messageId)}/reactions`, {
+      idempotencyKey,
+      data: { reactionType },
+    }),
+
+  markAsRead: (messageId: string, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.post<AcceptedResponse>(`/chats/messages/${encodeURIComponent(messageId)}/read`, { messageId }, { idempotencyKey }),
+
+  markAsDelivered: (messageId: string, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.post<AcceptedResponse>(`/chats/messages/${encodeURIComponent(messageId)}/delivered`, undefined, { idempotencyKey }),
+
+  trustedDevices: (signal?: AbortSignal) => httpClient.get<TrustedDevice[]>('/chats/trusted-devices', { signal }),
+  devices: (signal?: AbortSignal) => httpClient.get<TrustedDevice[]>('/chats/trusted-devices', { signal }),
+
+  revokeDevice: (deviceId: string, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.delete<void>(`/chats/trusted-devices/${encodeURIComponent(deviceId)}`, { idempotencyKey }),
+
+  verifyDevice: async (_deviceId: string): Promise<never> => {
+    throw new Error('The approved backend contract does not expose a client-side device verification endpoint.');
   },
-  editMessage: async (_chatId: string, _messageId: string, _content: unknown): Promise<ChatMessage> => { throw new Error('Encrypted message editing requires a server-side encrypted edit envelope and is not exposed by the current client contract.'); },
-  deleteMessage: (chatId: string, messageId: string) => httpClient.request<void>({ url: `/api/chats/messages/${encodeURIComponent(messageId)}`, method: 'DELETE', data: { deleteForEveryone: false }, idempotencyKey: crypto.randomUUID() }),
-  react: (chatId: string, messageId: string, emoji: string) => httpClient.request<void>({ url: `/api/chats/messages/${encodeURIComponent(messageId)}/reactions`, method: 'POST', data: { reactionType: emoji.toUpperCase() }, idempotencyKey: crypto.randomUUID() }),
-  devices: (signal?: AbortSignal) => httpClient.request<TrustedDevice[]>({ url: '/api/chats/trusted-devices', signal }),
-  revokeDevice: (deviceId: string) => httpClient.request<void>({ url: `/api/chats/trusted-devices/${encodeURIComponent(deviceId)}`, method: 'DELETE' }),
-  verifyDevice: async (_deviceId: string) => undefined,
+
+  registerTrustedDevice: (data: RegisterTrustedDeviceRequest, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.post<TrustedDevice>('/chats/trusted-devices', data, { idempotencyKey }),
+
+  revokeTrustedDevice: (deviceId: string, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.delete<void>(`/chats/trusted-devices/${encodeURIComponent(deviceId)}`, { idempotencyKey }),
+
+  publishPreKey: (deviceId: string, data: PublishPreKeyRequest, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.post<unknown>(`/chats/trusted-devices/${encodeURIComponent(deviceId)}/pre-keys`, data, { idempotencyKey }),
+
+  preKeyBundle: (userId: string, signal?: AbortSignal) =>
+    httpClient.get<PreKeyBundle>(`/chats/pre-key-bundles/${encodeURIComponent(userId)}`, { signal }),
+
+  members: (chatId: string, params: { role?: string; limit?: number; offset?: number } = {}, signal?: AbortSignal) =>
+    httpClient.get<unknown[]>(`/chats/${encodeURIComponent(chatId)}/members`, { params, signal }),
+
+  typing: (chatId: string, status: 'TYPING' | 'STOPPED', idempotencyKey = crypto.randomUUID()) =>
+    httpClient.post<void>(`/chats/${encodeURIComponent(chatId)}/typing`, { status }, { idempotencyKey }),
 };

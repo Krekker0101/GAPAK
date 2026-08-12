@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Upload, X, Pause, Play, RotateCcw, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { MediaUploadItem, MediaUploadStage } from '../../shared/types';
+import type { MediaUsageContext } from '../../shared/types/media';
 import { globalUploadManager } from './GlobalUploadManager';
 
 interface Props {
@@ -8,6 +9,7 @@ interface Props {
   maxFileSizeMB?: number;
   acceptedTypes?: string[];
   compact?: boolean;
+  context?: MediaUsageContext;
 }
 
 const stageMap: Record<string, MediaUploadStage> = {
@@ -20,6 +22,7 @@ export const MediaUploadSubsystem: React.FC<Props> = ({
   maxFileSizeMB = 250,
   acceptedTypes = ['image/*', 'video/*', 'audio/*', '.pdf', '.doc', '.docx', '.txt'],
   compact = false,
+  context = 'POST_ATTACHMENT',
 }) => {
   const [sessions, setSessions] = useState<ReturnType<typeof globalUploadManager.getSessions>>([]);
   const [dragging, setDragging] = useState(false);
@@ -30,7 +33,7 @@ export const MediaUploadSubsystem: React.FC<Props> = ({
   useEffect(() => globalUploadManager.subscribe(setSessions), []);
 
   useEffect(() => {
-    sessions.filter(s => s.state === 'READY' && s.mediaUrl && !emitted.current.has(s.id)).forEach(s => {
+    sessions.filter(s => s.state === 'READY' && s.mediaId && !emitted.current.has(s.id)).forEach(s => {
       emitted.current.add(s.id);
       onMediaReady?.({
         id: s.mediaId || s.id,
@@ -42,7 +45,6 @@ export const MediaUploadSubsystem: React.FC<Props> = ({
         uploadedBytes: s.uploadedBytes,
         totalBytes: s.fileSize,
         previewUrl: objectUrls.current.get(s.id),
-        mediaUrl: s.mediaUrl,
       });
     });
   }, [sessions, onMediaReady]);
@@ -55,7 +57,7 @@ export const MediaUploadSubsystem: React.FC<Props> = ({
     Array.from(files).forEach(file => {
       if (file.size > maxFileSizeMB * 1024 * 1024) return;
       const preview = file.type.startsWith('image/') || file.type.startsWith('video/') ? URL.createObjectURL(file) : undefined;
-      void globalUploadManager.startUpload(file, 'POST_ATTACHMENT').then(id => { if (preview) objectUrls.current.set(id, preview); });
+      void globalUploadManager.startUpload(file, context).then(id => { if (preview) objectUrls.current.set(id, preview); });
     });
   };
 

@@ -88,10 +88,8 @@ export const PostCard: React.FC<PostCardProps> = ({
         likesCount={post.likesCount}
         likedByMe={post.likedByMe}
         commentsCount={post.commentsCount}
-        bookmarkedByMe={post.bookmarkedByMe}
         onLikeToggle={() => onLikeToggle(post.id)}
         onCommentToggle={() => setShowComments(!showComments)}
-        onBookmarkToggle={() => {}}
       />
 
       {/* Footer Meta */}

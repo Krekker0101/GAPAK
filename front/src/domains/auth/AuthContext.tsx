@@ -1,26 +1,26 @@
 /** GAPAK authentication/session state. UI state only; API semantics live in authApi. */
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { AuthState, UserProfile, PresenceStatus } from '../../shared/types';
 import { ApiError } from '../../shared/api/httpClient';
-import { authApi } from './api/authApi';
+import { authApi, LoginRequest, RegisterRequest, AnonymousRegisterRequest } from './api/authApi';
 import { authManager } from '../../shared/api/authManager';
 import { telemetry } from '../../shared/telemetry/telemetry';
 import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import { deviceCryptoManager } from '../chats/crypto/DeviceCryptoManager';
+import type { BackendAuthUser, BackendProfile } from '../../shared/api/backendContracts';
 
 export interface AuthContextValue {
   state: AuthState;
   user: UserProfile | null;
   error: ApiError | null;
-  requires2FA: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (data: { email?: string; password: string; username: string; displayName: string; preferAnonymous?: boolean }) => Promise<void>;
-  anonymousRegister: (data: { email?: string; password: string; username: string; displayName: string; preferAnonymous?: boolean }) => Promise<void>;
+  login: (input: LoginRequest) => Promise<void>;
+  register: (data: RegisterRequest) => Promise<void>;
+  anonymousRegister: (data: AnonymousRegisterRequest) => Promise<void>;
   verify2FA: (code: string) => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
   resetPassword: (token: string, newPass: string) => Promise<void>;
-  handleOAuthCallback: (provider: string, code: string) => Promise<void>;
+  startOAuth: (provider: string) => Promise<void>;
   logout: () => Promise<void>;
   logoutAllDevices: () => Promise<void>;
   setPresenceStatus: (presence: PresenceStatus) => void;
@@ -29,13 +29,31 @@ export interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+/**
+ * The backend auth DTO intentionally does not contain frontend-only status/presence/trust fields.
+ * Keep those fields absent rather than fabricating values. The UI type is widened at runtime only
+ * where backend data is authoritative.
+ */
+const toUserRole = (role: string): UserProfile['role'] => {
+  const allowed: readonly UserProfile['role'][] = ['guest', 'user', 'creator', 'moderator', 'admin', 'super_admin'];
+  return allowed.includes(role as UserProfile['role']) ? role as UserProfile['role'] : 'guest';
+};
+
+const toUserProfile = (user: BackendAuthUser | BackendProfile): UserProfile => ({
+  id: user.id,
+  username: user.username,
+  displayName: user.displayName,
+  ...(user.email ? { email: user.email } : {}),
+  role: toUserRole(user.role),
+  isAnonymous: user.isAnonymous,
+  twoFactorEnabled: user.twoFactorEnabled,
+});
+
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const queryClient = useQueryClient();
   const [state, setState] = useState<AuthState>('UNKNOWN');
   const [user, setUser] = useState<UserProfile | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
-  const [requires2FA, setRequires2FA] = useState(false);
-  const twoFactorChallengeId = useRef<string | undefined>(undefined);
 
   const hydrateSession = useCallback(async () => {
     setState('AUTHENTICATING');
@@ -48,7 +66,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return;
       }
       const profile = await authApi.me();
-      setUser(profile);
+      setUser(toUserProfile(profile));
       setState('AUTHENTICATED');
       telemetry.record('auth', 'session_hydrated', 'info');
     } catch (err) {
@@ -63,47 +81,37 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     const handleCrossTabLogout = () => {
       setUser(null);
-      setRequires2FA(false);
-      twoFactorChallengeId.current = undefined;
       setState('UNAUTHENTICATED');
     };
     window.addEventListener('gapak:cross-tab-logout', handleCrossTabLogout);
     return () => window.removeEventListener('gapak:cross-tab-logout', handleCrossTabLogout);
   }, []);
 
-  const applyAuthResponse = useCallback((response: { accessToken?: string; user?: UserProfile; requires2FA?: boolean; challengeId?: string; csrfToken?: string }) => {
-    if (response.requires2FA) {
-      twoFactorChallengeId.current = response.challengeId;
-      if (response.csrfToken) authManager.setCsrfToken(response.csrfToken);
-      setRequires2FA(true);
-      setState('AUTHENTICATING');
-      return false;
-    }
+  const applyAuthResponse = useCallback((response: { accessToken?: string; user?: BackendAuthUser; csrfToken?: string; session?: { id: string } }) => {
     if (!response.accessToken || !response.user) {
       throw new ApiError('Authentication response is incomplete', 502, 'INVALID_AUTH_RESPONSE');
     }
     authManager.setAccessToken(response.accessToken);
+    authManager.setSessionId(response.session.id);    authManager.setSessionId(response.session.id);
     if (response.csrfToken) authManager.setCsrfToken(response.csrfToken);
-    setUser(response.user);
-    setRequires2FA(false);
-    twoFactorChallengeId.current = undefined;
+    setUser(toUserProfile(response.user));
     setState('AUTHENTICATED');
-    return true;
   }, []);
 
   const hydrateAfterAuth = useCallback(async () => {
     const profile = await authApi.me();
-    setUser(profile);
+    setUser(toUserProfile(profile));
     setState('AUTHENTICATED');
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (input: LoginRequest) => {
     setState('AUTHENTICATING');
     setError(null);
     try {
       await authManager.ensureCsrf();
-      const response = await authApi.login({ email, password });
-      if (applyAuthResponse(response)) await hydrateAfterAuth();
+      const response = await authApi.login(input);
+      applyAuthResponse(response);
+      await hydrateAfterAuth();
       telemetry.record('auth', 'login_succeeded', 'info');
     } catch (err) {
       const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : 'Login failed', 401);
@@ -111,12 +119,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [applyAuthResponse, hydrateAfterAuth]);
 
-  const register = useCallback(async (data: { email?: string; password: string; username: string; displayName: string; preferAnonymous?: boolean }) => {
+  const register = useCallback(async (data: RegisterRequest) => {
     setState('AUTHENTICATING'); setError(null);
     try {
       await authManager.ensureCsrf();
-      const response = await authApi.register(data);
-      if (applyAuthResponse(response)) await hydrateAfterAuth();
+      const response = await authApi.register({ ...data, preferAnonymous: false });
+      applyAuthResponse(response);
+      await hydrateAfterAuth();
       telemetry.record('auth', 'registration_succeeded', 'info');
     } catch (err) {
       const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : 'Registration failed', 400);
@@ -124,12 +133,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [applyAuthResponse, hydrateAfterAuth]);
 
-  const anonymousRegister = useCallback(async (data: { email?: string; password: string; username: string; displayName: string; preferAnonymous?: boolean }) => {
+  const anonymousRegister = useCallback(async (data: AnonymousRegisterRequest) => {
     setState('AUTHENTICATING'); setError(null);
     try {
       await authManager.ensureCsrf();
       const response = await authApi.anonymousRegister(data);
-      if (applyAuthResponse(response)) await hydrateAfterAuth();
+      applyAuthResponse(response);
+      await hydrateAfterAuth();
       telemetry.record('auth', 'anonymous_registration_succeeded', 'info');
     } catch (err) {
       const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : 'Anonymous registration failed', 400);
@@ -138,39 +148,55 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [applyAuthResponse, hydrateAfterAuth]);
 
   const verify2FA = useCallback(async (code: string) => {
-    setState('AUTHENTICATING'); setError(null);
-    try {
-      const response = await authApi.verify2FA(code, twoFactorChallengeId.current);
-      if (applyAuthResponse(response)) await hydrateAfterAuth();
-      telemetry.record('auth', 'two_factor_verification_succeeded', 'info');
-    } catch (err) {
-      const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : '2FA verification failed', 400);
-      setError(apiErr); setState('AUTH_ERROR'); throw apiErr;
-    }
-  }, [applyAuthResponse, hydrateAfterAuth]);
+    setError(null);
+    await authApi.twoFactorVerify(code);
+    telemetry.record('auth', 'two_factor_verification_succeeded', 'info');
+  }, []);
 
   const forgotPassword = useCallback(async (email: string) => { await authManager.ensureCsrf(); await authApi.forgotPassword(email); telemetry.record('auth', 'password_reset_requested', 'info'); }, []);
   const resetPassword = useCallback(async (token: string, newPass: string) => { await authManager.ensureCsrf(); await authApi.resetPassword(token, newPass); telemetry.record('auth', 'password_reset_succeeded', 'info'); }, []);
 
-  const handleOAuthCallback = useCallback(async (provider: string, code: string) => {
+  const startOAuth = useCallback(async (provider: string) => {
     setState('AUTHENTICATING'); setError(null);
-    try { await authManager.ensureCsrf(); const response = await authApi.oauthCallback(provider, code); if (applyAuthResponse(response)) await hydrateAfterAuth(); telemetry.record('auth', 'oauth_login_succeeded', 'info'); }
-    catch (err) { const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : 'OAuth login failed', 401); setError(apiErr); setState('AUTH_ERROR'); throw apiErr; }
-  }, [applyAuthResponse, hydrateAfterAuth]);
+    try {
+      await authManager.ensureCsrf();
+      await authApi.startOAuth(provider);
+    } catch (err) {
+      const apiErr = err instanceof ApiError ? err : new ApiError(err instanceof Error ? err.message : 'OAuth login failed', 502, 'OAUTH_START_FAILED');
+      setError(apiErr); setState('AUTH_ERROR'); throw apiErr;
+    }
+  }, []);
 
   const logout = useCallback(async () => {
-    try { await authApi.logout(); } catch (err) { telemetry.trackError('Logout request failed', err); }
-    finally { realtimeManager.disconnect('logout'); realtimeManager.clearChatSubscriptions(); realtimeManager.broadcastLogout(); await deviceCryptoManager.destroyAll(); authManager.clearSession(); queryClient.clear(); setUser(null); setRequires2FA(false); twoFactorChallengeId.current = undefined; setState('UNAUTHENTICATED'); telemetry.record('auth', 'logout_completed', 'info'); }
+    try {
+      await authManager.ensureCsrf();
+      const result = await authApi.logout(false);
+      if (!result.accepted) throw new ApiError('Server did not accept logout', 502, 'LOGOUT_NOT_ACCEPTED');
+    } finally {
+      realtimeManager.disconnect('logout'); realtimeManager.clearChatSubscriptions(); realtimeManager.broadcastLogout();
+      await deviceCryptoManager.destroyAll(); authManager.clearSession(); queryClient.clear();
+      setUser(null); setState('UNAUTHENTICATED');
+    }
+    telemetry.record('auth', 'logout_completed', 'info');
   }, [queryClient]);
 
   const logoutAllDevices = useCallback(async () => {
-    try { await authApi.logoutAll(); } finally { realtimeManager.disconnect('logout'); realtimeManager.clearChatSubscriptions(); realtimeManager.broadcastLogout(); await deviceCryptoManager.destroyAll(); authManager.clearSession(); queryClient.clear(); setUser(null); setRequires2FA(false); twoFactorChallengeId.current = undefined; setState('UNAUTHENTICATED'); telemetry.record('auth', 'logout_all_completed', 'info'); }
+    try {
+      await authManager.ensureCsrf();
+      const result = await authApi.logoutAll();
+      if (!result.accepted) throw new ApiError('Server did not accept logout-all', 502, 'LOGOUT_ALL_NOT_ACCEPTED');
+    } finally {
+      realtimeManager.disconnect('logout'); realtimeManager.clearChatSubscriptions(); realtimeManager.broadcastLogout();
+      await deviceCryptoManager.destroyAll(); authManager.clearSession(); queryClient.clear();
+      setUser(null); setState('UNAUTHENTICATED');
+    }
+    telemetry.record('auth', 'logout_all_completed', 'info');
   }, [queryClient]);
 
   const setPresenceStatus = useCallback((presence: PresenceStatus) => { setUser((prev) => prev ? { ...prev, presence } : prev); }, []);
 
   return (
-    <AuthContext.Provider value={{ state, user, error, requires2FA, login, register, anonymousRegister, verify2FA, forgotPassword, resetPassword, handleOAuthCallback, logout, logoutAllDevices, setPresenceStatus, clearError: () => setError(null) }}>
+    <AuthContext.Provider value={{ state, user, error, login, register, anonymousRegister, verify2FA, forgotPassword, resetPassword, startOAuth, logout, logoutAllDevices, setPresenceStatus, clearError: () => setError(null) }}>
       {children}
     </AuthContext.Provider>
   );
@@ -178,6 +204,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
 export const useAuth = (): AuthContextValue => {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within an AuthProvider');
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
   return ctx;
 };

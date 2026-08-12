@@ -18,6 +18,7 @@ import {
   X,
   Trash2,
   Sparkles,
+  QrCode,
 } from 'lucide-react';
 import { TrustedDevice } from '../../shared/types';
 import {
@@ -36,6 +37,8 @@ interface TrustedDevicesModalProps {
   isOpen: boolean;
   onClose: () => void;
   devices: TrustedDevice[];
+  onRegisterDevice: () => void;
+  isRegistering?: boolean;
   onRevokeDevice: (deviceId: string) => void;
   onVerifyDevice: (deviceId: string) => void;
 }
@@ -44,6 +47,8 @@ export const TrustedDevicesModal: React.FC<TrustedDevicesModalProps> = ({
   isOpen,
   onClose,
   devices,
+  onRegisterDevice,
+  isRegistering = false,
   onRevokeDevice,
   onVerifyDevice,
 }) => {
@@ -100,9 +105,16 @@ export const TrustedDevicesModal: React.FC<TrustedDevicesModalProps> = ({
 
           {/* Devices List */}
           <div className="space-y-3">
-            <h4 className="text-xs font-mono uppercase tracking-wider text-tertiary">
-              Active Registered Devices ({devices.length})
-            </h4>
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-xs font-mono uppercase tracking-wider text-tertiary">
+                Active Registered Devices ({devices.length})
+              </h4>
+              {!devices.some((device) => device.isCurrentDevice) && (
+                <Button variant="primary" size="sm" onClick={onRegisterDevice} disabled={isRegistering} leftIcon={<Key className="w-4 h-4" />}>
+                  {isRegistering ? 'Registering…' : 'Register this browser'}
+                </Button>
+              )}
+            </div>
 
             {devices.map((device) => (
               <div
@@ -123,10 +135,12 @@ export const TrustedDevicesModal: React.FC<TrustedDevicesModalProps> = ({
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-semibold text-sm text-primary">{device.name}</span>
                         {device.isCurrentDevice && <Badge variant="brand">This Device</Badge>}
-                        {device.verificationStatus === 'verified' ? (
+                        {device.verificationStatus === 'VERIFIED' ? (
                           <Badge variant="success" dot>Verified Safety Numbers</Badge>
                         ) : (
-                          <Badge variant="warning" dot>Unverified Key</Badge>
+                          <Badge variant={device.verificationStatus === 'CHANGED' || device.verificationStatus === 'REVOKED' ? 'danger' : 'warning'} dot>
+                            {device.verificationStatus === 'UNVERIFIED' ? 'Unverified Key' : `${device.verificationStatus} Key`}
+                          </Badge>
                         )}
                       </div>
 
@@ -155,7 +169,7 @@ export const TrustedDevicesModal: React.FC<TrustedDevicesModalProps> = ({
 
                   {!device.isCurrentDevice && (
                     <div className="flex items-center gap-1 shrink-0">
-                      {device.verificationStatus !== 'verified' && (
+                      {(device.verificationStatus === 'UNVERIFIED' || device.verificationStatus === 'CHANGED' || device.verificationStatus === 'UNKNOWN') && (
                         <Button
                           variant="secondary"
                           size="sm"

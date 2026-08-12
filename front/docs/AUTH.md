@@ -1,27 +1,41 @@
-# GAPAK Front — Authentication
+# GAPAK Authentication Integration
 
-## Session model
+Authentication is implemented against the authoritative backend contract in `docs/BACKEND_FRONTEND_CONTRACT.md`.
 
-- Access token is memory-only.
-- Refresh/session credential is expected in a Secure + HttpOnly cookie.
-- HTTP requests use `credentials: include`.
-- Refresh is single-flight to prevent concurrent refresh storms.
-- A failed refresh clears the in-memory access token.
-- Logout disconnects realtime, clears chat subscriptions, destroys local crypto keys and clears query state.
-- Cross-tab logout uses `BroadcastChannel` and dispatches a local logout event.
+## Endpoints
 
-## 2FA
+- `GET /api/v1/auth/csrf`
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/register-anonymous`
+- `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/logout`
+- `GET /api/v1/auth/oauth/:provider`
+- `GET /api/v1/auth/callback/:provider` (backend redirect, not JSON)
+- `POST /api/v1/auth/2fa/setup`
+- `POST /api/v1/auth/2fa/verify`
+- `POST /api/v1/auth/2fa/disable`
 
-The frontend accepts a server-issued 2FA challenge and verifies it through `POST /api/auth/2fa/verify`. It never generates or accepts a fake success response.
+## Browser session model
+
+- Access token: memory-only.
+- Refresh token: HttpOnly `gapak_rt` cookie; never accessible to JavaScript.
+- CSRF token: memory-only and sent as `X-CSRF-Token`.
+- Requests use `credentials: include`.
+- Refresh is single-flight.
+
+## Login / 2FA
+
+Login accepts `login`, `password`, and optional `totpCode`, `deviceName`, and `deviceFingerprint`.
+
+The backend does not return a special successful `requires2FA/challengeId` response. The frontend therefore does not implement a fabricated challenge flow.
 
 ## OAuth
 
-OAuth completion is a server callback contract: `POST /api/auth/oauth/:provider/callback`. No fake OAuth provider or local token exchange exists in production.
+The frontend requests an OAuth URL from `GET /auth/oauth/:provider` and navigates to it. The backend handles `GET /auth/callback/:provider` and redirects back to the frontend. The frontend does not POST the callback code to a JSON endpoint.
 
-## Current production limitation
+## Logout
 
-There is no production login/register page in the current route tree. `AuthGate` therefore renders an explicit authentication-required contract state instead of presenting a simulated login. A real auth screen must be connected to the existing `authApi` before the end-to-end login journey can be marked READY.
+Normal logout and all-device logout both use `POST /auth/logout`; all-device logout sends `{ allDevices: true }`.
 
-## CSRF dependency
-
-The transport supports an in-memory `X-CSRF-Token`, but the backend contract does not yet define how the browser bootstraps/rotates that token. This remains a backend security dependency for cookie-authenticated mutations.
+No `/logout-all` endpoint exists.

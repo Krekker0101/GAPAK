@@ -1,5 +1,118 @@
-import { RealtimeEnvelope, RealtimeEvent, RealtimeEventType } from './types';
-const aliases:Record<string,RealtimeEventType>={'chat:subscribe':'chat.subscribe','chat:unsubscribe':'chat.unsubscribe','message:new':'message.new','message:ack':'message.ack','message:status':'message.status','message:updated':'message.updated','message:deleted':'message.deleted','notification:new':'notification.new','notification:updated':'notification.updated','presence:update':'presence.update','typing:update':'typing.update','read_receipt:update':'receipt.update','receipt:update':'receipt.update','story:update':'story.update','live:update':'live.update','live:chat:message':'live.chat.message','security:alert':'security.alert','connection:update':'connection.update','system:ping':'system.ping','system:pong':'system.pong'};
-const known=new Set<RealtimeEventType>(['connection.state','chat.subscribe','chat.unsubscribe','message.new','message.ack','message.status','message.updated','message.deleted','notification.new','notification.updated','presence.update','typing.update','receipt.update','story.update','live.update','live.chat.message','security.alert','connection.update','system.ping','system.pong','error']);
-const normalizeType=(type:string):RealtimeEventType=>{const n=type.trim().toLowerCase();return aliases[n]??(known.has(n as RealtimeEventType)?n as RealtimeEventType:'error')};
-export function parseRealtimeEvent(raw:unknown):RealtimeEvent{if(!raw||typeof raw!=='object')throw new Error('Realtime frame must be an object');const input=raw as RealtimeEnvelope;const type=normalizeType(String(input.type??''));if(!input.type)throw new Error('Realtime event type is missing');if(input.payload===undefined&&!['system.ping','system.pong'].includes(type))throw new Error(`Realtime event payload is missing for ${input.type}`);return{id:typeof input.id==='string'&&input.id?input.id:crypto.randomUUID(),type,timestamp:typeof input.timestamp==='string'?input.timestamp:new Date().toISOString(),payload:input.payload,correlationId:input.correlationId,chatId:input.chatId,version:input.version}}
+import type {
+  AckRealtimeEvent,
+  BackendChatMessage,
+  BackendRealtimeMessage,
+  ChatRealtimeEvent,
+  ErrorRealtimeEvent,
+  HistoryRealtimeEvent,
+  RealtimeEvent,
+} from './types';
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const requireString = (value: unknown, field: string): string => {
+  if (typeof value !== 'string' || value.length === 0) throw new Error(`Missing ${field}`);
+  return value;
+};
+
+const parseMessage = (value: unknown): BackendChatMessage => {
+  if (!isRecord(value)) throw new Error('Realtime chat message must be an object');
+  const message = value as Partial<BackendChatMessage>;
+  requireString(message.id, 'message.id');
+  requireString(message.chatId, 'message.chatId');
+  requireString(message.senderId, 'message.senderId');
+  if (typeof message.sequenceNumber !== 'number' || !Number.isSafeInteger(message.sequenceNumber) || message.sequenceNumber < 0) {
+    throw new Error('Invalid message.sequenceNumber');
+  }
+  requireString(message.ciphertext, 'message.ciphertext');
+  requireString(message.nonce, 'message.nonce');
+  requireString(message.senderKeyId, 'message.senderKeyId');
+  requireString(message.encryptionProtocol, 'message.encryptionProtocol');
+  requireString(message.sentAt, 'message.sentAt');
+  return message as BackendChatMessage;
+};
+
+export function parseRealtimeFrame(raw: unknown): RealtimeEvent {
+  if (!isRecord(raw)) throw new Error('WebSocket frame must be an object');
+
+  const frame = raw as BackendRealtimeMessage;
+  const type = requireString(frame.type, 'type');
+
+  if (type === 'history') {
+    if (!Array.isArray(frame.data)) throw new Error('history.data must be an array');
+    const messages = frame.data.map(parseMessage);
+    const result: HistoryRealtimeEvent = { kind: 'history', requestId: frame.id, messages };
+    return result;
+  }
+
+  if (
+    type === 'chat.message.created' ||
+    type === 'chat.message.edited' ||
+    type === 'chat.message.deleted' ||
+    type === 'chat.read_receipt' ||
+    type === 'chat.typing'
+  ) {
+    const eventId = requireString(frame.eventId ?? frame.id, 'eventId');
+    if (frame.data === undefined) throw new Error(`Missing data for ${type}`);
+
+    const data = isRecord(frame.data) ? frame.data : undefined;
+    const chatId = typeof frame.chatId === 'string'
+      ? frame.chatId
+      : typeof data?.chatId === 'string'
+      ? data.chatId
+      : typeof data?.chat_id === 'string'
+        ? data.chat_id
+        : undefined;
+    const messageId = typeof frame.messageId === 'string'
+      ? frame.messageId
+      : typeof data?.id === 'string'
+        ? data.id
+        : typeof data?.messageId === 'string'
+          ? data.messageId
+          : undefined;
+
+    let sequence: number | undefined;
+    if (type.startsWith('chat.message.')) {
+      const message = parseMessage(frame.data);
+      sequence = typeof frame.sequence === 'number' ? frame.sequence : message.sequenceNumber;
+      const event: ChatRealtimeEvent = {
+        kind: 'event',
+        eventId,
+        type,
+        chatId: message.chatId,
+        messageId: message.id,
+        sequence,
+        data: message,
+      };
+      return event;
+    }
+
+    const event: ChatRealtimeEvent = { kind: 'event', eventId, type, chatId, messageId, data: frame.data };
+    return event;
+  }
+
+  if (type === 'ack' || type === 'read_receipt_ack' || type === 'delivery_ack') {
+    const event: AckRealtimeEvent = {
+      kind: 'ack',
+      id: frame.id,
+      ackFor: frame.ackFor,
+      type,
+      data: frame.data,
+    };
+    return event;
+  }
+
+  if (type === 'error') {
+    const payload = isRecord(frame.data) ? frame.data : {};
+    const event: ErrorRealtimeEvent = {
+      kind: 'error',
+      code: typeof payload.code === 'string' ? payload.code : undefined,
+      message: typeof payload.message === 'string' ? payload.message : 'WebSocket request failed',
+      details: payload.details,
+    };
+    return event;
+  }
+
+  throw new Error(`Unsupported backend WebSocket event: ${type}`);
+}

@@ -79,7 +79,7 @@ export class PermissionEvaluator {
     // Banned users lose all access
     if (user.status === 'banned') return false;
 
-    if (config.accountStatus && !config.accountStatus.includes(user.status)) {
+    if (config.accountStatus && (!user.status || !config.accountStatus.includes(user.status))) {
       return false;
     }
 

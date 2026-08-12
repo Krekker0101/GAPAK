@@ -1,26 +1,12 @@
 import { httpClient } from '../../../shared/api/httpClient';
 import { UserPresenceData, PresenceStatus } from '../../../shared/types';
-import { realtimeManager } from '../../../shared/realtime/RealtimeManager';
-
-const heartbeatConnectionKey = 'gapak_presence_connection_id';
-
-const getConnectionId = (): string => {
-  if (typeof sessionStorage === 'undefined') return crypto.randomUUID();
-  const existing = sessionStorage.getItem(heartbeatConnectionKey);
-  if (existing) return existing;
-  const next = crypto.randomUUID();
-  sessionStorage.setItem(heartbeatConnectionKey, next);
-  return next;
-};
-
-const toPresenceState = (status: PresenceStatus): 'ACTIVE' | 'IDLE' => (status === 'away' || status === 'invisible' ? 'IDLE' : 'ACTIVE');
+import { authManager } from '../../../shared/api/authManager';
 
 class PresenceEngineService {
   private store = new Map<string, UserPresenceData>();
   private lastActivity = Date.now();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private cleanup: () => void = () => {};
-  private readonly connectionId = getConnectionId();
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -36,10 +22,10 @@ class PresenceEngineService {
     }
   }
 
-  start(userId: string) {
+  start(_userId: string) {
     this.stop();
-    this.heartbeatTimer = setInterval(() => this.sendHeartbeat(userId), 20000);
-    this.sendHeartbeat(userId);
+    this.heartbeatTimer = setInterval(() => { void this.sendHeartbeat(); }, 20_000);
+    void this.sendHeartbeat();
   }
 
   stop() {
@@ -47,41 +33,36 @@ class PresenceEngineService {
     this.heartbeatTimer = null;
   }
 
-  async sendHeartbeat(userId: string) {
-    const status: PresenceStatus = Date.now() - this.lastActivity > 300000 ? 'away' : 'online';
-    realtimeManager.send({ id: crypto.randomUUID(), type: 'presence.update', timestamp: new Date().toISOString(), payload: { userId, status, lastSeen: new Date().toISOString() } });
+  async sendHeartbeat(): Promise<void> {
+    const sessionId = authManager.getSessionId();
+    if (!sessionId) return;
+    const state = Date.now() - this.lastActivity > 300_000 ? 'IDLE' : 'ACTIVE';
     try {
-      await httpClient.request({
-        url: '/api/presence/heartbeat',
-        method: 'POST',
-        data: { connectionId: this.connectionId, state: toPresenceState(status), pagePath: window.location.pathname },
-      });
+      await httpClient.post('/presence/heartbeat', { connectionId: sessionId, state });
     } catch {
-      /* heartbeat transport failure is non-fatal; realtime remains source of presence events */
+      // Presence is server-owned; a failed heartbeat must not fabricate local presence state.
     }
   }
 
-  async updateMyPresence(userId: string, status: PresenceStatus, customStatus?: string) {
-    const data = { userId, status, lastSeen: new Date().toISOString(), customStatus };
-    this.store.set(userId, data);
-    await httpClient.request({
-      url: '/api/presence/heartbeat',
-      method: 'POST',
-      data: { connectionId: this.connectionId, state: toPresenceState(status), pagePath: window.location.pathname },
-    });
-    realtimeManager.send({ id: crypto.randomUUID(), type: 'presence.update', timestamp: new Date().toISOString(), payload: data });
+  async updateMyPresence(_userId: string, status: PresenceStatus): Promise<void> {
+    // The backend exposes no PATCH /presence/me or custom-status mutation.
+    // Map supported UI states onto the documented heartbeat state only.
+    const sessionId = authManager.getSessionId();
+    if (!sessionId) return;
+    const state = status === 'online' ? 'ACTIVE' : 'IDLE';
+    await httpClient.post('/presence/heartbeat', { connectionId: sessionId, state });
   }
 
   async getUserPresence(userId: string) {
     const cached = this.store.get(userId);
     if (cached) return cached;
-    const data = await httpClient.request<UserPresenceData>({ url: `/api/presence/users/${encodeURIComponent(userId)}` });
+    const data = await httpClient.get<UserPresenceData>(`/presence/users/${encodeURIComponent(userId)}`);
     this.store.set(userId, data);
     return data;
   }
 
   async queryPresences(userIds: string[]) {
-    const data = await httpClient.request<Record<string, UserPresenceData>>({ url: '/api/presence/query', method: 'POST', data: { userIds } });
+    const data = await httpClient.post<Record<string, UserPresenceData>>('/presence/query', { userIds });
     Object.entries(data).forEach(([id, presence]) => this.store.set(id, presence));
     return data;
   }

@@ -57,6 +57,6 @@ export interface LiveStreamEvent {
   streamId: string;
   type: 'viewer_joined' | 'viewer_left' | 'like' | 'tip' | 'pinned_msg' | 'state_change';
   user?: UserProfile;
-  payload?: any;
+  payload?: Record<string, unknown>;
   timestamp: string;
 }

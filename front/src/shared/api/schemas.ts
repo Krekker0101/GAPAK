@@ -13,27 +13,6 @@ export const assertUserProfile = (value: unknown): UserProfile => {
   return value as unknown as UserProfile;
 };
 
-export interface AuthResponse {
-  accessToken: string;
-  expiresAt?: number;
-  user?: UserProfile;
-  requires2FA?: boolean;
-  challengeId?: string;
-  csrfToken?: string;
-}
-
-export const assertAuthResponse = (value: unknown): AuthResponse => {
-  if (!isObject(value)) throw new ApiSchemaError('Invalid authentication response');
-  if (value.requires2FA === true) {
-    if (value.challengeId !== undefined && typeof value.challengeId !== 'string') throw new ApiSchemaError('Invalid 2FA challengeId');
-    if (value.csrfToken !== undefined && typeof value.csrfToken !== 'string') throw new ApiSchemaError('Invalid CSRF token');
-    return value as unknown as AuthResponse;
-  }
-  if (typeof value.accessToken !== 'string') throw new ApiSchemaError('Authentication response is missing accessToken');
-  if (value.csrfToken !== undefined && typeof value.csrfToken !== 'string') throw new ApiSchemaError('Invalid CSRF token');
-  return value as unknown as AuthResponse;
-};
-
 export const assertSecurityState = <T extends { sessions: unknown; twoFactor: unknown; auditEvents: unknown; alerts: unknown; flags: unknown }>(value: unknown): T => {
   if (!value || typeof value !== 'object') throw new Error('Invalid security state response');
   const record = value as Record<string, unknown>;

@@ -1,334 +1,124 @@
-/**
- * GAPAK StoryViewerModal
- * Immersive Mobile-First Fullscreen Story Viewer.
- */
-
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import {
-  X,
-  ChevronLeft,
-  ChevronRight,
-  Eye,
-  Heart,
-  Send,
-  Volume2,
-  VolumeX,
-  Lock,
-  Star,
-  Globe,
-  Users,
-} from 'lucide-react';
-import { UserStoryGroup, UserProfile, Story } from '../../shared/types';
-import { Avatar, Badge } from '../../shared/design-system/primitives';
+import { X, Eye, Trash2, Volume2, VolumeX, Star, Loader2 } from 'lucide-react';
+import type { BackendProfile, Story, StoryViewer as BackendStoryViewer } from '../../shared/api/backendContracts';
+import { Avatar } from '../../shared/design-system/primitives';
 import { useToast } from '../../shared/ux/ToastContext';
+import { storiesApi, type StoryReactionType } from './api/storiesApi';
+import { mediaApi } from '../media/api/mediaApi';
 
-interface StoryViewerModalProps {
-  groups: UserStoryGroup[];
-  initialGroupIndex: number;
-  currentUser: UserProfile;
-  onClose: () => void;
-  onStoryReact?: (storyId: string, emoji: string) => void;
-  onStoryView?: (storyId: string) => void;
-  onStoryReply?: (storyId: string, text: string) => void;
-}
+interface Props { story: Story; currentUser: BackendProfile; onClose: () => void; onChanged: () => void; }
 
-export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
-  groups,
-  initialGroupIndex,
-  currentUser,
-  onClose,
-  onStoryReact,
-  onStoryView,
-  onStoryReply,
-}) => {
+export const StoryViewerModal: React.FC<Props> = ({ story, currentUser, onClose, onChanged }) => {
   const { addToast } = useToast();
-  const [currentGroupIndex, setCurrentGroupIndex] = useState(initialGroupIndex);
-  const [currentStoryIndex, setCurrentStoryIndex] = useState(0);
-  const [progress, setProgress] = useState(0);
-  const [isMuted, setIsMuted] = useState(true);
-  const [showViewersDrawer, setShowViewersDrawer] = useState(false);
-  const [replyText, setReplyText] = useState('');
-
-  const currentGroup = groups[currentGroupIndex] || groups[0];
-  const stories = currentGroup?.stories || [];
-  const currentStory: Story | undefined = stories[currentStoryIndex];
+  const [current, setCurrent] = useState(story);
+  const [author, setAuthor] = useState<BackendProfile | null>(story.authorId === currentUser.id ? currentUser : null);
+  const [mediaUrl, setMediaUrl] = useState<string>();
+  const [mediaKind, setMediaKind] = useState<string>();
+  const [viewers, setViewers] = useState<BackendStoryViewer[] | null>(null);
+  const [showViewers, setShowViewers] = useState(false);
+  const [muted, setMuted] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [loadingMedia, setLoadingMedia] = useState(true);
 
   useEffect(() => {
-    if (currentStory && !currentStory.hasViewed) onStoryView?.(currentStory.id);
-  }, [currentStory?.id, currentStory?.hasViewed, onStoryView]);
+    let active = true;
+    setLoadingMedia(true);
+    void Promise.all([
+      storiesApi.get(story.id),
+      mediaApi.getAsset(story.mediaFileId),
+      mediaApi.requestPlaybackGrant(story.mediaFileId, 'STORY'),
+    ]).then(([fresh, asset, grant]) => {
+      if (!active) return;
+      setCurrent(fresh);
+      setMediaKind(asset.kind);
+      setMediaUrl(grant.request.url);
+      setLoadingMedia(false);
+    }).catch(error => {
+      if (!active) return;
+      setLoadingMedia(false);
+      addToast(error instanceof Error ? error.message : 'Unable to authorize story media', 'error');
+    });
+    return () => { active = false; };
+  }, [story.id, story.mediaFileId, addToast]);
 
-  // Preload next story image/video
   useEffect(() => {
-    const nextStory = stories[currentStoryIndex + 1];
-    if (nextStory && nextStory.mediaType === 'image') {
-      const img = new Image();
-      img.src = nextStory.mediaUrl;
+    if (!author && current.authorId !== currentUser.id) {
+      // The public profile is fetched only when needed; no user object is fabricated.
+      let active = true;
+      import('../users/api/usersApi').then(({ usersApi }) => usersApi.profile(current.authorId)).then(profile => {
+        if (active) setAuthor(profile as BackendProfile);
+      }).catch(() => { /* identity remains the authoritative ID */ });
+      return () => { active = false; };
     }
-  }, [currentStoryIndex, stories]);
+    return undefined;
+  }, [author, current.authorId, currentUser.id]);
 
-  const handleNextStory = useCallback(() => {
-    if (currentStoryIndex < stories.length - 1) {
-      setCurrentStoryIndex((prev) => prev + 1);
-      setProgress(0);
-    } else if (currentGroupIndex < groups.length - 1) {
-      setCurrentGroupIndex((prev) => prev + 1);
-      setCurrentStoryIndex(0);
-      setProgress(0);
-    } else {
-      onClose();
-    }
-  }, [currentStoryIndex, stories.length, currentGroupIndex, groups.length, onClose]);
+  const owner = current.authorId === currentUser.id;
+  const displayName = author?.displayName ?? current.authorId;
+  const isVideo = useMemo(() => mediaKind === 'video' || mediaKind === 'VIDEO', [mediaKind]);
 
-  const handlePrevStory = useCallback(() => {
-    if (currentStoryIndex > 0) {
-      setCurrentStoryIndex((prev) => prev - 1);
-      setProgress(0);
-    } else if (currentGroupIndex > 0) {
-      setCurrentGroupIndex((prev) => prev - 1);
-      const prevGroup = groups[currentGroupIndex - 1];
-      setCurrentStoryIndex(prevGroup.stories.length - 1);
-      setProgress(0);
-    }
-  }, [currentStoryIndex, currentGroupIndex, groups]);
-
-  // Story Auto-Advance Timer
-  useEffect(() => {
-    if (!currentStory || showViewersDrawer) return;
-
-    const durationMs = (currentStory.durationSeconds || 5) * 1000;
-    const intervalMs = 50;
-    const step = (intervalMs / durationMs) * 100;
-
-    const timer = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 100) {
-          return 100;
-        }
-        return prev + step;
-      });
-    }, intervalMs);
-
-    return () => clearInterval(timer);
-  }, [currentStory, showViewersDrawer]);
-
-  // Advance story when progress reaches 100%
-  useEffect(() => {
-    if (progress >= 100) {
-      handleNextStory();
-    }
-  }, [progress, handleNextStory]);
-
-  // Keyboard navigation
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight') handleNextStory();
-      if (e.key === 'ArrowLeft') handlePrevStory();
-      if (e.key === 'Escape') onClose();
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleNextStory, handlePrevStory, onClose]);
-
-  if (!currentStory) return null;
-
-  const isOwner = currentGroup.user.id === currentUser.id;
-
-  const handleSendReply = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!replyText.trim()) return;
-    onStoryReply?.(currentStory.id, replyText.trim());
-    addToast(`Reply sent to @${currentGroup.user.username}`, 'success');
-    setReplyText('');
+  const markReaction = async (reactionType: StoryReactionType) => {
+    setBusy(true);
+    try { await storiesApi.react(current.id, reactionType, crypto.randomUUID()); await storiesApi.get(current.id); onChanged(); addToast('Reaction accepted by the server.', 'success'); }
+    catch (error) { addToast(error instanceof Error ? error.message : 'Unable to react', 'error'); }
+    finally { setBusy(false); }
   };
 
-  const handleReaction = (emoji: string) => {
-    onStoryReact?.(currentStory.id, emoji);
-    addToast(`Reacted with ${emoji}`, 'info');
+  const showViewerList = async () => {
+    setShowViewers(true);
+    try { setViewers(await storiesApi.viewers(current.id)); }
+    catch (error) { addToast(error instanceof Error ? error.message : 'Unable to load viewers', 'error'); }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center backdrop-blur-md">
-      {/* Container Box */}
-      <div className="relative w-full max-w-md h-full md:h-[90vh] md:max-h-[840px] md:rounded-[var(--radius-3xl)] overflow-hidden bg-surface flex flex-col justify-between shadow-token-lg border border-subtle">
-        
-        {/* Top Header: Progress Bars & Author Profile */}
-        <div className="absolute top-0 inset-x-0 z-30 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent space-y-3">
-          {/* Progress Indicators */}
-          <div className="flex space-x-1.5">
-            {stories.map((s, idx) => (
-              <div key={s.id} className="h-1 flex-1 bg-white/30 rounded-[var(--radius-pill)] overflow-hidden">
-                <div
-                  className="h-full bg-white transition-all duration-75"
-                  style={{
-                    width:
-                      idx === currentStoryIndex
-                        ? `${progress}%`
-                        : idx < currentStoryIndex
-                        ? '100%'
-                        : '0%',
-                  }}
-                />
-              </div>
-            ))}
-          </div>
+  const deleteStory = async () => {
+    setBusy(true);
+    try { await storiesApi.delete(current.id, crypto.randomUUID()); addToast('Story deleted.', 'success'); onChanged(); onClose(); }
+    catch (error) { addToast(error instanceof Error ? error.message : 'Unable to delete story', 'error'); }
+    finally { setBusy(false); }
+  };
 
-          {/* User Info & Controls */}
-          <div className="flex items-center justify-between text-white">
-            <div className="flex items-center space-x-2.5">
-              <Avatar
-                src={currentGroup.user.avatarUrl}
-                alt={currentGroup.user.displayName}
-                fallback={currentGroup.user.displayName[0]}
-                size="sm"
-              />
-              <div>
-                <span className="font-semibold text-xs">{currentGroup.user.displayName}</span>
-                <span className="text-[10px] text-white/70 block">
-                  {new Date(currentStory.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-            </div>
+  const highlight = async () => {
+    const title = window.prompt('Highlight title');
+    if (!title?.trim()) return;
+    setBusy(true);
+    try { await storiesApi.highlight(current.id, title.trim(), crypto.randomUUID()); addToast('Highlight accepted by the server.', 'success'); onChanged(); }
+    catch (error) { addToast(error instanceof Error ? error.message : 'Unable to highlight story', 'error'); }
+    finally { setBusy(false); }
+  };
 
-            <div className="flex items-center space-x-2">
-              {currentStory.mediaType === 'video' && (
-                <button
-                  onClick={() => setIsMuted(!isMuted)}
-                  className="p-1.5 rounded-[var(--radius-pill)] bg-black/40 hover:bg-black/60 transition"
-                >
-                  {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-                </button>
-              )}
-              <button
-                onClick={onClose}
-                className="p-1.5 rounded-[var(--radius-pill)] bg-black/40 hover:bg-black/60 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/95 p-3" role="dialog" aria-modal="true" aria-label="Story viewer">
+    <div className="relative flex h-full w-full max-w-md flex-col overflow-hidden rounded-3xl bg-black shadow-token-lg md:h-[90vh]">
+      <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between bg-gradient-to-b from-black/80 to-transparent p-4 text-white">
+        <div className="flex items-center gap-3 min-w-0">
+          <Avatar fallback={displayName.slice(0, 1)} size="sm" />
+          <div className="min-w-0"><div className="truncate text-sm font-semibold">{displayName}</div><div className="text-[10px] text-white/60">{new Date(current.publishedAt).toLocaleString()}</div></div>
         </div>
-
-        {/* Media Surface */}
-        <div className="relative w-full h-full flex items-center justify-center bg-black">
-          {currentStory.mediaType === 'video' ? (
-            <video
-              src={currentStory.mediaUrl}
-              autoPlay
-              muted={isMuted}
-              loop
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <img
-              src={currentStory.mediaUrl}
-              alt="Story"
-              className="w-full h-full object-cover"
-            />
-          )}
-
-          {/* Left / Right Tap Zones */}
-          <div
-            onClick={handlePrevStory}
-            className="absolute left-0 top-0 w-1/3 h-full z-10 cursor-pointer"
-          />
-          <div
-            onClick={handleNextStory}
-            className="absolute right-0 top-0 w-1/3 h-full z-10 cursor-pointer"
-          />
+        <div className="flex items-center gap-1">
+          {owner && <><button type="button" onClick={() => void showViewerList()} className="rounded-full bg-black/40 p-2" aria-label="View viewers"><Eye size={17} /></button><button type="button" onClick={() => void highlight()} disabled={busy} className="rounded-full bg-black/40 p-2" aria-label="Highlight story"><Star size={17} /></button><button type="button" onClick={() => void deleteStory()} disabled={busy} className="rounded-full bg-black/40 p-2" aria-label="Delete story"><Trash2 size={17} /></button></>}
+          <button type="button" onClick={onClose} className="rounded-full bg-black/40 p-2" aria-label="Close"><X size={18} /></button>
         </div>
-
-        {/* Bottom Bar: Reactions & Reply / Viewer Drawer */}
-        <div className="absolute bottom-0 inset-x-0 z-30 p-4 bg-gradient-to-t from-black/90 via-black/50 to-transparent space-y-3">
-          {/* Reaction Bar */}
-          <div className="flex items-center justify-center space-x-3">
-            {['🔥', '❤️', '👏', '🚀', '✨'].map((emoji) => (
-              <button
-                key={emoji}
-                onClick={() => handleReaction(emoji)}
-                className="text-2xl hover:scale-125 transition transform"
-              >
-                {emoji}
-              </button>
-            ))}
-          </div>
-
-          {/* Send Reply or Viewers trigger for owner */}
-          {isOwner ? (
-            <button
-              onClick={() => setShowViewersDrawer(true)}
-              className="w-full py-2.5 rounded-[var(--radius-xl)] bg-white/10 hover:bg-white/20 backdrop-blur-md text-white text-xs font-semibold flex items-center justify-center space-x-2 transition"
-            >
-              <Eye className="w-4 h-4" />
-              <span>{currentStory.viewsCount} Viewers</span>
-            </button>
-          ) : (
-            <form onSubmit={handleSendReply} className="flex items-center space-x-2">
-              <input
-                type="text"
-                placeholder={`Send reply to ${currentGroup.user.displayName}...`}
-                value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
-                className="flex-1 px-4 py-2.5 rounded-[var(--radius-2xl)] bg-white/10 backdrop-blur-md border border-white/20 text-white placeholder-white/60 text-xs focus:outline-none focus:ring-1 focus:ring-white"
-              />
-              <button
-                type="submit"
-                disabled={!replyText.trim()}
-                className="p-2.5 rounded-[var(--radius-2xl)] bg-indigo-600 text-white disabled:opacity-50"
-              >
-                <Send className="w-4 h-4" />
-              </button>
-            </form>
-          )}
-        </div>
-
-        {/* Viewers Drawer Modal for Story Owner */}
-        <AnimatePresence>
-          {showViewersDrawer && (
-            <motion.div
-              initial={{ y: '100%' }}
-              animate={{ y: 0 }}
-              exit={{ y: '100%' }}
-              className="absolute inset-x-0 bottom-0 z-40 bg-surface border-t border-subtle rounded-t-3xl p-5 space-y-4 max-h-[60%] overflow-y-auto"
-            >
-              <div className="flex items-center justify-between text-white border-b border-subtle pb-3">
-                <h4 className="font-bold text-sm flex items-center space-x-2">
-                  <Eye className="w-4 h-4 text-indigo-400" />
-                  <span>Story Viewers ({currentStory.viewsCount})</span>
-                </h4>
-                <button
-                  onClick={() => setShowViewersDrawer(false)}
-                  className="p-1 rounded-[var(--radius-pill)] text-tertiary hover:text-white"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                {currentStory.viewers && currentStory.viewers.length > 0 ? (
-                  currentStory.viewers.map((viewer) => (
-                    <div key={viewer.id} className="flex items-center justify-between text-white">
-                      <div className="flex items-center space-x-3">
-                        <Avatar src={viewer.avatarUrl} alt={viewer.displayName} fallback={viewer.displayName[0]} size="sm" />
-                        <div>
-                          <span className="font-semibold text-xs block">{viewer.displayName}</span>
-                          <span className="text-[10px] text-tertiary">@{viewer.username}</span>
-                        </div>
-                      </div>
-                      <Badge variant="success" className="text-[10px]">Viewed</Badge>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-xs text-tertiary text-center py-4">
-                    Your story was published recently. Viewer analytics updated in real-time.
-                  </p>
-                )}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
+      <div className="grid flex-1 place-items-center bg-black">
+        {loadingMedia && <Loader2 className="animate-spin text-white" />}
+        {!loadingMedia && mediaUrl && isVideo && <video src={mediaUrl} autoPlay muted={muted} controls className="max-h-full w-full object-contain" />}
+        {!loadingMedia && mediaUrl && !isVideo && <img src={mediaUrl} alt={current.caption ?? 'Story media'} className="max-h-full w-full object-contain" />}
+        {!loadingMedia && !mediaUrl && <p className="p-6 text-center text-sm text-white/70">The server did not provide an authorized playback URL.</p>}
+      </div>
+      <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 to-transparent p-4 text-white">
+        <div className="mb-3 flex items-center justify-center gap-3">
+          {current.allowReactions && <><button disabled={busy} onClick={() => void markReaction('LIKE')} className="rounded-full bg-white/10 px-3 py-2 text-xl" aria-label="Like story">❤️</button><button disabled={busy} onClick={() => void markReaction('FIRE')} className="rounded-full bg-white/10 px-3 py-2 text-xl" aria-label="React fire">🔥</button><button disabled={busy} onClick={() => void markReaction('SUPPORT')} className="rounded-full bg-white/10 px-3 py-2 text-xl" aria-label="React support">👏</button></>}
+          {isVideo && <button onClick={() => setMuted(v => !v)} className="rounded-full bg-white/10 p-2" aria-label={muted ? 'Unmute' : 'Mute'}>{muted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>}
+        </div>
+        {current.caption && <p className="text-sm text-white/90">{current.caption}</p>}
+        {!owner && !current.allowReplies && <p className="mt-2 text-xs text-white/50">Replies are disabled by the story owner.</p>}
+        {current.expiresAt && <p className="mt-1 text-[10px] text-white/50">Expires: {new Date(current.expiresAt).toLocaleString()}</p>}
+      </div>
+
+      <AnimatePresence>{showViewers && <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} className="absolute inset-x-0 bottom-0 z-30 max-h-[65%] overflow-auto rounded-t-3xl bg-surface p-5 text-primary">
+        <div className="flex items-center justify-between"><h3 className="font-semibold">Viewers ({viewers?.length ?? 0})</h3><button onClick={() => setShowViewers(false)} aria-label="Close viewers"><X size={18} /></button></div>
+        <div className="mt-4 space-y-3">{viewers?.map(viewer => <div key={`${viewer.viewerUserId}:${viewer.viewedAt}`} className="flex items-center justify-between rounded-xl border border-subtle p-3"><span className="truncate text-sm">{viewer.viewerUserId}</span><span className="text-[10px] text-muted">{new Date(viewer.viewedAt).toLocaleString()}</span></div>)}{viewers && viewers.length === 0 && <p className="text-sm text-muted">No viewer records are available.</p>}</div>
+      </motion.div>}</AnimatePresence>
     </div>
-  );
+  </div>;
 };

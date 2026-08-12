@@ -14,13 +14,9 @@ export const generateDeviceKeys = async (deviceId: string): Promise<StoredDevice
   const agreement = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
   const signing = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const identity = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
-
   const identityPublicJwk = await crypto.subtle.exportKey('jwk', identity.publicKey);
   const signingPublicJwk = await crypto.subtle.exportKey('jwk', signing.publicKey);
   const agreementPublicJwk = await crypto.subtle.exportKey('jwk', agreement.publicKey);
-  // Web Crypto applies the extractable flag to a generated key pair. Export the public
-  // metadata once, then immediately re-import private JWK material as non-extractable
-  // before persisting it. The private JWK never leaves this function or IndexedDB.
   const identityPrivateJwk = await crypto.subtle.exportKey('jwk', identity.privateKey);
   const signingPrivateJwk = await crypto.subtle.exportKey('jwk', signing.privateKey);
   const agreementPrivateJwk = await crypto.subtle.exportKey('jwk', agreement.privateKey);
@@ -57,17 +53,41 @@ export class DeviceCryptoManager {
     return created;
   }
 
+  async hasLocalKeys(deviceId: string): Promise<boolean> {
+    return Boolean(await deviceKeyStore.get(deviceId));
+  }
+
+  async createUnboundKeys(): Promise<Omit<StoredDeviceKeys, 'deviceId' | 'identityKeyId'> & { identityKeyId: string }> {
+    const keys = await generateDeviceKeys('__SERVER_ASSIGNED_DEVICE_ID__');
+    return {
+      ...keys,
+      identityKeyId: '__SERVER_ASSIGNED_DEVICE_ID__:identity:v1',
+    };
+  }
+
+  async bindServerDeviceId(
+    deviceId: string,
+    keys: Omit<StoredDeviceKeys, 'deviceId' | 'identityKeyId'> & { identityKeyId?: string },
+  ): Promise<StoredDeviceKeys> {
+    if (!deviceId) throw new Error('Backend did not return a device ID.');
+    const bound: StoredDeviceKeys = {
+      ...keys,
+      deviceId,
+      identityKeyId: `${deviceId}:identity:v1`,
+    };
+    await deviceKeyStore.put(bound);
+    this.cache.set(deviceId, bound);
+    return bound;
+  }
+
   async getIdentity(deviceId: string): Promise<LocalCryptoIdentity> {
     const keys = await this.ensure(deviceId);
     const fingerprint = await sha256Hex(JSON.stringify({ identity: keys.identityPublicJwk, agreement: keys.agreementPublicJwk, signing: keys.signingPublicJwk }));
-    return {
-      deviceId,
-      identityKeyId: keys.identityKeyId,
-      identityPublicJwk: keys.identityPublicJwk,
-      agreementPublicJwk: keys.agreementPublicJwk,
-      signingPublicJwk: keys.signingPublicJwk,
-      fingerprint,
-    };
+    return { deviceId, identityKeyId: keys.identityKeyId, identityPublicJwk: keys.identityPublicJwk, agreementPublicJwk: keys.agreementPublicJwk, signingPublicJwk: keys.signingPublicJwk, fingerprint };
+  }
+
+  async nextMessageCounter(deviceId: string): Promise<number> {
+    return deviceKeyStore.nextMessageCounter(deviceId);
   }
 
   async sign(deviceId: string, data: Uint8Array): Promise<string> {
@@ -87,9 +107,7 @@ export class DeviceCryptoManager {
   async decryptWithAgreement(deviceId: string, ephemeralPublicJwk: JsonWebKey, salt: Uint8Array, info: Uint8Array): Promise<CryptoKey> {
     const keys = await this.ensure(deviceId);
     const ephemeralPublic = await crypto.subtle.importKey('jwk', ephemeralPublicJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
-    const privateAgreement = keys.agreementPrivateKey;
-    if (!privateAgreement) throw new Error('Device agreement private key is unavailable; key storage must be re-enrolled');
-    const sharedBits = await crypto.subtle.deriveBits({ name: 'ECDH', public: ephemeralPublic }, privateAgreement, 256);
+    const sharedBits = await crypto.subtle.deriveBits({ name: 'ECDH', public: ephemeralPublic }, keys.agreementPrivateKey, 256);
     const hkdfBase = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
     return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt, info }, hkdfBase, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   }

@@ -1,197 +1,75 @@
-/**
- * GAPAK Security Subcomponent: SessionsSection
- * Manages active user sessions, device tokens, and session revocation.
- */
-
 import React, { useState } from 'react';
-import { Laptop, Smartphone, Radio, Trash2, AlertTriangle, ShieldCheck, MapPin, Globe } from 'lucide-react';
-import { UserSession } from '../../../shared/types/security';
+import { Laptop, Smartphone, Trash2, AlertTriangle, MapPin, Globe } from 'lucide-react';
+import type { BackendSession } from '../../../shared/api/backendContracts';
 import { SecurityService } from '../SecurityService';
 import { Badge, Button, Dialog } from '../../../shared/design-system/primitives';
 
-interface SessionsSectionProps {
-  sessions: UserSession[];
-}
+interface SessionsSectionProps { sessions: BackendSession[]; }
 
 export const SessionsSection: React.FC<SessionsSectionProps> = ({ sessions }) => {
-  const [selectedSessionToRevoke, setSelectedSessionToRevoke] = useState<UserSession | null>(null);
-  const [isConfirmRevokeOthersOpen, setIsConfirmRevokeOthersOpen] = useState(false);
+  const [selected, setSelected] = useState<BackendSession | null>(null);
+  const [confirmOthers, setConfirmOthers] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleRevokeSingle = () => {
-    if (selectedSessionToRevoke) {
-      void SecurityService.revokeSession(selectedSessionToRevoke.id);
-      setSelectedSessionToRevoke(null);
-    }
+  const revoke = async () => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try { await SecurityService.revokeSession(selected.id); setSelected(null); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Unable to revoke session.'); }
+    finally { setBusy(false); }
   };
 
-  const handleRevokeOthers = () => {
-    void SecurityService.revokeOtherSessions();
-    setIsConfirmRevokeOthersOpen(false);
+  const revokeOthers = async () => {
+    setBusy(true); setError(null);
+    try { await SecurityService.revokeOtherSessions(); setConfirmOthers(false); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Unable to revoke other sessions.'); }
+    finally { setBusy(false); }
   };
 
-  return (
-    <div className="space-y-6">
-      {/* Sessions Top Header */}
-      <div className="p-4 md:p-5 rounded-[var(--radius-2xl)] bg-surface border border-subtle flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-base font-extrabold text-primary flex items-center gap-2">
-            <Laptop className="w-5 h-5 text-indigo-400" />
-            Active Session Management (`GET /sessions/`)
-          </h2>
-          <p className="text-xs text-tertiary mt-0.5">
-            Monitor and revoke authentication tokens across devices, browsers, and remote geographic locations.
-          </p>
-        </div>
-
-        {sessions.length > 1 && (
-          <Button
-            onClick={() => setIsConfirmRevokeOthersOpen(true)}
-            variant="danger"
-            size="sm"
-            leftIcon={<Trash2 className="w-4 h-4" />}
-          >
-            Revoke All Other Sessions
-          </Button>
-        )}
+  return <div className="space-y-6">
+    <div className="p-4 md:p-5 rounded-[var(--radius-2xl)] bg-surface border border-subtle flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <h2 className="text-base font-extrabold text-primary flex items-center gap-2"><Laptop className="w-5 h-5 text-indigo-400" />Active Sessions</h2>
+        <p className="text-xs text-tertiary mt-0.5">Server-authoritative authentication sessions. Revocation is performed by the backend.</p>
       </div>
-
-      {/* Sessions Table / Cards List */}
-      <div className="space-y-3">
-        {sessions.map((session) => (
-          <div
-            key={session.id}
-            className={`p-4 rounded-[var(--radius-2xl)] bg-surface border transition-all flex flex-col md:flex-row items-start md:items-center justify-between gap-4 ${
-              session.isCurrent
-                ? 'border-indigo-500/50 shadow-token-md shadow-indigo-500/5'
-                : session.isSuspicious
-                ? 'border-rose-500/50 bg-rose-500/5'
-                : 'border-subtle hover:border-default'
-            }`}
-          >
-            <div className="flex items-start gap-3.5 min-w-0">
-              <div
-                className={`p-2.5 rounded-[var(--radius-xl)] shrink-0 ${
-                  session.isCurrent
-                    ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30'
-                    : session.isSuspicious
-                    ? 'bg-rose-600/20 text-rose-400 border border-rose-500/30'
-                    : 'bg-surface-muted text-secondary'
-                }`}
-              >
-                {session.device.toLowerCase().includes('iphone') || session.device.toLowerCase().includes('mobile') ? (
-                  <Smartphone className="w-5 h-5" />
-                ) : (
-                  <Laptop className="w-5 h-5" />
-                )}
+      {sessions.some((s) => !s.isCurrent) && <Button onClick={() => setConfirmOthers(true)} variant="danger" size="sm" leftIcon={<Trash2 className="w-4 h-4" />}>Revoke All Other Sessions</Button>}
+    </div>
+    {error && <div role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">{error}</div>}
+    <div className="space-y-3">
+      {sessions.length === 0 ? <div className="p-8 text-center border border-dashed border-subtle rounded-2xl text-sm text-muted">No sessions returned by the server.</div> : sessions.map((session) => {
+        const mobile = /mobile|iphone|android/i.test(session.deviceName ?? '') || /mobile|iphone|android/i.test(session.userAgent ?? '');
+        const location = [session.city, session.countryCode].filter(Boolean).join(', ');
+        return <div key={session.id} className={`p-4 rounded-[var(--radius-2xl)] bg-surface border transition-all flex flex-col md:flex-row items-start md:items-center justify-between gap-4 ${session.isCurrent ? 'border-indigo-500/50' : 'border-subtle'}`}>
+          <div className="flex items-start gap-3.5 min-w-0">
+            <div className={`p-2.5 rounded-xl shrink-0 ${session.isCurrent ? 'bg-indigo-600/20 text-indigo-400' : 'bg-surface-muted text-secondary'}`}>{mobile ? <Smartphone className="w-5 h-5" /> : <Laptop className="w-5 h-5" />}</div>
+            <div className="space-y-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-sm font-bold text-primary truncate">{session.deviceName || 'Unnamed device'}</h3>
+                {session.isCurrent && <Badge variant="success" size="sm">CURRENT SESSION</Badge>}
+                {session.securityLevel && <Badge variant="neutral" size="sm">{session.securityLevel}</Badge>}
               </div>
-
-              <div className="space-y-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-sm font-bold text-primary truncate">{session.device}</h3>
-                  {session.isCurrent && (
-                    <Badge variant="success" size="sm" className="font-mono text-[9px] font-bold">
-                      CURRENT SESSION
-                    </Badge>
-                  )}
-                  {session.isSuspicious && (
-                    <Badge variant="danger" size="sm" className="font-mono text-[9px] font-bold flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3" />
-                      SUSPICIOUS ACTIVITY
-                    </Badge>
-                  )}
-                </div>
-
-                <p className="text-xs text-secondary font-mono flex items-center gap-2 flex-wrap">
-                  <span>{session.browser}</span>
-                  <span className="text-secondary">•</span>
-                  <span className="flex items-center gap-1 text-tertiary">
-                    <Globe className="w-3 h-3 text-muted" />
-                    {session.ip}
-                  </span>
-                  {session.location && (
-                    <>
-                      <span className="text-secondary">•</span>
-                      <span className="flex items-center gap-1 text-tertiary">
-                        <MapPin className="w-3 h-3 text-muted" />
-                        {session.location}
-                      </span>
-                    </>
-                  )}
-                </p>
-
-                <div className="flex items-center gap-3 text-[11px] text-muted font-mono pt-0.5">
-                  <span>Last Active: {session.lastActivity}</span>
-                  <span>Created: {new Date(session.createdAt).toLocaleDateString()}</span>
-                  {session.trustScore && <span>Trust Rating: {session.trustScore}%</span>}
-                </div>
+              <p className="text-xs text-secondary font-mono flex items-center gap-2 flex-wrap">
+                {session.userAgent && <span>{session.userAgent}</span>}
+                {session.ipAddress && <span className="flex items-center gap-1"><Globe className="w-3 h-3" />{session.ipAddress}</span>}
+                {location && <span className="flex items-center gap-1"><MapPin className="w-3 h-3" />{location}</span>}
+              </p>
+              <div className="text-[11px] text-muted font-mono flex gap-3 flex-wrap">
+                <span>Last active: {new Date(session.lastUsedAt).toLocaleString()}</span>
+                <span>Created: {new Date(session.createdAt).toLocaleDateString()}</span>
+                <span>Expires: {new Date(session.expiresAt).toLocaleDateString()}</span>
               </div>
             </div>
-
-            {/* Actions */}
-            {!session.isCurrent && (
-              <Button
-                onClick={() => setSelectedSessionToRevoke(session)}
-                variant="outline"
-                size="sm"
-                className="text-rose-400 border-rose-500/30 hover:bg-rose-500/10 shrink-0 text-xs font-bold"
-                leftIcon={<Trash2 className="w-3.5 h-3.5" />}
-              >
-                Revoke Session
-              </Button>
-            )}
           </div>
-        ))}
-      </div>
-
-      {/* Modal: Confirm Single Session Revocation */}
-      <Dialog
-        isOpen={!!selectedSessionToRevoke}
-        onClose={() => setSelectedSessionToRevoke(null)}
-        title="Revoke Session Authorization"
-      >
-        <div className="space-y-4">
-          <p className="text-xs text-secondary leading-relaxed">
-            Are you sure you want to revoke the session on <strong className="text-primary">{selectedSessionToRevoke?.device}</strong> ({selectedSessionToRevoke?.ip})? This device will be instantly logged out.
-          </p>
-
-          <div className="flex justify-end gap-2 pt-2 border-t border-subtle">
-            <Button variant="ghost" size="sm" onClick={() => setSelectedSessionToRevoke(null)}>
-              Cancel
-            </Button>
-            <Button variant="danger" size="sm" onClick={handleRevokeSingle}>
-              Revoke Session
-            </Button>
-          </div>
-        </div>
-      </Dialog>
-
-      {/* Modal: Confirm Revoke All Other Sessions */}
-      <Dialog
-        isOpen={isConfirmRevokeOthersOpen}
-        onClose={() => setIsConfirmRevokeOthersOpen(false)}
-        title="Revoke All Other Sessions (`DELETE /sessions/others`)"
-      >
-        <div className="space-y-4">
-          <div className="p-3 rounded-[var(--radius-xl)] bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 space-y-1">
-            <p className="font-bold flex items-center gap-1.5">
-              <AlertTriangle className="w-4 h-4 text-amber-400" />
-              Mass Session Revocation Action
-            </p>
-            <p>
-              This will immediately terminate all active sessions except your current device session ({sessions.find(s => s.isCurrent)?.device}).
-            </p>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2 border-t border-subtle">
-            <Button variant="ghost" size="sm" onClick={() => setIsConfirmRevokeOthersOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="danger" size="sm" onClick={handleRevokeOthers}>
-              Revoke All Other Sessions
-            </Button>
-          </div>
-        </div>
-      </Dialog>
+          {!session.isCurrent && <Button onClick={() => setSelected(session)} variant="outline" size="sm" className="text-rose-400 border-rose-500/30" leftIcon={<Trash2 className="w-3.5 h-3.5" />}>Revoke Session</Button>}
+        </div>;
+      })}
     </div>
-  );
+    <Dialog isOpen={!!selected} onClose={() => !busy && setSelected(null)} title="Revoke Session Authorization">
+      <div className="space-y-4"><p className="text-xs text-secondary">Revoke <strong>{selected?.deviceName || 'this session'}</strong>? The backend will invalidate that session.</p><div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setSelected(null)} disabled={busy}>Cancel</Button><Button variant="danger" onClick={() => void revoke()} isLoading={busy}>Revoke Session</Button></div></div>
+    </Dialog>
+    <Dialog isOpen={confirmOthers} onClose={() => !busy && setConfirmOthers(false)} title="Revoke All Other Sessions">
+      <div className="space-y-4"><div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 flex gap-2"><AlertTriangle className="w-4 h-4 shrink-0" /><span>This calls DELETE /sessions/others. The current session is excluded by the backend.</span></div><div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setConfirmOthers(false)} disabled={busy}>Cancel</Button><Button variant="danger" onClick={() => void revokeOthers()} isLoading={busy}>Revoke Other Sessions</Button></div></div>
+    </Dialog>
+  </div>;
 };

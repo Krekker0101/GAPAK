@@ -29,23 +29,6 @@ export class ApiError extends Error {
   }
 }
 
-type MockResponse = { status: number; data: unknown } | null;
-type MockHandler = (url: string, method: string, headers: Record<string, string>, data?: unknown) => Promise<MockResponse>;
-let mockHandlerPromise: Promise<MockHandler | null> | null = null;
-
-const getMockHandler = async (): Promise<MockHandler | null> => {
-  if (!env.enableMockApi) return null;
-  if (!mockHandlerPromise) {
-    mockHandlerPromise = import('../../devtools/mocks/api/mockBackend')
-      .then((module) => module.mockBackendHandler as MockHandler)
-      .catch((error) => {
-        telemetry.trackError('Development mock adapter failed to load', error);
-        return null;
-      });
-  }
-  return mockHandlerPromise;
-};
-
 type TokenRefreshCallback = (token: string | null, error?: ApiError) => void;
 
 class HttpClient {
@@ -125,27 +108,20 @@ class HttpClient {
     if (this.csrfToken) headers['X-CSRF-Token'] = this.csrfToken;
 
     try {
-      const mockHandler = await getMockHandler();
-      let responseStatus: number;
-      let responseData: unknown;
-
-      if (mockHandler) {
-        const mockResponse = await mockHandler(resolveApiUrl('/api/auth/refresh'), 'POST', headers);
-        if (mockResponse) {
-          responseStatus = mockResponse.status;
-          responseData = mockResponse.data;
-        } else {
-          ({ responseStatus, responseData } = await this.fetchOnce(resolveApiUrl('/api/auth/refresh'), 'POST', headers, undefined, undefined));
-        }
-      } else {
-        ({ responseStatus, responseData } = await this.fetchOnce(resolveApiUrl('/api/auth/refresh'), 'POST', headers, undefined, undefined));
-      }
+      const { responseStatus, responseData } = await this.fetchOnce(
+        resolveApiUrl('/auth/refresh'),
+        'POST',
+        headers,
+        undefined,
+        undefined,
+        15_000,
+      );
 
       if (responseStatus < 200 || responseStatus >= 300) {
         throw this.toApiError(responseData, responseStatus, requestId, 'REFRESH_FAILED');
       }
 
-      const payload = this.unwrap(responseData) as Record<string, unknown> | null;
+      const payload = this.unwrapSuccess<Record<string, unknown>>(responseData, responseStatus, requestId);
       if (!payload || typeof payload.accessToken !== 'string') {
         throw new ApiError('Refresh response did not contain an access token', 401, 'INVALID_REFRESH_RESPONSE', requestId);
       }
@@ -158,7 +134,7 @@ class HttpClient {
       const apiError = error instanceof ApiError
         ? error
         : new ApiError('Session refresh failed', 401, 'REFRESH_FAILED', requestId);
-      tokenManager.clear();
+      this.clearSession();
       this.notifyTokenRefresh(null, apiError);
       telemetry.trackError('Session refresh failed', apiError);
       throw apiError;
@@ -179,7 +155,9 @@ class HttpClient {
       retryCount = 2,
       idempotencyKey,
       signal,
+      timeoutMs = 15_000,
       authRetry = false,
+      includeResponseMeta = false,
     } = reqConfig;
 
     const requestId = this.generateRequestId();
@@ -204,11 +182,13 @@ class HttpClient {
     }
     if (idempotencyKey) headers['X-Idempotency-Key'] = idempotencyKey;
 
-    const { responseStatus, responseData, ok, retryAfterMs } = await this.executeTransport(
-      fullUrl, method, headers, data, signal, retryCount, idempotencyKey, requestId,
+    const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const { responseStatus, responseData, ok, retryAfterMs, responseHeaders } = await this.executeTransport(
+      fullUrl, method, headers, data, signal, timeoutMs, retryCount, idempotencyKey, requestId,
     );
+    const latencyMs = Math.max(0, (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt);
 
-    if (responseStatus === 401 && !skipAuth && !authRetry && !url.endsWith('/api/auth/refresh') && !url.includes('/auth/login') && !url.includes('/auth/register')) {
+    if (responseStatus === 401 && !skipAuth && !authRetry && !url.endsWith('/auth/refresh') && !url.includes('/auth/login') && !url.includes('/auth/register')) {
       try {
         const newAccessToken = await this.refreshSession();
         return this.request<T>({
@@ -224,11 +204,16 @@ class HttpClient {
     if (!ok) {
       const apiError = this.toApiError(responseData, responseStatus, requestId, undefined, retryAfterMs ?? this.parseRetryAfterFromPayload(responseData));
       telemetry.trackApiFailure(fullUrl, responseStatus, apiError.message, requestId);
+      telemetry.trackPerfMark('api_request', latencyMs, { requestId, method, status: responseStatus });
       throw apiError;
     }
 
     telemetry.record('api', 'request_succeeded', 'debug', { requestId, status: responseStatus, method });
-    return this.unwrap(responseData) as T;
+    const data = this.unwrapSuccess<T>(responseData, responseStatus, requestId);
+    if (includeResponseMeta) {
+      return { data, headers: responseHeaders, status: responseStatus, requestId } as T;
+    }
+    return data;
   }
 
   private async executeTransport(
@@ -237,21 +222,16 @@ class HttpClient {
     headers: Record<string, string>,
     data: unknown,
     signal: AbortSignal | undefined,
+    timeoutMs: number,
     retryCount: number,
     idempotencyKey: string | undefined,
     requestId: string,
-  ): Promise<{ responseStatus: number; responseData: unknown; ok: boolean; retryAfterMs?: number }> {
-    const mockHandler = await getMockHandler();
-    if (mockHandler) {
-      const mockResponse = await mockHandler(fullUrl, method, headers, data);
-      if (mockResponse) return { responseStatus: mockResponse.status, responseData: mockResponse.data, ok: mockResponse.status >= 200 && mockResponse.status < 300 };
-    }
-
+  ): Promise<{ responseStatus: number; responseData: unknown; ok: boolean; retryAfterMs?: number; responseHeaders?: Headers }> {
     let attempt = 0;
-    const maxAttempts = Math.max(0, retryCount);
+    const maxAttempts = Math.min(5, Math.max(0, retryCount));
     while (true) {
       try {
-        const result = await this.fetchOnce(fullUrl, method, headers, data, signal);
+        const result = await this.fetchOnce(fullUrl, method, headers, data, signal, timeoutMs);
         const retryAfter = this.parseRetryAfter(result.responseHeaders);
         if (result.responseStatus < 400 || !shouldRetry({ method, idempotencyKey, attempt, maxAttempts, errorStatus: result.responseStatus })) return { ...result, retryAfterMs: retryAfter };
         await this.delay(retryDelayMs(attempt, retryAfter), signal);
@@ -272,21 +252,33 @@ class HttpClient {
     headers: Record<string, string>,
     data: unknown,
     signal: AbortSignal | undefined,
+    timeoutMs: number,
   ): Promise<{ responseStatus: number; responseData: unknown; ok: boolean; responseHeaders: Headers }> {
     let response: Response;
+    const controller = new AbortController();
+    let timedOut = false;
+    const onAbort = () => controller.abort();
+    const timeout = timeoutMs > 0 ? window.setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs) : undefined;
+    signal?.addEventListener('abort', onAbort, { once: true });
     try {
       response = await fetch(fullUrl, {
         method,
         headers,
         credentials: 'include',
         body: data instanceof FormData ? data : data !== undefined ? JSON.stringify(data) : undefined,
-        signal,
+        signal: controller.signal,
       });
       for (const interceptor of this.responseInterceptors) response = await interceptor(response);
     } catch (error) {
+      if (timeout !== undefined) window.clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (timedOut) throw new ApiError('Request timed out', 0, 'TIMEOUT');
       if (error instanceof DOMException && error.name === 'AbortError') throw error;
       throw new ApiError(error instanceof Error ? error.message : 'Network request failed', 0, 'NETWORK_ERROR');
     }
+    if (timeout !== undefined) window.clearTimeout(timeout);
+    signal?.removeEventListener('abort', onAbort);
 
     let responseData: unknown = null;
     const contentType = response.headers.get('content-type') || '';
@@ -329,9 +321,17 @@ class HttpClient {
     });
   }
 
-  private unwrap(payload: unknown): unknown {
-    if (payload && typeof payload === 'object' && 'data' in payload) return (payload as { data: unknown }).data;
-    return payload;
+  private unwrapSuccess<T>(payload: unknown, status: number, requestId: string): T {
+    if (status === 204) return undefined as T;
+    if (!payload || typeof payload !== 'object') {
+      throw new ApiError('Backend returned an invalid response envelope', status, 'INVALID_RESPONSE_ENVELOPE', requestId);
+    }
+    const envelope = payload as { success?: unknown; data?: unknown; meta?: { requestId?: unknown } };
+    if (envelope.success !== true || !('data' in envelope)) {
+      throw new ApiError('Backend returned an invalid success envelope', status, 'INVALID_RESPONSE_ENVELOPE',
+        typeof envelope.meta?.requestId === 'string' ? envelope.meta.requestId : requestId);
+    }
+    return envelope.data as T;
   }
 
   private parseRetryAfterFromPayload(payload: unknown): number | undefined {
@@ -355,7 +355,11 @@ class HttpClient {
         ? String((errorPayload as { code?: unknown }).code)
         : fallbackCode;
     const details = nestedRecord?.details;
-    return new ApiError(message, status, code, requestId, details, retryAfterMs);
+    const meta = errorPayload && typeof errorPayload === 'object' && 'meta' in errorPayload
+      ? (errorPayload as { meta?: { requestId?: unknown } }).meta
+      : undefined;
+    const serverRequestId = typeof meta?.requestId === 'string' ? meta.requestId : requestId;
+    return new ApiError(message, status, code, serverRequestId, details, retryAfterMs);
   }
 
   public get<T>(url: string, config?: Omit<HttpRequestConfig, 'url' | 'method'>): Promise<T> { return this.request<T>({ ...config, url, method: 'GET' }); }

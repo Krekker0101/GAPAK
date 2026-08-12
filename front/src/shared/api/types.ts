@@ -1,4 +1,5 @@
-import { HttpRequestConfig, HttpMethod, ApiErrorResponse } from '../types';
+import type { HttpRequestConfig, HttpMethod } from '../types';
+import type { ApiErrorEnvelope } from './backendContracts';
 
 export interface RequestMetadata {
   requestId: string;
@@ -9,7 +10,9 @@ export interface RequestMetadata {
 }
 
 export type ApiTransport = <T>(config: HttpRequestConfig) => Promise<T>;
-
-export type ApiEnvelope<T> = T | { data: T; meta?: Record<string, unknown> };
-
-export type ApiFailurePayload = ApiErrorResponse | { message?: string; code?: string; error?: unknown } | null;
+export type ApiEnvelope<T> = {
+  success: true;
+  data: T;
+  meta?: { requestId?: string; pagination?: Record<string, unknown> };
+};
+export type ApiFailurePayload = ApiErrorEnvelope | null;

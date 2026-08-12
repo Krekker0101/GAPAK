@@ -24,6 +24,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { PlaybackGrant, HLSVariant } from '../../shared/types';
+import type { MediaUsageContext } from '../../shared/types/media';
 import { PlaybackGrantService } from './PlaybackGrantService';
 
 interface VideoPlayerProps {
@@ -35,7 +36,7 @@ interface VideoPlayerProps {
   loop?: boolean;
   className?: string;
   onEnded?: () => void;
-  playbackContext?: import('../../shared/types/media').MediaUsageContext;
+  playbackContext?: MediaUsageContext;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -65,13 +66,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [selectedQuality, setSelectedQuality] = useState<string>('auto');
   const [captionLanguage, setCaptionLanguage] = useState<string>('off');
   const pendingSeekRef = useRef<number | null>(null);
-  const activeSrc = selectedQuality === 'auto' ? (grant?.masterManifestUrl || src) : (grant?.variants.find(v => v.resolution === selectedQuality)?.url || grant?.masterManifestUrl || src);
-
   // Playback grant state
   const [grant, setGrant] = useState<PlaybackGrant | undefined>(initialGrant);
+  const effectivePlaybackContext: MediaUsageContext = playbackContext;
   const [grantRemainingSec, setGrantRemainingSec] = useState<number>(
     initialGrant ? PlaybackGrantService.getRemainingSeconds(initialGrant) : 600
   );
+  const activeSrc = selectedQuality === 'auto' ? (grant?.masterManifestUrl || src) : (grant?.variants.find(v => v.resolution === selectedQuality)?.url || grant?.masterManifestUrl || src);
 
   // Menus toggles
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
@@ -121,7 +122,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (remaining <= 30) {
         // Renew grant
         try {
-          const renewed = await PlaybackGrantService.renewPlaybackGrant(grant, playbackContext);
+          const renewed = await PlaybackGrantService.renewPlaybackGrant(grant, effectivePlaybackContext);
           setGrant(renewed);
         } catch {
           videoRef.current?.pause();

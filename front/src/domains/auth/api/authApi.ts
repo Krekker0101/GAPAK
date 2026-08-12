@@ -1,17 +1,15 @@
 import { ApiError, httpClient } from '../../../shared/api/httpClient';
 import { authManager } from '../../../shared/api/authManager';
-import { assertAuthResponse, assertUserProfile, AuthResponse } from '../../../shared/api/schemas';
-import { UserProfile } from '../../../shared/types';
+import type { BackendAuthResponse, BackendProfile, CsrfResponse, LoginRequest as BackendLoginRequest, RegisterRequest as BackendRegisterRequest, AnonymousRegisterRequest as BackendAnonymousRegisterRequest } from '../../../shared/api/backendContracts';
 
-export interface LoginRequest { email: string; password: string; }
-export interface RegisterRequest { email?: string; password: string; username: string; displayName: string; preferAnonymous?: boolean; }
-
+export type LoginRequest = BackendLoginRequest;
+export type RegisterRequest = Omit<BackendRegisterRequest, 'preferAnonymous'> & { preferAnonymous?: boolean };
+export type AnonymousRegisterRequest = BackendAnonymousRegisterRequest;
+export interface OAuthStartResponse { url: string; }
 
 async function withCsrfRecovery<T>(operation: () => Promise<T>): Promise<T> {
-  try {
-    return await operation();
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 403 && (error.code === 'security.invalid_csrf' || error.code === 'CSRF_INVALID' || error.code === 'CSRF_FAILED')) {
+  try { return await operation(); } catch (error) {
+    if (error instanceof ApiError && error.status === 403 && /csrf/i.test(error.code)) {
       await authManager.ensureCsrf(true);
       return operation();
     }
@@ -21,45 +19,43 @@ async function withCsrfRecovery<T>(operation: () => Promise<T>): Promise<T> {
 
 export const authApi = {
   async csrf(): Promise<string> {
-    const response = await httpClient.get<{ csrfToken: string }>('/auth/csrf', { skipAuth: true });
-    if (!response || typeof response.csrfToken !== 'string' || response.csrfToken.length < 16) {
-      throw new Error('CSRF bootstrap failed');
-    }
+    const response = await httpClient.get<CsrfResponse>('/auth/csrf', { skipAuth: true });
+    if (!response || typeof response.csrfToken !== 'string' || response.csrfToken.length < 16) throw new Error('CSRF bootstrap failed');
     httpClient.setCsrfToken(response.csrfToken);
     return response.csrfToken;
   },
-  async login(input: LoginRequest): Promise<AuthResponse> {
-    // Backend LoginRequest uses the `login` field and accepts either email or username.
-    return assertAuthResponse(await withCsrfRecovery(() => httpClient.post('/auth/login', { login: input.email, password: input.password })));
+  login: (input: LoginRequest): Promise<BackendAuthResponse> =>
+    withCsrfRecovery(() => httpClient.post<BackendAuthResponse>('/auth/login', input)),
+  register: (input: RegisterRequest): Promise<BackendAuthResponse> => {
+    const payload: BackendRegisterRequest = { ...input, preferAnonymous: input.preferAnonymous ?? false };
+    return withCsrfRecovery(() => httpClient.post<BackendAuthResponse>('/auth/register', payload));
   },
-  async register(input: RegisterRequest): Promise<AuthResponse> {
-    return assertAuthResponse(await withCsrfRecovery(() => httpClient.post('/auth/register', { ...input, email: undefined, preferAnonymous: true })));
+  anonymousRegister: (input: AnonymousRegisterRequest): Promise<BackendAuthResponse> =>
+    withCsrfRecovery(() => httpClient.post<BackendAuthResponse>('/auth/register-anonymous', input)),
+  me: (signal?: AbortSignal): Promise<BackendProfile> => httpClient.get<BackendProfile>('/users/me', { signal }),
+  forgotPassword: (email: string): Promise<void> => withCsrfRecovery(() => httpClient.post<void>('/auth/forgot-password', { email })),
+  resetPassword: (token: string, password: string): Promise<void> => withCsrfRecovery(() => httpClient.post<void>('/auth/reset-password', { token, newPassword: password })),
+  twoFactorSetup: (signal?: AbortSignal) => withCsrfRecovery(() => httpClient.post<{ secret: string; otpAuthUrl: string }>('/auth/2fa/setup', undefined, { signal })),
+  twoFactorVerify: (code: string, signal?: AbortSignal) => withCsrfRecovery(() => httpClient.post<{ accepted: boolean }>('/auth/2fa/verify', { code }, { signal })),
+  twoFactorDisable: (signal?: AbortSignal) => withCsrfRecovery(() => httpClient.post<{ accepted: boolean }>('/auth/2fa/disable', undefined, { signal })),
+  oauthRedirect: (provider: string, signal?: AbortSignal): Promise<OAuthStartResponse> => httpClient.get<OAuthStartResponse>(`/auth/oauth/${encodeURIComponent(provider)}`, { signal }),
+  /** The OAuth callback is a browser redirect handled by the backend, not a JSON API call. */
+  startOAuth: async (provider: string, signal?: AbortSignal): Promise<void> => {
+    const response = await authApi.oauthRedirect(provider, signal);
+    if (!response?.url || typeof response.url !== 'string') throw new ApiError('OAuth provider did not return a redirect URL', 502, 'INVALID_OAUTH_REDIRECT');
+    const target = new URL(response.url, window.location.origin);
+    const isLocalDevHttp = import.meta.env.DEV && (target.hostname === 'localhost' || target.hostname === '127.0.0.1');
+    if (target.protocol !== 'https:' && !isLocalDevHttp) throw new ApiError('OAuth redirect URL must use HTTPS', 502, 'INVALID_OAUTH_REDIRECT');
+    window.location.assign(target.toString());
   },
-  async anonymousRegister(input: RegisterRequest): Promise<AuthResponse> {
-    // Keep the anonymous endpoint available for flows that explicitly request it,
-    // but send a valid JSON RegisterRequest. The backend intentionally converts
-    // this request into an anonymous account and ignores the email address.
-    return assertAuthResponse(await withCsrfRecovery(() => httpClient.post('/auth/register-anonymous', input))); 
+  logout: async (allDevices = false): Promise<{ accepted: boolean }> => {
+    const response = await withCsrfRecovery(() => httpClient.post<{ accepted: boolean }>('/auth/logout', { allDevices }));
+    httpClient.clearSession();
+    return response;
   },
-  async verify2FA(code: string, challengeId?: string): Promise<AuthResponse> {
-    return assertAuthResponse(await withCsrfRecovery(() => httpClient.post('/auth/2fa/verify', { code, ...(challengeId ? { challengeId } : {}) })));
-  },
-  async me(): Promise<UserProfile> {
-    return assertUserProfile(await httpClient.get('/users/me'));
-  },
-  async forgotPassword(email: string): Promise<void> {
-    await withCsrfRecovery(() => httpClient.post('/auth/forgot-password', { email }));
-  },
-  async resetPassword(token: string, password: string): Promise<void> {
-    await withCsrfRecovery(() => httpClient.post('/auth/reset-password', { token, newPassword: password }));
-  },
-  async oauthCallback(provider: string, code: string): Promise<AuthResponse> {
-    return assertAuthResponse(await withCsrfRecovery(() => httpClient.post(`/auth/oauth/${encodeURIComponent(provider)}`, { code })));
-  },
-  async logout(): Promise<void> {
-    await withCsrfRecovery(() => httpClient.post('/auth/logout'));
-  },
-  async logoutAll(): Promise<void> {
-    await withCsrfRecovery(() => httpClient.post('/auth/logout', { allDevices: true }));
+  logoutAll: async (): Promise<{ accepted: boolean }> => {
+    const response = await withCsrfRecovery(() => httpClient.post<{ accepted: boolean }>('/auth/logout', { allDevices: true }));
+    httpClient.clearSession();
+    return response;
   },
 };

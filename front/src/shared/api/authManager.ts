@@ -7,6 +7,7 @@ export class AuthManager {
   private refreshPromise: Promise<string> | null = null;
   private csrfPromise: Promise<string> | null = null;
   private hasServerSession = false;
+  private sessionId: string | null = null;
 
   getAccessToken(): string | null { return tokenManager.getAccessToken(); }
   setAccessToken(token: string | null): void { tokenManager.setAccessToken(token); }
@@ -37,10 +38,14 @@ export class AuthManager {
     }
   }
 
+  setSessionId(sessionId: string | null): void { this.sessionId = sessionId; }
+  getSessionId(): string | null { return this.sessionId; }
+
   clearSession(): void {
     tokenManager.clear();
     httpClient.setCsrfToken(null);
     this.hasServerSession = false;
+    this.sessionId = null;
   }
 
   async ensureCsrf(force = false): Promise<string> {

@@ -1,199 +1,246 @@
-import { env, resolveWebSocketUrl } from '../config/env';
-import { tokenManager } from '../api/tokenManager';
+import { env } from '../config/env';
 import { telemetry } from '../telemetry/telemetry';
-import { RealtimeConnectionState, RealtimeEnvelope, RealtimeEvent } from './types';
-import { parseRealtimeEvent } from './EventParser';
+import type { BackendRealtimeMessage, RealtimeConnectionState, RealtimeEvent } from './types';
+import { parseRealtimeFrame } from './EventParser';
 
 export interface WebSocketTransportOptions {
   onEvent: (event: RealtimeEvent) => void;
   onStateChange: (state: RealtimeConnectionState) => void;
   onAuthFailure: (error: Error) => void;
+  ensureAuthenticated: () => Promise<boolean>;
 }
 
 export class WebSocketTransport {
   private socket: WebSocket | null = null;
-  private state: RealtimeConnectionState = 'DISCONNECTED';
+  private state: RealtimeConnectionState = 'CLOSED';
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
+  private stableConnectionTimer: ReturnType<typeof setTimeout> | null = null;
   private manuallyClosed = false;
   private disposed = false;
+  private generation = 0;
   private readonly maxReconnectAttempts = 12;
-  private readonly heartbeatEveryMs = 20000;
-  private readonly heartbeatTimeoutMs = 10000;
-  private readonly maxQueue = 250;
-  private outboundQueue: RealtimeEnvelope[] = [];
+  private readonly stableConnectionMs = 15_000;
   private visibilityHandler?: () => void;
   private onlineHandler?: () => void;
   private offlineHandler?: () => void;
 
   constructor(private readonly options: WebSocketTransportOptions) {}
 
-  getState() { return this.state; }
+  getState(): RealtimeConnectionState {
+    return this.state;
+  }
 
-  connect() {
-    if (this.disposed || ['CONNECTED', 'CONNECTING', 'RECONNECTING'].includes(this.state)) return;
-    const wsUrl = resolveWebSocketUrl();
-    if (!wsUrl) {
-      this.setState('DISCONNECTED');
+  connect(): void {
+    if (this.disposed || this.socket?.readyState === WebSocket.OPEN || this.state === 'CONNECTING' || this.state === 'AUTHENTICATING' || this.state === 'RECONNECTING') {
+      return;
+    }
+    if (!env.wsBaseUrl) {
       telemetry.record('websocket', 'ws_missing_base_url', 'error');
+      this.setState('CLOSED');
       return;
     }
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      this.setState('OFFLINE');
+      this.setState('CLOSED');
       return;
     }
 
     this.manuallyClosed = false;
     this.clearReconnectTimer();
-    this.setState(this.reconnectAttempts ? 'RECONNECTING' : 'CONNECTING');
+    this.setState(this.reconnectAttempts > 0 ? 'RECONNECTING' : 'CONNECTING');
     this.bindBrowserNetworkEvents();
+    void this.openSocket();
+  }
+
+  private async openSocket(): Promise<void> {
+    this.setState('AUTHENTICATING');
 
     try {
-      this.socket = new WebSocket(this.withAccessToken(wsUrl), 'gapak.realtime.v1');
-      this.socket.onopen = () => this.handleOpen();
-      this.socket.onmessage = (event) => this.handleMessage(event.data);
-      this.socket.onerror = () => telemetry.record('websocket', 'ws_error', 'error');
-      this.socket.onclose = (event) => this.handleClose(event);
+      const authenticated = await this.options.ensureAuthenticated();
+      if (!authenticated) throw new Error('Realtime authentication unavailable');
+      if (this.manuallyClosed || this.disposed) return;
+
+      const generation = ++this.generation;
+
+      // Native browser WebSocket; no subprotocol is negotiated. Authentication
+      // is carried by the backend-issued HttpOnly `gapak_at` cookie. Never put
+      // access/refresh tokens into the WebSocket URL or client-visible frames.
+      const socket = new WebSocket(env.wsBaseUrl);
+      this.socket = socket;
+
+      socket.onopen = () => {
+        if (!this.isCurrent(socket, generation)) return;
+        this.handleOpen();
+      };
+      socket.onmessage = (event) => {
+        if (!this.isCurrent(socket, generation)) return;
+        this.handleMessage(event.data);
+      };
+      socket.onerror = () => {
+        if (!this.isCurrent(socket, generation)) return;
+        telemetry.record('websocket', 'ws_error', 'error');
+      };
+      socket.onclose = (event) => {
+        if (!this.isCurrent(socket, generation)) return;
+        this.handleClose(event);
+      };
     } catch (error) {
-      telemetry.trackError('WebSocket construction failed', error);
-      this.scheduleReconnect();
+      if (this.manuallyClosed || this.disposed) return;
+      const normalized = error instanceof Error ? error : new Error('Realtime authentication failed');
+      this.options.onAuthFailure(normalized);
+      this.generation += 1;
+      this.socket = null;
+      this.setState('CLOSED');
+      // Authentication/session failures are terminal. Do not start an endless
+      // reconnect loop; the auth layer must establish a valid session first.
     }
   }
 
-  disconnect(reason = 'client_logout') {
+  private isCurrent(socket: WebSocket, generation: number): boolean {
+    return !this.disposed && generation === this.generation && this.socket === socket;
+  }
+
+  disconnect(reason = 'client_logout'): void {
     this.manuallyClosed = true;
     this.clearReconnectTimer();
-    this.stopHeartbeat();
+    this.clearStableConnectionTimer();
+    this.generation += 1;
     this.unbindBrowserNetworkEvents();
+
     const socket = this.socket;
     this.socket = null;
-    if (socket && socket.readyState === WebSocket.OPEN) socket.close(1000, reason.slice(0, 120));
-    else if (socket) socket.close();
-    this.setState('DISCONNECTED');
-    this.outboundQueue = [];
-  }
-
-  send<T>(event: RealtimeEnvelope<T>) {
-    if (this.state === 'CONNECTED' && this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify(event));
-      return true;
+    if (socket) {
+      try {
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close(1000, reason.slice(0, 120));
+        }
+      } catch {
+        // Browser can throw while a handshake is being aborted.
+      }
     }
-    if (['AUTHENTICATION_FAILED', 'SERVER_SHUTDOWN'].includes(this.state)) return false;
-    if (this.outboundQueue.length >= this.maxQueue) this.outboundQueue.shift();
-    this.outboundQueue.push(event);
-    return false;
+    this.setState('CLOSED');
   }
 
-  private withAccessToken(rawUrl: string): string {
-    const token = tokenManager.getAccessToken();
-    if (!token) return rawUrl;
-    const url = new URL(rawUrl);
-    url.searchParams.set('access_token', token);
-    return url.toString();
-  }
-
-  private handleOpen() {
-    const token = tokenManager.getAccessToken();
-    if (token && this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({ id: crypto.randomUUID(), type: 'auth', timestamp: new Date().toISOString(), data: { token } }));
+  send(message: BackendRealtimeMessage): boolean {
+    if (this.state !== 'CONNECTED' || this.socket?.readyState !== WebSocket.OPEN) {
+      telemetry.record('websocket', 'event_not_sent_while_disconnected', 'debug', { type: message.type });
+      return false;
     }
-    this.reconnectAttempts = 0;
+    this.socket.send(JSON.stringify(message));
+    return true;
+  }
+
+  private handleOpen(): void {
     this.setState('CONNECTED');
-    this.startHeartbeat();
-    this.flushQueue();
+    this.clearStableConnectionTimer();
+    this.stableConnectionTimer = setTimeout(() => {
+      if (this.state === 'CONNECTED') this.reconnectAttempts = 0;
+      this.stableConnectionTimer = null;
+    }, this.stableConnectionMs);
   }
 
-  private handleMessage(raw: unknown) {
+  private handleMessage(raw: unknown): void {
     let value: unknown = raw;
     if (typeof raw === 'string') {
-      try { value = JSON.parse(raw); }
-      catch { telemetry.record('websocket', 'invalid_json_frame', 'error'); return; }
+      try {
+        value = JSON.parse(raw);
+      } catch {
+        telemetry.record('websocket', 'invalid_json_frame', 'error');
+        return;
+      }
     }
+
     try {
-      const event = parseRealtimeEvent(value);
-      if (event.type === 'system.ping') {
-        this.send({ id: crypto.randomUUID(), type: 'system.pong', timestamp: new Date().toISOString(), payload: {} });
-        return;
-      }
-      if (event.type === 'system.pong') {
-        if (this.heartbeatTimeout) clearTimeout(this.heartbeatTimeout);
-        this.heartbeatTimeout = null;
-        return;
-      }
-      if (event.type === 'error') {
-        const payload = event.payload as { code?: string; message?: string } | undefined;
-        if (payload?.code === 'AUTHENTICATION_FAILED' || payload?.code === 'UNAUTHORIZED') {
-          this.setState('AUTHENTICATION_FAILED');
-          this.socket?.close(1008, 'realtime_auth_failed');
-          return;
-        }
-      }
+      const event = parseRealtimeFrame(value);
       this.options.onEvent(event);
     } catch (error) {
-      telemetry.trackError('Invalid realtime event', error);
+      telemetry.trackError('Invalid backend realtime frame', error);
     }
   }
 
-  private clearReconnectTimer() { if (this.reconnectTimer) clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
-
-  private handleClose(event: CloseEvent) {
-    this.stopHeartbeat();
+  private handleClose(event: CloseEvent): void {
     this.socket = null;
-    if (this.manuallyClosed || this.disposed) { this.setState('DISCONNECTED'); return; }
-    if ([1008, 4001, 4401].includes(event.code)) {
-      this.setState('AUTHENTICATION_FAILED');
-      this.options.onAuthFailure(new Error('Realtime authentication rejected by server'));
+    this.clearStableConnectionTimer();
+
+    if (this.manuallyClosed || this.disposed) {
+      this.setState('CLOSED');
       return;
     }
-    if ([1001, 1012, 1013].includes(event.code)) this.setState('SERVER_SHUTDOWN');
+
+    // Backend closes slow consumers with 1013 and normal shutdowns with 1001/1012.
+    // A RequireAuth rejection happens before upgrade and is not observable as a
+    // reliable WebSocket close code in browsers, so reconnecting is bounded.
+    if ([1000, 1008].includes(event.code)) {
+      this.setState('CLOSED');
+      if (event.code === 1008) {
+        this.options.onAuthFailure(new Error('Realtime connection rejected by backend'));
+      }
+      return;
+    }
+
     this.scheduleReconnect();
   }
 
-  private scheduleReconnect() {
+  private scheduleReconnect(): void {
     if (this.manuallyClosed || this.disposed) return;
-    if (typeof navigator !== 'undefined' && !navigator.onLine) { this.setState('OFFLINE'); return; }
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) { this.setState('DISCONNECTED'); return; }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      this.setState('CLOSED');
+      return;
+    }
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.setState('CLOSED');
+      return;
+    }
+
     this.clearReconnectTimer();
     this.setState('RECONNECTING');
-    const base = Math.min(30000, 750 * 2 ** this.reconnectAttempts);
-    const jitter = Math.floor(Math.random() * Math.min(1000, base * 0.25));
+
+    const base = Math.min(30_000, 750 * 2 ** this.reconnectAttempts);
+    const jitter = Math.floor(Math.random() * Math.min(1_500, Math.max(250, base * 0.25)));
     this.reconnectAttempts += 1;
-    this.reconnectTimer = setTimeout(() => this.connect(), base + jitter);
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, base + jitter);
   }
 
-  private startHeartbeat() {
-    this.stopHeartbeat();
-    this.heartbeatTimer = setInterval(() => {
-      if (this.state !== 'CONNECTED') return;
-      this.send({ id: crypto.randomUUID(), type: 'system.ping', timestamp: new Date().toISOString(), payload: {} });
-      if (this.heartbeatTimeout) clearTimeout(this.heartbeatTimeout);
-      this.heartbeatTimeout = setTimeout(() => this.socket?.close(4000, 'heartbeat_timeout'), this.heartbeatTimeoutMs);
-    }, this.heartbeatEveryMs);
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
   }
 
-  private stopHeartbeat() {
-    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-    if (this.heartbeatTimeout) clearTimeout(this.heartbeatTimeout);
-    this.heartbeatTimer = null;
-    this.heartbeatTimeout = null;
+  private clearStableConnectionTimer(): void {
+    if (this.stableConnectionTimer) clearTimeout(this.stableConnectionTimer);
+    this.stableConnectionTimer = null;
   }
 
-  private flushQueue() { if (this.state !== 'CONNECTED') return; const queue = this.outboundQueue; this.outboundQueue = []; queue.forEach((event) => this.send(event)); }
-  private setState(state: RealtimeConnectionState) { if (this.state === state) return; this.state = state; telemetry.record('websocket', `ws_state_${state.toLowerCase()}`, 'info', { attempts: this.reconnectAttempts }); this.options.onStateChange(state); }
+  private setState(state: RealtimeConnectionState): void {
+    if (this.state === state) return;
+    this.state = state;
+    telemetry.record('websocket', `ws_state_${state.toLowerCase()}`, 'info', { attempts: this.reconnectAttempts });
+    this.options.onStateChange(state);
+  }
 
-  private bindBrowserNetworkEvents() {
+  private bindBrowserNetworkEvents(): void {
     if (typeof window === 'undefined' || this.visibilityHandler) return;
-    this.visibilityHandler = () => { if (document.visibilityState === 'visible' && this.state === 'DISCONNECTED') this.connect(); };
-    this.onlineHandler = () => { this.reconnectAttempts = 0; this.connect(); };
-    this.offlineHandler = () => { this.socket?.close(1001, 'offline'); this.setState('OFFLINE'); };
+
+    this.visibilityHandler = () => {
+      if (document.visibilityState === 'visible' && this.state === 'CLOSED') this.connect();
+    };
+    this.onlineHandler = () => {
+      if (this.state === 'CLOSED') this.connect();
+    };
+    this.offlineHandler = () => {
+      this.disconnect('offline');
+    };
+
     document.addEventListener('visibilitychange', this.visibilityHandler);
     window.addEventListener('online', this.onlineHandler);
     window.addEventListener('offline', this.offlineHandler);
   }
 
-  private unbindBrowserNetworkEvents() {
+  private unbindBrowserNetworkEvents(): void {
     if (typeof window === 'undefined') return;
     if (this.visibilityHandler) document.removeEventListener('visibilitychange', this.visibilityHandler);
     if (this.onlineHandler) window.removeEventListener('online', this.onlineHandler);
@@ -203,5 +250,8 @@ export class WebSocketTransport {
     this.offlineHandler = undefined;
   }
 
-  dispose() { this.disposed = true; this.disconnect('dispose'); this.outboundQueue = []; }
+  dispose(): void {
+    this.disposed = true;
+    this.disconnect('dispose');
+  }
 }

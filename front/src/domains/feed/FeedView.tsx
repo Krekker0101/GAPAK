@@ -17,11 +17,13 @@ import {
   RefreshCw,
   SlidersHorizontal,
 } from 'lucide-react';
-import { Post, UserStoryGroup, UserProfile, ContentPrivacyLevel } from '../../shared/types';
+import { UserStoryGroup, UserProfile } from '../../shared/types';
+import type { Post as BackendPost } from '../../shared/api/backendContracts';
+import type { CreatePostRequest } from '../posts/api/postsApi';
 import { StoryBar } from '../stories/StoryBar';
 import { StoryViewerModal } from '../stories/StoryViewerModal';
 import { PostComposer } from '../posts/PostComposer';
-import { PostCard } from '../posts/PostCard';
+import { BackendPostCard } from '../posts/BackendPostCard';
 import { Button, Input, Badge } from '../../shared/design-system/primitives';
 import { useToast } from '../../shared/ux/ToastContext';
 
@@ -29,11 +31,12 @@ type FeedFilter = 'all' | 'following' | 'trusted' | 'clips' | 'one_time';
 
 interface FeedViewProps {
   currentUser: UserProfile;
-  posts: Post[];
+  posts: BackendPost[];
   storyGroups: UserStoryGroup[];
   onLikeToggle: (postId: string) => void;
   onAddComment: (postId: string, text: string, parentId?: string) => void;
-  onCreatePost: (post: Partial<Post>) => Promise<unknown>;
+  onCreatePost: (post: CreatePostRequest) => Promise<unknown>;
+  onCreateStory: () => void;
   onUserClick?: (userId: string) => void;
   onStoryReact?: (storyId: string, emoji: string) => void;
   onDeletePost?: (postId: string) => void;
@@ -48,6 +51,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
   onLikeToggle,
   onAddComment,
   onCreatePost,
+  onCreateStory,
   onUserClick,
   onStoryReact,
   onDeletePost,
@@ -74,19 +78,19 @@ export const FeedView: React.FC<FeedViewProps> = ({
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchBody = post.body.toLowerCase().includes(q);
-      const matchAuthor = post.author.displayName.toLowerCase().includes(q) || post.author.username.toLowerCase().includes(q);
+      const matchAuthor = post.authorId.toLowerCase().includes(q);
       if (!matchBody && !matchAuthor) return false;
     }
 
     // Filter tab
     if (activeFilter === 'following') {
-      return post.privacy === 'FRIENDS' || post.author.id === currentUser.id;
+      return post.privacy === 'FRIENDS' || post.authorId === currentUser.id;
     }
     if (activeFilter === 'trusted') {
-      return post.privacy === 'TRUSTED_CIRCLE' || post.isInTrustedCircle;
+      return post.privacy === 'TRUSTED_CIRCLE';
     }
     if (activeFilter === 'clips') {
-      return post.contentType === 'clip';
+      return post.contentType === 'CLIP';
     }
     if (activeFilter === 'one_time') {
       return post.privacy === 'ONE_TIME';
@@ -106,7 +110,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
             const idx = storyGroups.findIndex((g) => g.user.id === group.user.id);
             if (idx !== -1) setSelectedStoryGroupIndex(idx);
           }}
-          onCreateStoryClick={() => addToast('Story publishing requires the backend story-creation contract (POST /api/stories).', 'warn')}
+          onCreateStoryClick={onCreateStory}
         />
       </div>
 
@@ -166,10 +170,10 @@ export const FeedView: React.FC<FeedViewProps> = ({
       <div className="space-y-4">
         {filteredPosts.length > 0 ? (
           filteredPosts.map((post) => (
-            <PostCard
+            <BackendPostCard
               key={post.id}
               post={post}
-              currentUser={currentUser}
+              currentUserId={currentUser.id}
               onLikeToggle={onLikeToggle}
               onAddComment={onAddComment}
               onUserClick={onUserClick}

@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Eye, MessageCircle, RefreshCw, ShieldCheck, Send, Radio } from 'lucide-react';
 import { liveApi } from './api/liveApi';
-import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import { PageError, PageLoading } from '../../pages/common';
 import { VideoPlayer } from '../media/VideoPlayer';
 import { LiveChatMessage } from '../../shared/types/live';
@@ -22,22 +21,6 @@ export const LivePage: React.FC<{ streamId?: string }> = ({ streamId }) => {
 
   useEffect(() => { if (chatQuery.data) setChat(chatQuery.data.items); }, [chatQuery.data]);
 
-  useEffect(() => {
-    if (!streamId) return;
-    return realtimeManager.subscribe('live.chat.message', event => {
-      const payload = event.payload as LiveChatMessage & { streamId?: string };
-      if (payload.streamId !== streamId) return;
-      setChat(current => current.some(m => m.id === payload.id) ? current : [...current, payload]);
-    });
-  }, [streamId]);
-
-  useEffect(() => {
-    if (!streamId) return;
-    return realtimeManager.subscribe('live.update', event => {
-      const payload = event.payload as { streamId?: string };
-      if (payload.streamId === streamId) void client.invalidateQueries({ queryKey: ['live', streamId] });
-    });
-  }, [client, streamId]);
 
   if (!streamId) {
     if (list.isPending) return <PageLoading label="Loading live streams…" />;
@@ -61,9 +44,12 @@ export const LivePage: React.FC<{ streamId?: string }> = ({ streamId }) => {
   return <LiveRoom stream={data} chat={chat} chatText={chatText} setChatText={setChatText} onSend={() => {
     if (!user || !chatText.trim()) return;
     const text = chatText.trim();
-    setChatText('');
-    const sent = realtimeManager.send({ id: crypto.randomUUID(), type: 'live.chat.send', timestamp: new Date().toISOString(), payload: { streamId: data.id, text } });
-    if (!sent) toast.warning('Live chat is temporarily unavailable. Reconnect before sending.');
+    void liveApi.postChat(data.id, text, crypto.randomUUID())
+      .then((message) => {
+        setChat(current => current.some(item => item.id === message.id) ? current : [...current, message]);
+        setChatText('');
+      })
+      .catch((error) => toast.error('Live chat unavailable', error instanceof Error ? error.message : 'The message could not be sent.'));
   }} />;
 };
 

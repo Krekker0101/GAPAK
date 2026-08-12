@@ -10,8 +10,8 @@
  * - Offline / Network State Indicator
  */
 
-import React, { useMemo, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -51,8 +51,9 @@ import { CommandPalette } from '../../shared/ux/CommandPalette';
 import { Avatar, Badge, IconButton } from '../../shared/design-system/primitives';
 import { DOMAINS_REGISTRY } from '../../domains';
 import { PermissionGuard } from '../../shared/permissions/permissions';
-import { notificationsApi } from '../../domains/notifications/api/notificationsApi';
-import { realtimeManager } from '../../shared/realtime/RealtimeManager';
+import { NotificationsController } from '../../domains/notifications/NotificationsController';
+import { isNotificationRead } from '../../domains/notifications/notificationsState';
+import { useToast } from '../../shared/ux/ToastContext';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -88,15 +89,81 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const currentDomain = useMemo(() => domainFromPath(location.pathname), [location.pathname]);
   const onNavigate = (domain: DomainKey) => navigate(DOMAIN_PATHS[domain]);
   const { user, logout, setPresenceStatus } = useAuth();
+  const toast = useToast();
   const { theme, resolvedTheme, setTheme } = useTheme();
   const network = useNetworkState();
-  const queryClient = useQueryClient();
-  const notificationsQuery = useQuery({ queryKey: ['notifications'], queryFn: ({ signal }) => notificationsApi.list({ limit: 10 }, signal) });
-  const unreadQuery = useQuery({ queryKey: ['notifications', 'unread-count'], queryFn: ({ signal }) => notificationsApi.unreadCount(signal) });
-  const markRead = useMutation({ mutationFn: notificationsApi.markRead, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['notifications'] }); void queryClient.invalidateQueries({ queryKey: ['notifications', 'unread-count'] }); } });
-  const markAllRead = useMutation({ mutationFn: notificationsApi.markAllRead, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['notifications'] }); void queryClient.invalidateQueries({ queryKey: ['notifications', 'unread-count'] }); } });
-  const notifications = notificationsQuery.data?.notifications ?? [];
-  const unreadCount = unreadQuery.data?.count ?? 0;
+  const notificationsController = useRef(new NotificationsController()).current;
+  const [notificationsState, setNotificationsState] = useState(notificationsController.getState());
+  const [unreadCount, setUnreadCount] = useState(notificationsController.getUnreadCount());
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
+  const [notificationsError, setNotificationsError] = useState(false);
+  const [loadingMoreNotifications, setLoadingMoreNotifications] = useState(false);
+  const [notificationMutationError, setNotificationMutationError] = useState(false);
+  const notifications = notificationsState.items;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setNotificationsLoading(true);
+    setNotificationsError(false);
+    void notificationsController.loadInitial(controller.signal)
+      .then(() => {
+        setNotificationsState(notificationsController.getState());
+        setUnreadCount(notificationsController.getUnreadCount());
+      })
+      .catch((error) => {
+        if (error?.name !== 'AbortError') setNotificationsError(true);
+      })
+      .finally(() => setNotificationsLoading(false));
+    return () => controller.abort();
+  }, [notificationsController]);
+
+  const markRead = async (id: string) => {
+    setNotificationMutationError(false);
+    const previousState = notificationsController.getState();
+    const previousUnread = notificationsController.getUnreadCount();
+    setNotificationsState({ ...previousState, optimisticReadIds: new Set([...previousState.optimisticReadIds, id]) });
+    try {
+      await notificationsController.markRead(id);
+      setNotificationsState(notificationsController.getState());
+      setUnreadCount(notificationsController.getUnreadCount());
+    } catch {
+      setNotificationsState(previousState);
+      setUnreadCount(previousUnread);
+      setNotificationMutationError(true);
+    }
+  };
+
+  const markAllRead = async () => {
+    setNotificationMutationError(false);
+    const previousState = notificationsController.getState();
+    const previousUnread = notificationsController.getUnreadCount();
+    setNotificationsState({ ...previousState, optimisticReadIds: new Set(previousState.items.map((item) => item.id)) });
+    setUnreadCount(0);
+    try {
+      await notificationsController.markAllRead();
+      setNotificationsState(notificationsController.getState());
+      setUnreadCount(notificationsController.getUnreadCount());
+    } catch {
+      setNotificationsState(previousState);
+      setUnreadCount(previousUnread);
+      setNotificationMutationError(true);
+    }
+  };
+
+  const loadMoreNotifications = async () => {
+    if (loadingMoreNotifications || !notificationsState.hasMore) return;
+    setLoadingMoreNotifications(true);
+    try {
+      await notificationsController.loadMore();
+      setNotificationsState(notificationsController.getState());
+    } catch {
+      setNotificationMutationError(true);
+    } finally {
+      setLoadingMoreNotifications(false);
+    }
+  };
+
+
 
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -311,9 +378,11 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                     <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute right-0 mt-2 w-80 bg-surface border border-subtle rounded-[var(--radius-2xl)] shadow-token-lg p-4 z-50 text-xs">
                       <div className="flex items-center justify-between pb-3 border-b border-subtle mb-3">
                         <span className="font-bold text-primary">Notifications</span>
-                        <button type="button" className="text-[10px] text-indigo-400 hover:text-indigo-300" disabled={!unreadCount || markAllRead.isPending} onClick={() => markAllRead.mutate()}>Mark all read</button>
+                        <button type="button" className="text-[10px] text-indigo-400 hover:text-indigo-300" disabled={!unreadCount} onClick={() => void markAllRead()}>Mark all read</button>
                       </div>
-                      {notificationsQuery.isPending ? <div className="py-8 text-center text-muted">Loading notifications…</div> : notificationsQuery.isError ? <div className="py-8 text-center text-rose-400">Unable to load notifications.</div> : notifications.length === 0 ? <div className="py-8 text-center text-muted">You are all caught up.</div> : <div className="space-y-2 max-h-96 overflow-y-auto">{notifications.map((notification) => <button key={notification.id} type="button" className={`w-full text-left p-2.5 rounded-[var(--radius-xl)] border ${notification.readAt ? 'bg-surface border-subtle' : 'bg-indigo-950/30 border-indigo-500/20'}`} onClick={() => { if (!notification.readAt) { markRead.mutate(notification.id); realtimeManager.broadcastNotificationRead(notification.id); } if (notification.targetUrl) navigate(notification.targetUrl); setIsNotificationsOpen(false); }}><p className="font-semibold text-primary">{notification.title}</p>{notification.body && <p className="text-[11px] text-tertiary mt-0.5">{notification.body}</p>}<p className="text-[9px] text-muted mt-1">{new Date(notification.createdAt).toLocaleString()}</p></button>)}</div>}
+                      {notificationsLoading ? <div className="py-8 text-center text-muted">Loading notifications…</div> : notificationsError ? <div className="py-8 text-center text-rose-400">Unable to load notifications.</div> : notifications.length === 0 ? <div className="py-8 text-center text-muted">You are all caught up.</div> : <div className="space-y-2 max-h-96 overflow-y-auto">{notifications.map((notification) => <button key={notification.id} type="button" className={`w-full text-left p-2.5 rounded-[var(--radius-xl)] border ${isNotificationRead(notificationsState, notification) ? 'bg-surface border-subtle' : 'bg-indigo-950/30 border-indigo-500/20'}`} onClick={() => { if (!isNotificationRead(notificationsState, notification)) { void markRead(notification.id); } if (notification.targetUrl) navigate(notification.targetUrl); setIsNotificationsOpen(false); }}><p className="font-semibold text-primary">{notification.title}</p>{notification.body && <p className="text-[11px] text-tertiary mt-0.5">{notification.body}</p>}<p className="text-[9px] text-muted mt-1">{new Date(notification.createdAt).toLocaleString()}</p></button>)}</div>}
+                      {notificationMutationError && <p className="mt-2 text-[10px] text-rose-400">Unable to update notifications. Your previous state was restored.</p>}
+                      {notificationsState.hasMore && <button type="button" onClick={() => void loadMoreNotifications()} disabled={loadingMoreNotifications} className="mt-3 w-full rounded-[var(--radius-xl)] border border-default px-3 py-2 text-[10px] text-tertiary hover:text-primary disabled:opacity-50">{loadingMoreNotifications ? 'Loading…' : 'Load more'}</button>}
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -410,7 +479,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                           </button>
                           <button
                             onClick={() => {
-                              logout();
+                              void logout().catch((error) => toast.error('Server logout failed', error instanceof Error ? error.message : 'The local session was cleared, but the server logout request failed.'));
                               setIsProfileMenuOpen(false);
                             }}
                             className="w-full text-left px-2.5 py-2 hover:bg-rose-500/10 text-rose-400 rounded-[var(--radius-lg)] flex items-center gap-2"

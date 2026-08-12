@@ -2,9 +2,9 @@
  * GAPAK Post Subcomponent: PostActions
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import { motion } from 'motion/react';
-import { Heart, MessageSquare, Share2, Bookmark, Eye } from 'lucide-react';
+import { Heart, MessageSquare, Share2 } from 'lucide-react';
 import { useToast } from '../../shared/ux/ToastContext';
 
 interface PostActionsProps {
@@ -12,11 +12,9 @@ interface PostActionsProps {
   likesCount: number;
   likedByMe: boolean;
   commentsCount: number;
-  bookmarkedByMe?: boolean;
   onLikeToggle: () => void;
   onCommentToggle: () => void;
   onShareClick?: () => void;
-  onBookmarkToggle?: () => void;
 }
 
 export const PostActions: React.FC<PostActionsProps> = ({
@@ -24,14 +22,11 @@ export const PostActions: React.FC<PostActionsProps> = ({
   likesCount,
   likedByMe,
   commentsCount,
-  bookmarkedByMe = false,
   onLikeToggle,
   onCommentToggle,
   onShareClick,
-  onBookmarkToggle,
 }) => {
   const { addToast } = useToast();
-  const [isBookmarked, setIsBookmarked] = useState(bookmarkedByMe);
 
   const handleShare = () => {
     if (navigator.clipboard) {
@@ -41,11 +36,6 @@ export const PostActions: React.FC<PostActionsProps> = ({
     if (onShareClick) onShareClick();
   };
 
-  const handleBookmark = () => {
-    setIsBookmarked(!isBookmarked);
-    addToast(isBookmarked ? 'Removed from saved items' : 'Saved to your bookmarks', 'info');
-    if (onBookmarkToggle) onBookmarkToggle();
-  };
 
   return (
     <div className="flex items-center justify-between px-4 py-2 border-t border-subtle dark:border-subtle text-muted dark:text-tertiary">
@@ -81,15 +71,6 @@ export const PostActions: React.FC<PostActionsProps> = ({
         </button>
       </div>
 
-      {/* Bookmark */}
-      <button
-        onClick={handleBookmark}
-        className={`p-1.5 rounded-[var(--radius-lg)] transition ${
-          isBookmarked ? 'text-indigo-600 dark:text-indigo-400' : 'hover:text-indigo-500'
-        }`}
-      >
-        <Bookmark className={`w-5 h-5 ${isBookmarked ? 'fill-indigo-600 dark:fill-indigo-400' : ''}`} />
-      </button>
     </div>
   );
 };

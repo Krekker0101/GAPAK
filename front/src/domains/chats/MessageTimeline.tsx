@@ -137,14 +137,14 @@ export const MessageTimeline: React.FC<MessageTimelineProps> = ({
           const prevMsg = messages[index - 1];
           const showDateSeparator =
             !prevMsg ||
-            new Date(msg.createdAt).toDateString() !== new Date(prevMsg.createdAt).toDateString();
+            Boolean(msg.createdAt && prevMsg.createdAt) && new Date(msg.createdAt!).toDateString() !== new Date(prevMsg.createdAt!).toDateString();
 
           return (
             <React.Fragment key={msg.id}>
               {showDateSeparator && (
                 <div className="flex items-center justify-center my-4">
                   <span className="px-3 py-1 bg-surface border border-subtle rounded-[var(--radius-pill)] text-[10px] font-mono font-bold text-tertiary uppercase tracking-wider">
-                    {formatDateSeparator(msg.createdAt)}
+                    {msg.createdAt ? formatDateSeparator(msg.createdAt) : 'Sending…'}
                   </span>
                 </div>
               )}

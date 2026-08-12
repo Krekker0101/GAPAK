@@ -1,35 +1,53 @@
-# GAPAK Front — Realtime
+# GAPAK Realtime
 
-Date: 2026-08-09
+GAPAK Front uses the backend's native WebSocket protocol at `/ws`.
 
-## Transport
+## Backend contract
 
-`VITE_WS_BASE_URL` is opened with subprotocol `gapak.realtime.v1`. Authentication is browser session/cookie based. Access tokens are never placed in the WebSocket URL.
+Authentication is completed by `RequireAuth` before the WebSocket upgrade. The browser uses the authenticated access session and the `/ws` access-token fallback when an Authorization header cannot be attached by the native WebSocket API.
 
-## Lifecycle
+The server emits JSON `WebSocketMessage` frames with backend-defined fields such as `eventId`, `chatId`, `messageId`, and `sequence`.
 
-- CONNECTING → CONNECTED → DISCONNECTED/RECONNECTING/OFFLINE.
-- Exponential backoff with jitter is bounded to 12 attempts.
-- `system.ping` / `system.pong` heartbeat runs every 20 seconds with a 10 second timeout.
-- `online`, `offline` and `visibilitychange` listeners are removed on disconnect/dispose.
-- Logout closes the socket and clears chat subscriptions.
-- Reconnect re-subscribes active chats.
+Chat events are:
 
-## Event safety
+- `history`
+- `chat.message.created`
+- `chat.message.edited`
+- `chat.message.deleted`
+- `chat.read_receipt`
+- `chat.typing`
+- `ack`
+- `read_receipt_ack`
+- `delivery_ack`
+- `error`
 
-- Event IDs are deduplicated.
-- Versioned streams reject stale/out-of-order versions.
-- Unversioned events remain backend-order dependent and must be delivered in order by the server.
-- Unknown event types are normalized to an error event rather than treated as trusted application data.
+Subscriptions use:
 
-## Offline / retry
+```json
+{"type":"subscribe","data":{"chat_id":"..."}}
+```
 
-Chat message sends use an in-memory bounded queue and flush after reconnect/online. The queue never persists plaintext or crypto material. Receipt batching does not clear pending receipts unless the realtime send succeeds.
+Recovery uses:
 
-## Multi-tab
+```json
+{"type":"subscribe","data":{"chat_id":"...","after_sequence":123}}
+```
 
-`BroadcastChannel` propagates logout and notification-read state across tabs. Each authenticated tab may maintain its own WebSocket connection; there is no leader-election/single-socket protocol yet.
+The frontend does not use Socket.IO and does not send application-level ping/pong frames. Backend heartbeat is native WebSocket ping/pong.
 
-## Backend dependency
+## Reliability
 
-The server must provide stable event IDs, monotonic versions where ordering matters, authenticated session handling, replay semantics after reconnect where required, and acknowledgements for message delivery/status.
+The transport provides:
+
+- single active socket;
+- generation fencing;
+- zombie socket protection;
+- duplicate subscription prevention;
+- bounded exponential reconnect with jitter;
+- finite reconnect attempts;
+- runtime frame validation;
+- event ID deduplication;
+- chat sequence recovery;
+- no offline replay of arbitrary WebSocket mutations.
+
+Encrypted chat message durability remains on the HTTP E2EE transport and its IndexedDB queue.

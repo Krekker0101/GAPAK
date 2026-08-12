@@ -21,6 +21,7 @@ const TrustRoomsPage = lazy(() => import('../../pages/DomainPages').then(m => ({
 import { postsApi } from '../../domains/posts/api/postsApi';
 import { useQuery } from '@tanstack/react-query';
 import { PostCard } from '../../domains/posts/PostCard';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 const AuthGate: React.FC = () => {
   const { state, user } = useAuth();
@@ -32,11 +33,19 @@ const AuthGate: React.FC = () => {
 const PostPage: React.FC = () => {
   const { postId } = requireParams();
   const { user } = useAuth();
-  const query = useQuery({ queryKey: ['posts', postId], queryFn: ({ signal }) => postsApi.get(postId!, signal), enabled: Boolean(postId) });
+  const queryClient = useQueryClient();
+  const like = useMutation({
+    mutationFn: (liked: boolean) => liked ? postsApi.like(postId!, crypto.randomUUID()) : postsApi.unlike(postId!),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['posts', postId] }),
+  });
+  const comment = useMutation({
+    mutationFn: (text: string) => postsApi.comment(postId!, { content: text }, crypto.randomUUID()),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['posts', postId] }),
+  });
   if (query.isPending || !user) return <PageLoading label="Loading post…" />;
   if (query.isError) return <PageError error={query.error} onRetry={() => void query.refetch()} />;
   if (!query.data) return <PageError error={new Error('Post not found')} />;
-  return <div className="mx-auto max-w-2xl"><PostCard post={query.data} currentUser={user} onLikeToggle={() => undefined} onAddComment={() => undefined} /></div>;
+  return <div className="mx-auto max-w-2xl"><PostCard post={query.data} currentUser={user} onLikeToggle={() => like.mutate(!query.data!.likedByMe)} onAddComment={(postIdValue, text, parentId) => { if (postIdValue === postId) comment.mutate(text); void parentId; }} /></div>;
 };
 
 const requireParams = () => useParams<{ postId: string }>();

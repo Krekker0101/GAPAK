@@ -1,22 +1,23 @@
-/** Server-backed security domain service. No fixture state is kept here. */
-import { AuditEvent, SecurityAlert, SecurityFlags, TwoFactorSetupData, TwoFactorState, UserSession, PanicExecutionResult } from '../../shared/types/security';
-import { TrustedDevice } from '../../shared/types/chat';
-import { securityApi, SecurityStateResponse } from './api/securityApi';
+/** Server-backed security domain service. Only backend-authoritative state is exposed. */
+import type {
+  AuditEvent,
+  BackendProfile,
+  BackendSession,
+  DeviceAlert,
+  PanicModeResponse,
+  SecurityFlag,
+  TrustedDevice,
+} from '../../shared/api/backendContracts';
+import { securityApi, type SecurityStateResponse } from './api/securityApi';
 
-export interface SecurityState extends SecurityStateResponse { devices: TrustedDevice[]; }
-type Listener = (state: SecurityState) => void;
+export interface SecurityState extends SecurityStateResponse {
+  devices: TrustedDevice[];
+}
 
-const EMPTY_STATE: SecurityState = {
-  sessions: [],
-  twoFactor: { enabled: false, backupCodesRemaining: 0 },
-  auditEvents: [],
-  alerts: [],
-  flags: { panicModeActive: false, sessionStrictIpChecking: false, unrecognizedDeviceAlerts: false, enforce2FaForSensitiveActions: true },
-  devices: [],
-};
+type Listener = (state: SecurityState | null) => void;
 
 class SecurityServiceClass {
-  private state: SecurityState = EMPTY_STATE;
+  private state: SecurityState | null = null;
   private listeners = new Set<Listener>();
   private loadPromise: Promise<SecurityState> | null = null;
 
@@ -26,39 +27,89 @@ class SecurityServiceClass {
     return () => this.listeners.delete(listener);
   }
 
-  getState(): SecurityState { return this.state; }
+  getState(): SecurityState | null {
+    return this.state;
+  }
 
-  private publish(next: Partial<SecurityState>) {
-    this.state = { ...this.state, ...next };
-    this.listeners.forEach((listener) => listener(this.state));
+  private publish(next: SecurityState) {
+    this.state = next;
+    this.listeners.forEach((listener) => listener(next));
   }
 
   async load(signal?: AbortSignal): Promise<SecurityState> {
     if (this.loadPromise) return this.loadPromise;
     this.loadPromise = Promise.all([securityApi.state(signal), securityApi.devices(signal)])
-      .then(([security, devices]) => { this.state = { ...security, devices }; this.listeners.forEach((l) => l(this.state)); return this.state; })
+      .then(([security, devices]) => {
+        const next = { ...security, devices };
+        this.publish(next);
+        return next;
+      })
       .finally(() => { this.loadPromise = null; });
     return this.loadPromise;
   }
 
-  async refresh(): Promise<SecurityState> { return this.load(); }
-  async getSessions(): Promise<UserSession[]> { const sessions = await securityApi.sessions(); this.publish({ sessions }); return sessions; }
-  async revokeSession(sessionId: string): Promise<void> { await securityApi.revokeSession(sessionId); await this.refresh(); }
-  async revokeOtherSessions(): Promise<void> { await securityApi.revokeOtherSessions(); await this.refresh(); }
-  async getDevices(): Promise<TrustedDevice[]> { const devices = await securityApi.devices(); this.publish({ devices }); return devices; }
-  async revokeDevice(deviceId: string): Promise<void> { await securityApi.revokeDevice(deviceId); await this.getDevices(); }
-  async verifyDevice(deviceId: string): Promise<void> { await securityApi.verifyDevice(deviceId); await this.getDevices(); }
-  async get2FaSetupData(): Promise<TwoFactorSetupData> { return securityApi.twoFactorSetup(); }
-  async verifyAndEnable2Fa(code: string, setupId?: string): Promise<{ success: boolean; message: string }> {
-    try { const twoFactor = await securityApi.twoFactorVerify(code, setupId); this.publish({ twoFactor }); return { success: true, message: 'Two-Factor Authentication successfully enabled.' }; }
-    catch (error) { return { success: false, message: error instanceof Error ? error.message : 'Verification failed' }; }
+  async refresh(): Promise<SecurityState> {
+    return this.load();
   }
-  async disable2Fa(): Promise<void> { const twoFactor = await securityApi.twoFactorDisable(); this.publish({ twoFactor }); }
-  async markAlertRead(alertId: string): Promise<void> { await securityApi.markAlertRead(alertId); this.publish({ alerts: this.state.alerts.map((a) => a.id === alertId ? { ...a, isRead: true } : a) }); }
-  async dismissAlert(alertId: string): Promise<void> { await securityApi.dismissAlert(alertId); this.publish({ alerts: this.state.alerts.filter((a) => a.id !== alertId) }); }
-  async toggleFlag(key: keyof Pick<SecurityFlags, 'sessionStrictIpChecking'|'unrecognizedDeviceAlerts'|'enforce2FaForSensitiveActions'>): Promise<void> { const next = !this.state.flags[key]; const flags = await securityApi.setFlag(key, next); this.publish({ flags }); }
-  async executePanicMode(): Promise<PanicExecutionResult> { const result = await securityApi.panic(); await this.refresh(); return result; }
-  async resetPanicMode(): Promise<void> { await securityApi.clearPanic(); await this.refresh(); }
+
+  async getSessions(): Promise<BackendSession[]> {
+    const sessions = await securityApi.sessions();
+    const state = this.requireState();
+    this.publish({ ...state, sessions });
+    return sessions;
+  }
+
+  async revokeSession(sessionId: string): Promise<void> {
+    await securityApi.revokeSession(sessionId);
+    await this.refresh();
+  }
+
+  async revokeOtherSessions(): Promise<void> {
+    await securityApi.revokeOtherSessions();
+    await this.refresh();
+  }
+
+  async getDevices(): Promise<TrustedDevice[]> {
+    const devices = await securityApi.devices();
+    const state = this.requireState();
+    this.publish({ ...state, devices });
+    return devices;
+  }
+
+  async revokeDevice(deviceId: string): Promise<void> {
+    await securityApi.revokeDevice(deviceId);
+    await this.getDevices();
+  }
+
+  async get2FaSetupData() {
+    return securityApi.twoFactorSetup();
+  }
+
+  async verifyAndEnable2Fa(code: string) {
+    const result = await securityApi.twoFactorVerify(code);
+    const state = this.requireState();
+    this.publish({ ...state, twoFactor: { enabled: result.accepted } });
+    return { success: result.accepted, message: result.accepted ? 'Two-Factor Authentication enabled.' : 'Two-Factor Authentication was not accepted.' };
+  }
+
+  async disable2Fa(): Promise<void> {
+    const result = await securityApi.twoFactorDisable();
+    const state = this.requireState();
+    this.publish({ ...state, twoFactor: { enabled: !result.accepted } });
+  }
+
+  async executePanicMode(input: { preserveCurrentSession: boolean; currentSessionId?: string; reason: string }): Promise<PanicModeResponse> {
+    const result = await securityApi.panic(input);
+    await this.refresh();
+    return result;
+  }
+
+  private requireState(): SecurityState {
+    if (!this.state) throw new Error('Security state has not been loaded.');
+    return this.state;
+  }
 }
 
 export const SecurityService = new SecurityServiceClass();
+
+export type { AuditEvent, BackendProfile, BackendSession, DeviceAlert, PanicModeResponse, SecurityFlag, TrustedDevice };

@@ -14,14 +14,7 @@ import {
   Sliders,
   XOctagon,
 } from 'lucide-react';
-import { SecurityService } from './SecurityService';
-import {
-  UserSession,
-  TwoFactorState,
-  AuditEvent,
-  SecurityAlert,
-  SecurityFlags,
-} from '../../shared/types/security';
+import { SecurityService, SecurityState } from './SecurityService';
 
 import { OverviewSection } from './components/OverviewSection';
 import { SessionsSection } from './components/SessionsSection';
@@ -33,18 +26,31 @@ import { SecurityFlagsSection } from './components/SecurityFlagsSection';
 import { PanicModeSection } from './components/PanicModeSection';
 
 export const SecurityCenterView: React.FC = () => {
-  const [secState, setSecState] = useState(() => SecurityService.getState());
+  const [secState, setSecState] = useState<SecurityState | null>(() => SecurityService.getState());
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<
     'overview' | 'sessions' | 'devices' | '2fa' | 'audit' | 'alerts' | 'flags' | 'panic'
   >('overview');
 
   useEffect(() => {
     const unsub = SecurityService.subscribe(setSecState);
-    void SecurityService.load().catch(() => undefined);
+    void SecurityService.load().catch((error) => setLoadError(error instanceof Error ? error.message : 'Unable to load security state.'));
     return () => unsub();
   }, []);
 
-  const tabs = [
+  if (!secState) return (
+    <div className="h-full bg-app text-primary flex items-center justify-center p-6">
+      {loadError ? (
+        <div role="alert" className="max-w-lg rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">
+          <p className="font-semibold">Security state unavailable</p>
+          <p className="mt-1 text-xs opacity-90">{loadError}</p>
+          <button type="button" className="mt-3 rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white" onClick={() => { setLoadError(null); void SecurityService.load().catch((error) => setLoadError(error instanceof Error ? error.message : 'Unable to load security state.')); }}>Retry</button>
+        </div>
+      ) : <span className="text-sm text-tertiary" role="status">Loading security state…</span>}
+    </div>
+  );
+
+  const tabs: Array<{ id: typeof activeTab; label: string; icon: React.ReactNode; badge?: number | string }> = [
     { id: 'overview', label: 'Overview', icon: <ShieldCheck className="w-4 h-4 text-indigo-400" /> },
     { id: 'sessions', label: 'Sessions', icon: <Laptop className="w-4 h-4 text-tertiary" />, badge: secState.sessions.length },
     { id: 'devices', label: 'Devices', icon: <Fingerprint className="w-4 h-4 text-tertiary" /> },
@@ -54,14 +60,14 @@ export const SecurityCenterView: React.FC = () => {
       id: 'alerts',
       label: 'Security Alerts',
       icon: <ShieldAlert className="w-4 h-4 text-amber-400" />,
-      badge: secState.alerts.filter((a) => !a.isRead).length || undefined,
+      badge: secState.alerts.length || undefined,
     },
     { id: 'flags', label: 'Security Flags', icon: <Sliders className="w-4 h-4 text-tertiary" /> },
     {
       id: 'panic',
       label: 'Panic Mode',
       icon: <XOctagon className="w-4 h-4 text-rose-400" />,
-      badge: secState.flags.panicModeActive ? 'ACTIVE' : undefined,
+      badge: secState.flags.some((flag) => ['critical', 'high'].includes(flag.severity.toLowerCase())) ? 'HIGH' : undefined,
     },
   ];
 
@@ -89,7 +95,7 @@ export const SecurityCenterView: React.FC = () => {
           return (
             <button
               key={t.id}
-              onClick={() => setActiveTab(t.id as any)}
+              onClick={() => setActiveTab(t.id)}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-[var(--radius-xl)] text-xs font-semibold whitespace-nowrap transition-all ${
                 isActive
                   ? 'bg-indigo-600 text-white shadow-token-md shadow-indigo-500/20'
@@ -125,7 +131,7 @@ export const SecurityCenterView: React.FC = () => {
             alerts={secState.alerts}
             auditEvents={secState.auditEvents}
             flags={secState.flags}
-            onNavigateTab={(tab) => setActiveTab(tab as any)}
+            onNavigateTab={(tab) => setActiveTab(tab)}
             onRevokeOthers={() => void SecurityService.revokeOtherSessions()}
           />
         )}
@@ -139,12 +145,12 @@ export const SecurityCenterView: React.FC = () => {
         {activeTab === 'audit' && <AuditLogSection auditEvents={secState.auditEvents} />}
 
         {activeTab === 'alerts' && (
-          <AlertsSection alerts={secState.alerts} onNavigateTab={(tab) => setActiveTab(tab as any)} />
+          <AlertsSection alerts={secState.alerts} />
         )}
 
         {activeTab === 'flags' && <SecurityFlagsSection flags={secState.flags} />}
 
-        {activeTab === 'panic' && <PanicModeSection flags={secState.flags} />}
+        {activeTab === 'panic' && <PanicModeSection sessions={secState.sessions} />}
 
       </div>
     </div>

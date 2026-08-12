@@ -17,17 +17,6 @@ export const env = Object.freeze({
   enablePlatformSandbox: import.meta.env.DEV && readBoolean(import.meta.env.VITE_ENABLE_PLATFORM_SANDBOX, true),
 });
 
-const inferWebSocketBaseUrl = (): string => {
-  const explicit = env.wsBaseUrl.trim();
-  const source = explicit || env.apiBaseUrl.trim();
-  if (!source) return '';
-  const withProtocol = source.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
-  const withoutApiPrefix = withProtocol.replace(/\/api\/v1\/?$/i, '').replace(/\/$/, '');
-  return withoutApiPrefix.replace(/\/ws\/?$/i, '') + '/ws';
-};
-
-export const resolveWebSocketUrl = (): string => inferWebSocketBaseUrl();
-
 /** Canonicalize all relative API paths to exactly one /api/v1 prefix. */
 export const resolveApiUrl = (url: string): string => {
   if (/^https?:\/\//i.test(url)) return url;

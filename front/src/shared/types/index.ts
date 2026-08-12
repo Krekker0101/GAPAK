@@ -31,16 +31,16 @@ export interface UserProfile {
   id: string;
   username: string;
   displayName: string;
-  email: string;
+  email?: string;
   avatarUrl?: string;
   role: UserRole;
-  status: AccountStatus;
-  presence: PresenceStatus;
-  trustScore: number;
-  permissions: string[];
+  status?: AccountStatus;
+  presence?: PresenceStatus;
+  trustScore?: number;
+  permissions?: string[];
   isAnonymous?: boolean;
   twoFactorEnabled?: boolean;
-  createdAt: string;
+  createdAt?: string;
 }
 
 export interface AuthSession {
@@ -53,30 +53,26 @@ export interface AuthSession {
 
 // --- API Architecture Types ---
 export interface ApiResponse<T = unknown> {
+  success: true;
   data: T;
   meta?: {
-    requestId: string;
-    timestamp: string;
-    page?: number;
-    limit?: number;
-    total?: number;
+    requestId?: string;
+    pagination?: Record<string, unknown>;
   };
 }
 
 export interface ApiErrorDetail {
-  field?: string;
-  message: string;
-  code?: string;
+  [key: string]: unknown;
 }
 
 export interface ApiErrorResponse {
+  success: false;
   error: {
-    message: string;
     code: string;
-    status: number;
-    requestId: string;
-    details?: ApiErrorDetail[];
+    message: string;
+    details?: Record<string, unknown>;
   };
+  meta?: { requestId?: string; pagination?: Record<string, unknown> };
 }
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -91,8 +87,12 @@ export interface HttpRequestConfig extends Omit<RequestInit, 'body'> {
   retryCount?: number;
   idempotencyKey?: string;
   signal?: AbortSignal;
+  /** Client-side request deadline. 0 disables the deadline. */
+  timeoutMs?: number;
   /** Internal guard preventing an infinite 401 -> refresh -> retry loop. */
   authRetry?: boolean;
+  /** Return response metadata/headers to callers that need transport-level pagination such as X-Next-Cursor. */
+  includeResponseMeta?: boolean;
 }
 
 // --- Theme Tokens & System ---

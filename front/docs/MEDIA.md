@@ -5,8 +5,8 @@ Date: 2026-08-09
 ## Production flow
 
 1. Browser calculates SHA-256.
-2. `POST /api/media/uploads` returns server-authorized signed upload information.
-3. Browser uploads directly using signed URL(s).
+2. `POST /api/v1/media/upload-sessions` returns server-authorized signed upload information.
+3. Browser uploads directly using server-issued signed URL(s).
 4. Multipart uploads use bounded concurrency and real XHR progress.
 5. ETags are captured and sent to completion.
 6. Backend finalizes processing.
