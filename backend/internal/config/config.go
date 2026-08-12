@@ -367,7 +367,37 @@ func rejectInsecureProductionDefaults(cfg Config) error {
 	if strings.EqualFold(cfg.Security.CookieSameSite, "none") && !cfg.Security.CookieSecure {
 		return fmt.Errorf("COOKIE_SECURE must be true when COOKIE_SAME_SITE=none")
 	}
+	if requiresCrossSiteCookies(cfg.App.BaseURL, cfg.App.CORSOrigins) && !strings.EqualFold(cfg.Security.CookieSameSite, "none") {
+		return fmt.Errorf("COOKIE_SAME_SITE must be none when production frontend and API origins are cross-site")
+	}
 	return nil
+}
+
+func requiresCrossSiteCookies(baseURL string, origins []string) bool {
+	base, err := url.Parse(baseURL)
+	if err != nil || base.Hostname() == "" {
+		return false
+	}
+	baseSite := registrableSite(base.Hostname())
+	for _, origin := range origins {
+		parsed, err := url.Parse(origin)
+		if err != nil || parsed.Hostname() == "" {
+			continue
+		}
+		if registrableSite(parsed.Hostname()) != baseSite {
+			return true
+		}
+	}
+	return false
+}
+
+func registrableSite(host string) string {
+	host = strings.Trim(strings.ToLower(host), ".")
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return host
+	}
+	return parts[len(parts)-2] + "." + parts[len(parts)-1]
 }
 
 func getEnv(key, fallback string) string {
