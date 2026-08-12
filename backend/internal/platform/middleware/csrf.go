@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"crypto/subtle"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -23,20 +24,43 @@ func ValidateCSRF(cfg config.SecurityConfig) fiber.Handler {
 	}
 }
 
-func ValidateCSRFForMutations(cfg config.SecurityConfig) fiber.Handler {
+func ValidateCSRFForMutations(cfg config.SecurityConfig, allowedOrigins ...string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		headerValue := c.Get("X-CSRF-Token")
 		if headerValue == "" {
 			return apperrors.ErrCSRFInvalid
 		}
 		cookieValue := c.Cookies(cfg.CSRFCookieName)
-		// Double-submit CSRF requires both values. The /auth/csrf endpoint
-		// issues the cookie before any state-changing unauthenticated request.
-		// Accepting an arbitrary header without a cookie would make the middleware
-		// a presence check rather than a CSRF defense.
-		if cookieValue == "" || subtle.ConstantTimeCompare([]byte(cookieValue), []byte(headerValue)) != 1 {
+		// Prefer the strict double-submit-cookie check whenever the browser can
+		// send the CSRF cookie. Cross-site SPA deployments such as Vercel ->
+		// Railway can legitimately have third-party-cookie restrictions, however.
+		// In that case the custom X-CSRF-Token header is still a browser-enforced
+		// CORS preflight boundary. Accept it only when the request Origin exactly
+		// matches an explicitly configured application origin; never accept a
+		// header-only token from an unknown origin.
+		if cookieValue != "" {
+			if subtle.ConstantTimeCompare([]byte(cookieValue), []byte(headerValue)) != 1 {
+				return apperrors.ErrCSRFInvalid
+			}
+			return c.Next()
+		}
+		origin := c.Get("Origin")
+		if origin == "" || !isAllowedOrigin(origin, allowedOrigins) {
 			return apperrors.ErrCSRFInvalid
 		}
 		return c.Next()
 	}
+}
+
+func isAllowedOrigin(origin string, allowedOrigins []string) bool {
+	origin = strings.TrimRight(strings.TrimSpace(origin), "/")
+	if origin == "" {
+		return false
+	}
+	for _, allowed := range allowedOrigins {
+		if strings.EqualFold(origin, strings.TrimRight(strings.TrimSpace(allowed), "/")) {
+			return true
+		}
+	}
+	return false
 }
