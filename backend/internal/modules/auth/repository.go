@@ -93,6 +93,7 @@ func (r *Repository) CreateUser(ctx context.Context, req RegisterRequest, email 
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 		RETURNING id, email, username, display_name, password_hash, role, account_status,
 		          is_anonymous, two_factor_enabled, two_factor_secret_ciphertext, two_factor_secret_nonce,
+		          failed_login_attempts, locked_until,
 		          created_at, updated_at, deleted_at`
 
 	user, err := scanUser(tx.QueryRow(ctx, userQuery,
