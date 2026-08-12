@@ -121,7 +121,7 @@ func (ctl *Controller) refresh(c *fiber.Ctx) error {
 		rawToken = cookieRefreshToken
 	}
 	if rawToken == "" {
-		return apperrors.ErrUnauthorized
+		return fiber.NewError(fiber.StatusUnauthorized, "Authentication required")
 	}
 
 	if cookieRefreshToken != "" {
@@ -244,8 +244,8 @@ func (ctl *Controller) oauthRedirect(c *fiber.Ctx) error {
 	}
 	hash := sha256.Sum256([]byte(codeVerifier))
 	codeChallenge := base64.RawURLEncoding.EncodeToString(hash[:])
-	c.Cookie(&fiber.Cookie{Name: "oauth_state", Value: state, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: authplatform.CookieDomain(ctl.config.CookieDomain)})
-	c.Cookie(&fiber.Cookie{Name: "oauth_pkce", Value: codeVerifier, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: authplatform.CookieDomain(ctl.config.CookieDomain)})
+	c.Cookie(&fiber.Cookie{Name: "oauth_state", Value: state, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: controllerCookieDomain(ctl.config.CookieDomain)})
+	c.Cookie(&fiber.Cookie{Name: "oauth_pkce", Value: codeVerifier, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: controllerCookieDomain(ctl.config.CookieDomain)})
 	redirectURL, err := ctl.service.GetOAuthRedirectURL(c.UserContext(), provider, state, codeChallenge)
 	if err != nil {
 		return err
@@ -268,8 +268,8 @@ func (ctl *Controller) oauthLogin(c *fiber.Ctx) error {
 	}
 	hash := sha256.Sum256([]byte(codeVerifier))
 	codeChallenge := base64.RawURLEncoding.EncodeToString(hash[:])
-	c.Cookie(&fiber.Cookie{Name: "oauth_state", Value: state, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: authplatform.CookieDomain(ctl.config.CookieDomain)})
-	c.Cookie(&fiber.Cookie{Name: "oauth_pkce", Value: codeVerifier, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: authplatform.CookieDomain(ctl.config.CookieDomain)})
+	c.Cookie(&fiber.Cookie{Name: "oauth_state", Value: state, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: controllerCookieDomain(ctl.config.CookieDomain)})
+	c.Cookie(&fiber.Cookie{Name: "oauth_pkce", Value: codeVerifier, Path: "/", MaxAge: 600, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: controllerCookieDomain(ctl.config.CookieDomain)})
 	redirectURL, err := ctl.service.GetOAuthRedirectURL(c.UserContext(), provider, state, codeChallenge)
 	if err != nil {
 		return err
@@ -287,7 +287,7 @@ func (ctl *Controller) oauthCallback(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "Invalid OAuth state")
 	}
 	for _, name := range []string{"oauth_state", "oauth_pkce"} {
-		c.Cookie(&fiber.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: authplatform.CookieDomain(ctl.config.CookieDomain)})
+		c.Cookie(&fiber.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: fiber.CookieSameSiteLaxMode, Domain: controllerCookieDomain(ctl.config.CookieDomain)})
 	}
 	if code == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "Authorization code is required")
@@ -299,6 +299,25 @@ func (ctl *Controller) oauthCallback(c *fiber.Ctx) error {
 	}
 	authplatform.SetRefreshCookie(c, ctl.config, refreshToken, response.RefreshUntil)
 	authplatform.SetCSRFCookie(c, ctl.config, response.CSRFToken, response.RefreshUntil)
-	c.Cookie(&fiber.Cookie{Name: "gapak_at", Value: response.AccessToken, Path: "/", HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: authplatform.ParseSameSite(ctl.config.CookieSameSite), Domain: authplatform.CookieDomain(ctl.config.CookieDomain), MaxAge: 300})
+	c.Cookie(&fiber.Cookie{Name: "gapak_at", Value: response.AccessToken, Path: "/", HTTPOnly: true, Secure: ctl.config.CookieSecure, SameSite: controllerCookieSameSite(ctl.config.CookieSameSite), Domain: controllerCookieDomain(ctl.config.CookieDomain), MaxAge: 300})
 	return c.Redirect("/auth/callback", fiber.StatusTemporaryRedirect)
+}
+
+func controllerCookieSameSite(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "strict":
+		return fiber.CookieSameSiteStrictMode
+	case "none":
+		return fiber.CookieSameSiteNoneMode
+	default:
+		return fiber.CookieSameSiteLaxMode
+	}
+}
+
+func controllerCookieDomain(raw string) string {
+	domain := strings.TrimSpace(raw)
+	if domain == "" || strings.EqualFold(domain, "localhost") || domain == "127.0.0.1" || domain == "::1" {
+		return ""
+	}
+	return domain
 }
