@@ -70,7 +70,7 @@ func main() {
 	default:
 		log.Fatalf("unsupported storage provider: %s", cfg.Storage.Provider)
 	}
-	server := &http.Server{Addr: "127.0.0.1:" + workerMetricsPort(), Handler: obsHandler(obs)}
+	server := &http.Server{Addr: workerHTTPAddr(cfg), Handler: workerHTTPHandler(obs)}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			appLogger.Error().Err(err).Msg("worker metrics server failed")
@@ -89,10 +89,28 @@ func main() {
 	}
 }
 
-func workerMetricsPort() string {
-	if v := os.Getenv("WORKER_METRICS_PORT"); v != "" {
-		return v
+func workerHTTPAddr(cfg config.Config) string {
+	if port := strings.TrimSpace(os.Getenv("PORT")); port != "" {
+		return ":" + port
 	}
-	return "9091"
+	if port := strings.TrimSpace(os.Getenv("WORKER_METRICS_PORT")); port != "" {
+		return "127.0.0.1:" + port
+	}
+	return "127.0.0.1:" + cfg.HTTP.Port
 }
-func obsHandler(obs *observability.Registry) http.Handler { return obs }
+
+func workerHTTPHandler(obs *observability.Registry) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok","component":"worker"}`))
+	})
+	mux.HandleFunc("/health/ready", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ready","component":"worker"}`))
+	})
+	mux.Handle("/metrics", obs)
+	return mux
+}
