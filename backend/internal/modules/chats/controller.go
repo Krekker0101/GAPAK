@@ -290,12 +290,16 @@ func (ctl *Controller) publishPreKey(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
+func preKeyBundleUserID(c *fiber.Ctx) (string, error) {
+	return httpx.UUIDParam(c, "userId")
+}
+
 func (ctl *Controller) getPreKeyBundle(c *fiber.Ctx) error {
-	query, err := httpx.BindQuery[PreKeyBundleQuery](c, ctl.validate)
+	userID, err := preKeyBundleUserID(c)
 	if err != nil {
 		return err
 	}
-	response, err := ctl.service.GetPreKeyBundle(c.UserContext(), query.UserID)
+	response, err := ctl.service.GetPreKeyBundle(c.UserContext(), userID)
 	if err != nil {
 		return err
 	}

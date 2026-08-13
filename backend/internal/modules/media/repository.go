@@ -232,9 +232,15 @@ func (r *Repository) AbortUploadSession(ctx context.Context, ownerID, sessionID 
 	const query = `
 		UPDATE upload_sessions
 		SET status = 'ABORTED', aborted_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND owner_id = $2`
-	_, err := r.db.Exec(ctx, query, sessionID, ownerID)
-	return err
+		WHERE id = $1 AND owner_id = $2 AND status NOT IN ('COMPLETED', 'ABORTED', 'EXPIRED')`
+	tag, err := r.db.Exec(ctx, query, sessionID, ownerID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
 }
 
 func (r *Repository) CreateProcessingJob(ctx context.Context, queueName string, jobType enums.ProcessingJobType, mediaID, sessionID string, payload map[string]any) (*model.ProcessingJob, error) {
@@ -271,12 +277,12 @@ func (r *Repository) FindAccessibleMedia(ctx context.Context, viewerID, mediaID 
 		FROM media_files m
 		WHERE m.id = $2
 		  AND m.deleted_at IS NULL
-		  AND (m.owner_id = $1 OR m.status = 'READY')
 		  AND (
 		    m.owner_id = $1
-		    OR EXISTS (
-		      SELECT 1
-		      FROM users u
+		    OR (m.status = 'READY' AND (
+		      EXISTS (
+		        SELECT 1
+		        FROM users u
 		      JOIN user_privacy_settings ups ON ups.user_id = u.id
 		      WHERE u.avatar_file_id = m.id
 		        AND u.deleted_at IS NULL
@@ -289,7 +295,7 @@ func (r *Repository) FindAccessibleMedia(ctx context.Context, viewerID, mediaID 
 		                  AND ((fc.requester_id = u.id AND fc.addressee_id = $1) OR (fc.addressee_id = u.id AND fc.requester_id = $1))
 		              ))
 		          OR (ups.profile_visibility = 'TRUSTED_ONLY' AND EXISTS (
-		                SELECT 1 FROM trusted_circle_memberships tcm
+		        	        SELECT 1 FROM trusted_circle_memberships tcm
 		                WHERE tcm.owner_id = u.id AND tcm.member_id = $1
 		              ))
 		        )
@@ -358,6 +364,7 @@ func (r *Repository) FindAccessibleMedia(ctx context.Context, viewerID, mediaID 
 		              ))
 		        )
 		    )
+		      ))
 		  )
 		LIMIT 1`
 	return scanMedia(r.db.QueryRow(ctx, query, viewerID, mediaID))

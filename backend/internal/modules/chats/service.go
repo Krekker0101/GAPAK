@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
+	"github.com/gapak/backend/internal/platform/events"
+	"github.com/gapak/backend/internal/platform/observability"
 )
 
 func nullableStringValue(value *string) string {
@@ -335,20 +338,18 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		return MessageResponse{}, apperrors.New(400, "chats.plaintext_rejected", "Plaintext message content is not accepted by the server")
 	}
 	req.EncryptionProtocol = strings.ToUpper(strings.TrimSpace(req.EncryptionProtocol))
-	if strings.EqualFold(req.EncryptionProtocol, string(enums.EncryptionProtocolNone)) {
-		return MessageResponse{}, apperrors.New(400, "chats.encryption_required", "Messages must use end-to-end encrypted payloads")
+	if req.EncryptionProtocol != string(enums.EncryptionProtocolTrustedChat) {
+		return MessageResponse{}, apperrors.New(400, "chats.e2ee.protocol_required", "Messages must use the GAPAK E2EE protocol")
 	}
-	if req.EncryptionProtocol == "" {
-		req.EncryptionProtocol = string(enums.EncryptionProtocolSignal)
-	}
-	if req.EncryptionAlgorithm == "" {
-		req.EncryptionAlgorithm = "client-managed-aead"
+	if err := validateE2EECiphertext(req); err != nil {
+		return MessageResponse{}, err
 	}
 	if len(req.KeyEnvelopes) == 0 {
 		return MessageResponse{}, apperrors.New(400, "chats.key_envelopes_required", "Encrypted messages require per-device key envelopes")
 	}
-	if err := s.validateKeyEnvelopeRecipients(ctx, chatID, req.KeyEnvelopes); err != nil {
-		return MessageResponse{}, err
+	expectedSenderKeyID := req.SenderDeviceID + ":identity:v1"
+	if req.SenderKeyID != expectedSenderKeyID {
+		return MessageResponse{}, apperrors.New(400, "chats.e2ee.invalid_sender_key_id", "senderKeyId does not match the authenticated sender device")
 	}
 	mediaIDs := make([]string, 0, len(req.Attachments))
 	thumbnailIDs := make([]string, 0, len(req.Attachments))
@@ -360,15 +361,6 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 	}
 	if err := s.repo.EnsureOwnedReadyMedia(ctx, userID, mediaIDs, thumbnailIDs); err != nil {
 		return MessageResponse{}, err
-	}
-	if req.SenderDeviceID != "" {
-		device, err := s.repo.GetTrustedDevice(ctx, req.SenderDeviceID)
-		if err != nil {
-			return MessageResponse{}, err
-		}
-		if device.UserID != userID || device.RevokedAt != nil || device.TrustStatus != "TRUSTED" {
-			return MessageResponse{}, apperrors.ErrForbidden
-		}
 	}
 
 	var expiresAt *time.Time
@@ -415,6 +407,17 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 
 	repoTx := s.repo.WithTx(tx)
 
+	senderDevice, err := repoTx.GetTrustedDeviceForUpdate(ctx, req.SenderDeviceID)
+	if err != nil {
+		return MessageResponse{}, err
+	}
+	if senderDevice.UserID != userID || senderDevice.RevokedAt != nil || senderDevice.TrustStatus != "TRUSTED" {
+		return MessageResponse{}, apperrors.ErrForbidden
+	}
+	if err := s.validateKeyEnvelopeRecipientsWithRepo(ctx, repoTx, chatID, req.KeyEnvelopes, true); err != nil {
+		return MessageResponse{}, err
+	}
+
 	createdMessage, err := repoTx.CreateMessageInTx(ctx, message)
 	if err != nil {
 		return MessageResponse{}, err
@@ -423,6 +426,13 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 	// already-persisted row in that case. Do not create duplicate envelopes,
 	// attachments, receipts, sequence numbers, or realtime events.
 	if createdMessage.ID != candidateMessageID {
+		same, compareErr := sameEncryptedMessageRequest(ctx, repoTx, createdMessage, req)
+		if compareErr != nil {
+			return MessageResponse{}, compareErr
+		}
+		if !same {
+			return MessageResponse{}, apperrors.New(409, "chats.e2ee.replay_conflict", "clientMessageId was already used for a different encrypted message")
+		}
 		return s.toMessageResponse(ctx, createdMessage, userID, nil, nil)
 	}
 	if len(req.KeyEnvelopes) > 0 {
@@ -483,6 +493,16 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 	if err := repoTx.AppendChatMessageRealtimeEvent(ctx, eventID, createdMessage.ChatID, createdMessage.ID, createdMessage.SenderID, nullableStringValue(createdMessage.SenderDeviceID), createdMessage.ClientMessageID, createdMessage.SequenceNumber); err != nil {
 		return MessageResponse{}, err
 	}
+	membersForNotification := make([]string, 0, len(recipientIDs))
+	membersForNotification = append(membersForNotification, recipientIDs...)
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.MessageCreated, AggregateType: "message", AggregateID: createdMessage.ID,
+		ActorID: strPtrLocal(userID), RecipientUserIDs: membersForNotification,
+		Payload:        map[string]any{"messageId": createdMessage.ID, "chatId": createdMessage.ChatID, "sequence": createdMessage.SequenceNumber},
+		IdempotencyKey: "message-created:" + createdMessage.ID, CorrelationID: observability.CorrelationID(ctx), Sequence: &createdMessage.SequenceNumber,
+	}); err != nil {
+		return MessageResponse{}, err
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return MessageResponse{}, err
@@ -514,7 +534,9 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 	if message.SenderID != userID {
 		return MessageResponse{}, apperrors.ErrForbidden
 	}
-
+	if message.SenderDeviceID == nil {
+		return MessageResponse{}, apperrors.New(403, "chats.e2ee.sender_device_required", "Encrypted messages must be bound to a trusted sender device")
+	}
 	// Can only edit within 24 hours
 	if time.Since(message.SentAt) > 24*time.Hour {
 		return MessageResponse{}, apperrors.New(400, "chats.edit_expired", "Can only edit messages within 24 hours")
@@ -524,6 +546,18 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 		return MessageResponse{}, apperrors.New(400, "chats.plaintext_rejected", "Plaintext message content is not accepted by the server")
 	}
 	req.EncryptionProtocol = strings.ToUpper(strings.TrimSpace(req.EncryptionProtocol))
+	if req.EncryptionProtocol != "" && req.EncryptionProtocol != string(enums.EncryptionProtocolTrustedChat) {
+		return MessageResponse{}, apperrors.New(400, "chats.e2ee.protocol_required", "Messages must use the GAPAK E2EE protocol")
+	}
+	if err := validateHex(req.Ciphertext, "ciphertext", 16, 25000); err != nil {
+		return MessageResponse{}, err
+	}
+	if err := validateHex(req.Nonce, "nonce", 12, 12); err != nil {
+		return MessageResponse{}, err
+	}
+	if err := validateHex(req.AuthenticationTag, "authenticationTag", 64, 64); err != nil {
+		return MessageResponse{}, err
+	}
 
 	// Wrap version, update and envelopes in a transaction for consistency.
 	tx, err := s.repo.Begin(ctx)
@@ -533,6 +567,17 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 	defer tx.Rollback(ctx)
 
 	repoTx := s.repo.WithTx(tx)
+
+	device, err := repoTx.GetTrustedDeviceForUpdate(ctx, *message.SenderDeviceID)
+	if err != nil {
+		return MessageResponse{}, err
+	}
+	if device.UserID != userID || device.RevokedAt != nil || device.TrustStatus != "TRUSTED" {
+		return MessageResponse{}, apperrors.ErrForbidden
+	}
+	if err := s.validateKeyEnvelopeRecipientsWithRepo(ctx, repoTx, message.ChatID, req.KeyEnvelopes, true); err != nil {
+		return MessageResponse{}, err
+	}
 
 	// Create version before editing
 	version := &model.MessageVersion{
@@ -553,7 +598,8 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 		"content":              nil,
 		"metadata":             req.Metadata,
 		"edited_at":            time.Now().UTC(),
-		"encryption_algorithm": "client-managed-aead",
+		"authentication_tag":   req.AuthenticationTag,
+		"encryption_algorithm": gapakE2EEEncryptionAlgorithm,
 	}
 	if req.EncryptionProtocol != "" {
 		updates["encryption_protocol"] = strings.ToUpper(strings.TrimSpace(req.EncryptionProtocol))
@@ -570,9 +616,6 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 		return MessageResponse{}, err
 	}
 	if len(req.KeyEnvelopes) > 0 {
-		if err := s.validateKeyEnvelopeRecipients(ctx, message.ChatID, req.KeyEnvelopes); err != nil {
-			return MessageResponse{}, err
-		}
 		senderDeviceID := ""
 		if message.SenderDeviceID != nil {
 			senderDeviceID = *message.SenderDeviceID
@@ -590,6 +633,18 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 	if err := repoTx.AppendChatRealtimeEvent(ctx, eventID, message.ChatID, "chat.message.edited", map[string]any{
 		"eventId": eventID, "type": "chat.message.edited", "chatId": message.ChatID,
 		"messageId": updatedMessage.ID, "senderId": updatedMessage.SenderID, "sequence": updatedMessage.SequenceNumber,
+	}); err != nil {
+		return MessageResponse{}, err
+	}
+	recipients, err := repoTx.ListChatMemberIDs(ctx, message.ChatID)
+	if err != nil {
+		return MessageResponse{}, err
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.MessageEdited, AggregateType: "message", AggregateID: message.ID,
+		ActorID: strPtrLocal(userID), RecipientUserIDs: withoutID(recipients, userID),
+		Payload:        map[string]any{"messageId": message.ID, "chatId": message.ChatID, "sequence": updatedMessage.SequenceNumber},
+		IdempotencyKey: "message-edited:" + message.ID + ":" + updatedMessage.UpdatedAt.UTC().Format(time.RFC3339Nano), CorrelationID: observability.CorrelationID(ctx), Sequence: &updatedMessage.SequenceNumber,
 	}); err != nil {
 		return MessageResponse{}, err
 	}
@@ -628,6 +683,18 @@ func (s *Service) DeleteMessage(ctx context.Context, messageID, userID string, r
 	if err := repoTx.AppendChatRealtimeEvent(ctx, eventID, message.ChatID, "chat.message.deleted", map[string]any{
 		"eventId": eventID, "type": "chat.message.deleted", "chatId": message.ChatID,
 		"messageId": message.ID, "senderId": message.SenderID, "sequence": message.SequenceNumber,
+	}); err != nil {
+		return err
+	}
+	recipients, err := repoTx.ListChatMemberIDs(ctx, message.ChatID)
+	if err != nil {
+		return err
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.MessageDeleted, AggregateType: "message", AggregateID: message.ID,
+		ActorID: strPtrLocal(userID), RecipientUserIDs: withoutID(recipients, userID),
+		Payload:        map[string]any{"messageId": message.ID, "chatId": message.ChatID, "sequence": message.SequenceNumber},
+		IdempotencyKey: "message-deleted:" + message.ID + ":" + userID, CorrelationID: observability.CorrelationID(ctx), Sequence: &message.SequenceNumber,
 	}); err != nil {
 		return err
 	}
@@ -768,11 +835,31 @@ func (s *Service) AddReaction(ctx context.Context, messageID, userID string, req
 		ReactionType: enums.ReactionType(req.ReactionType),
 	}
 
-	createdReaction, err := s.repo.AddReaction(ctx, reaction)
+	tx, err := s.repo.Begin(ctx)
 	if err != nil {
 		return ReactionResponse{}, err
 	}
-
+	defer tx.Rollback(ctx)
+	repoTx := s.repo.WithTx(tx)
+	createdReaction, err := repoTx.AddReaction(ctx, reaction)
+	if err != nil {
+		return ReactionResponse{}, err
+	}
+	recipients, err := repoTx.ListChatMemberIDs(ctx, message.ChatID)
+	if err != nil {
+		return ReactionResponse{}, err
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.MessageReactionCreated, AggregateType: "message", AggregateID: message.ID,
+		ActorID: strPtrLocal(userID), RecipientUserIDs: withoutID(recipients, userID),
+		Payload:        map[string]any{"messageId": message.ID, "chatId": message.ChatID, "reactionType": req.ReactionType},
+		IdempotencyKey: "message-reaction-created:" + message.ID + ":" + userID + ":" + req.ReactionType, CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return ReactionResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ReactionResponse{}, err
+	}
 	return s.toReactionResponse(createdReaction), nil
 }
 
@@ -786,7 +873,28 @@ func (s *Service) RemoveReaction(ctx context.Context, messageID, userID string, 
 		return err
 	}
 
-	return s.repo.RemoveReaction(ctx, messageID, userID, req.ReactionType)
+	tx, err := s.repo.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	repoTx := s.repo.WithTx(tx)
+	if err := repoTx.RemoveReaction(ctx, messageID, userID, req.ReactionType); err != nil {
+		return err
+	}
+	recipients, err := repoTx.ListChatMemberIDs(ctx, message.ChatID)
+	if err != nil {
+		return err
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.MessageReactionRemoved, AggregateType: "message", AggregateID: message.ID,
+		ActorID: strPtrLocal(userID), RecipientUserIDs: withoutID(recipients, userID),
+		Payload:        map[string]any{"messageId": message.ID, "chatId": message.ChatID, "reactionType": req.ReactionType},
+		IdempotencyKey: "message-reaction-removed:" + message.ID + ":" + userID + ":" + req.ReactionType, CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Service) GetReactions(ctx context.Context, messageID, userID string, query ListReactionsQuery) ([]ReactionResponse, error) {
@@ -835,22 +943,63 @@ func (s *Service) MarkAsRead(ctx context.Context, chatID, userID string, req Mar
 		return ReadReceiptResponse{}, err
 	}
 
-	receipt, err := s.repo.MarkAsRead(ctx, req.MessageID, userID)
+	tx, err := s.repo.Begin(ctx)
 	if err != nil {
 		return ReadReceiptResponse{}, err
 	}
-
-	// Update member's last read
-	updates := map[string]interface{}{
-		"last_read_message_id": req.MessageID,
-		"last_read_at":         time.Now(),
+	defer tx.Rollback(ctx)
+	repoTx := s.repo.WithTx(tx)
+	receipt, err := repoTx.MarkAsRead(ctx, req.MessageID, userID)
+	if err != nil {
+		return ReadReceiptResponse{}, err
 	}
-	_, _ = s.repo.UpdateChatMember(ctx, message.ChatID, userID, updates)
-
+	updates := map[string]interface{}{"last_read_message_id": req.MessageID, "last_read_at": time.Now().UTC()}
+	if _, err := repoTx.UpdateChatMember(ctx, message.ChatID, userID, updates); err != nil {
+		return ReadReceiptResponse{}, err
+	}
+	recipients, err := repoTx.ListChatMemberIDs(ctx, message.ChatID)
+	if err != nil {
+		return ReadReceiptResponse{}, err
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.MessageRead, AggregateType: "message", AggregateID: message.ID,
+		ActorID: strPtrLocal(userID), RecipientUserIDs: withoutID(recipients, userID),
+		Payload:        map[string]any{"messageId": message.ID, "chatId": message.ChatID, "readAt": receipt.ReadAt},
+		IdempotencyKey: "message-read:" + message.ID + ":" + userID + ":" + receipt.ReadAt.UTC().Format(time.RFC3339Nano), CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return ReadReceiptResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ReadReceiptResponse{}, err
+	}
 	return s.toReadReceiptResponse(receipt), nil
 }
 
+// ValidateSession verifies that a WebSocket browser connection is backed by an
+// active session. It deliberately does not map a session ID to a trusted E2EE
+// device ID; browser authentication and E2EE device authorization are separate
+// security domains.
+func (s *Service) ValidateSession(ctx context.Context, userID, sessionID string) error {
+	var one int
+	err := s.repo.db.QueryRow(ctx, `
+		SELECT 1 FROM device_sessions
+		WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL AND expires_at > NOW()
+		LIMIT 1`, sessionID, userID).Scan(&one)
+	if err != nil {
+		return apperrors.ErrForbidden
+	}
+	return nil
+}
 func (s *Service) RegisterTrustedDevice(ctx context.Context, userID string, req RegisterTrustedDeviceRequest) (TrustedDeviceResponse, error) {
+	if err := validateE2EEPublicJWK(req.IdentityKeyPublic, "identityKeyPublic"); err != nil {
+		return TrustedDeviceResponse{}, err
+	}
+	if strings.TrimSpace(req.SigningKeyPublic) == "" {
+		return TrustedDeviceResponse{}, apperrors.New(400, "chats.e2ee.signing_key_required", "signingKeyPublic is required for GAPAK E2EE devices")
+	}
+	if err := validateE2EEPublicJWK(req.SigningKeyPublic, "signingKeyPublic"); err != nil {
+		return TrustedDeviceResponse{}, err
+	}
 	device := &model.TrustedDevice{
 		UserID:            userID,
 		DeviceName:        nullableString(req.DeviceName),
@@ -885,8 +1034,22 @@ func (s *Service) PublishPreKey(ctx context.Context, userID, deviceID string, re
 	if err != nil {
 		return DevicePreKeyResponse{}, err
 	}
-	if device.UserID != userID || device.RevokedAt != nil {
+	if device.UserID != userID || device.RevokedAt != nil || device.TrustStatus != "TRUSTED" {
 		return DevicePreKeyResponse{}, apperrors.ErrForbidden
+	}
+	if err := validateE2EEPublicJWK(req.PublicKey, "publicKey"); err != nil {
+		return DevicePreKeyResponse{}, err
+	}
+	if req.Signature != "" {
+		if err := validateHex(req.Signature, "signature", 64, 64); err != nil {
+			return DevicePreKeyResponse{}, err
+		}
+	}
+	if req.OneTime && req.ExpiresAt == nil {
+		return DevicePreKeyResponse{}, apperrors.New(400, "chats.e2ee.expiry_required", "One-time prekeys must have an expiration time")
+	}
+	if req.ExpiresAt != nil && !req.ExpiresAt.After(time.Now().UTC()) {
+		return DevicePreKeyResponse{}, apperrors.New(400, "chats.e2ee.stale_prekey", "Prekey expiration must be in the future")
 	}
 	preKey := &model.DevicePreKey{
 		DeviceID:  deviceID,
@@ -1297,17 +1460,144 @@ func (s *Service) toMessageKeyModels(messageID, senderDeviceID string, reqs []Me
 }
 
 func (s *Service) validateKeyEnvelopeRecipients(ctx context.Context, chatID string, reqs []MessageKeyEnvelopeRequest) error {
-	seen := make(map[string]struct{}, len(reqs))
+	return s.validateKeyEnvelopeRecipientsWithRepo(ctx, s.repo, chatID, reqs, false)
+}
+
+func (s *Service) validateKeyEnvelopeRecipientsWithRepo(ctx context.Context, repo *Repository, chatID string, reqs []MessageKeyEnvelopeRequest, lock bool) error {
+	seenDevices := make(map[string]struct{}, len(reqs))
 	for _, req := range reqs {
-		if _, ok := seen[req.RecipientUserID]; ok {
-			continue
-		}
-		seen[req.RecipientUserID] = struct{}{}
-		if err := s.repo.AssertChatMembership(ctx, chatID, req.RecipientUserID); err != nil {
+		if err := validateGapakE2EEKeyEnvelope(req); err != nil {
 			return err
+		}
+		if _, ok := seenDevices[req.RecipientDeviceID]; ok {
+			return apperrors.New(409, "chats.e2ee.duplicate_recipient_device", "Each recipient device may receive only one key envelope")
+		}
+		seenDevices[req.RecipientDeviceID] = struct{}{}
+		if err := repo.AssertChatMembership(ctx, chatID, req.RecipientUserID); err != nil {
+			return err
+		}
+		var device *model.TrustedDevice
+		var err error
+		if lock {
+			device, err = repo.GetTrustedDeviceForUpdate(ctx, req.RecipientDeviceID)
+		} else {
+			device, err = repo.GetTrustedDevice(ctx, req.RecipientDeviceID)
+		}
+		if err != nil {
+			return err
+		}
+		if device.UserID != req.RecipientUserID || device.RevokedAt != nil || device.TrustStatus != "TRUSTED" {
+			return apperrors.ErrForbidden
 		}
 	}
 	return nil
+}
+
+func sameEncryptedMessageRequest(ctx context.Context, repo *Repository, message *model.Message, req SendMessageRequest) (bool, error) {
+	if message.SenderDeviceID == nil || *message.SenderDeviceID != req.SenderDeviceID ||
+		message.Type != enums.MessageType(req.Type) ||
+		message.Ciphertext != req.Ciphertext ||
+		message.Nonce != req.Nonce ||
+		message.SenderKeyID != req.SenderKeyID ||
+		message.EncryptionProtocol != enums.EncryptionProtocol(req.EncryptionProtocol) ||
+		message.EncryptionAlgorithm != req.EncryptionAlgorithm ||
+		nullableStringValue(message.AssociatedData) != req.AssociatedData ||
+		nullableStringValue(message.AuthenticationTag) != req.AuthenticationTag ||
+		((message.RatchetCounter == nil) != (req.RatchetCounter == nil)) ||
+		(message.RatchetCounter != nil && req.RatchetCounter != nil && *message.RatchetCounter != *req.RatchetCounter) ||
+		(message.ReplyToMessageID == nil) != (req.ReplyToMessageID == "") ||
+		(message.ReplyToMessageID != nil && *message.ReplyToMessageID != req.ReplyToMessageID) ||
+		(message.ForwardedFromMessageID == nil) != (req.ForwardedFromID == "") ||
+		(message.ForwardedFromMessageID != nil && *message.ForwardedFromMessageID != req.ForwardedFromID) {
+		return false, nil
+	}
+
+	metadata, err := metadataToBytes(req.Metadata)
+	if err != nil {
+		return false, err
+	}
+	if string(message.Metadata) != string(metadata) {
+		return false, nil
+	}
+
+	attachments, err := repo.GetAttachmentsByMessage(ctx, message.ID)
+	if err != nil {
+		return false, err
+	}
+	if len(attachments) != len(req.Attachments) {
+		return false, nil
+	}
+	for i, reqAtt := range req.Attachments {
+		att := attachments[i]
+		if att.MediaFileID != reqAtt.MediaFileID || string(att.Kind) != reqAtt.Kind || nullableStringValue(att.FileName) != reqAtt.FileName ||
+			nullableStringValue(att.MimeType) != reqAtt.MimeType || att.SizeBytes != reqAtt.SizeBytes ||
+			!sameIntPtr(att.Width, reqAtt.Width) || !sameIntPtr(att.Height, reqAtt.Height) || !sameIntPtr(att.DurationSeconds, reqAtt.DurationSeconds) ||
+			nullableStringValue(att.ThumbnailFileID) != reqAtt.ThumbnailFileID {
+			return false, nil
+		}
+		attMetadata, err := metadataToBytes(reqAtt.Metadata)
+		if err != nil {
+			return false, err
+		}
+		if string(att.Metadata) != string(attMetadata) {
+			return false, nil
+		}
+	}
+
+	envelopes, err := repo.GetAllMessageKeyEnvelopes(ctx, message.ID)
+	if err != nil {
+		return false, err
+	}
+	if len(envelopes) != len(req.KeyEnvelopes) {
+		return false, nil
+	}
+	requestEnvelopes := append([]MessageKeyEnvelopeRequest(nil), req.KeyEnvelopes...)
+	sort.Slice(requestEnvelopes, func(i, j int) bool {
+		return requestEnvelopes[i].RecipientDeviceID < requestEnvelopes[j].RecipientDeviceID
+	})
+	sort.Slice(envelopes, func(i, j int) bool { return envelopes[i].RecipientDeviceID < envelopes[j].RecipientDeviceID })
+	for i, reqEnv := range requestEnvelopes {
+		env := envelopes[i]
+		if env.RecipientID != reqEnv.RecipientUserID || env.RecipientDeviceID != reqEnv.RecipientDeviceID || env.KeyID != reqEnv.KeyID ||
+			env.Algorithm != reqEnv.Algorithm || env.EncryptedKey != reqEnv.EncryptedKey || nullableStringValue(env.Nonce) != reqEnv.Nonce || env.KeyVersion != maxInt(reqEnv.KeyVersion, 1) {
+			return false, nil
+		}
+	}
+
+	if req.ExpiresInSeconds == nil {
+		if message.ExpiresAt != nil {
+			return false, nil
+		}
+	} else {
+		if message.ExpiresAt == nil {
+			return false, nil
+		}
+		wantExpiry := message.CreatedAt.Add(time.Duration(*req.ExpiresInSeconds) * time.Second)
+		if absDuration(message.ExpiresAt.Sub(wantExpiry)) > 5*time.Second {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func sameIntPtr(a *int, b *int) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || *a == *b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+func absDuration(v time.Duration) time.Duration {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 func (s *Service) toPinnedMessageResponse(pinned *model.PinnedMessage) PinnedMessage {
@@ -1329,4 +1619,16 @@ func nullableString(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+func strPtrLocal(v string) *string { return &v }
+
+func withoutID(ids []string, excluded string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != excluded {
+			out = append(out, id)
+		}
+	}
+	return out
 }

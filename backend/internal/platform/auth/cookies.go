@@ -9,6 +9,21 @@ import (
 	"github.com/gapak/backend/internal/config"
 )
 
+const AccessCookieName = "gapak_at"
+
+func SetAccessCookie(c *fiber.Ctx, cfg config.SecurityConfig, token string, expiresAt time.Time) {
+	c.Cookie(&fiber.Cookie{
+		Name:     AccessCookieName,
+		Value:    token,
+		Path:     "/",
+		HTTPOnly: true,
+		Secure:   cfg.CookieSecure,
+		SameSite: parseSameSite(cfg.CookieSameSite),
+		Domain:   cookieDomain(cfg.CookieDomain),
+		Expires:  expiresAt,
+	})
+}
+
 func SetRefreshCookie(c *fiber.Ctx, cfg config.SecurityConfig, token string, expiresAt time.Time) {
 	c.Cookie(&fiber.Cookie{
 		Name:     cfg.RefreshCookieName,
@@ -27,7 +42,7 @@ func SetCSRFCookie(c *fiber.Ctx, cfg config.SecurityConfig, csrf string, expires
 		Name:     cfg.CSRFCookieName,
 		Value:    csrf,
 		Path:     "/",
-		HTTPOnly: true,
+		HTTPOnly: false,
 		Secure:   cfg.CookieSecure,
 		SameSite: parseSameSite(cfg.CookieSameSite),
 		Domain:   cookieDomain(cfg.CookieDomain),
@@ -51,17 +66,7 @@ func ClearAuthCookies(c *fiber.Ctx, cfg config.SecurityConfig) {
 		Name:     cfg.CSRFCookieName,
 		Value:    "",
 		Path:     "/",
-		HTTPOnly: true,
-		Secure:   cfg.CookieSecure,
-		SameSite: parseSameSite(cfg.CookieSameSite),
-		Domain:   cookieDomain(cfg.CookieDomain),
-		Expires:  expiredAt,
-	})
-	c.Cookie(&fiber.Cookie{
-		Name:     cfg.CSRFCookieName,
-		Value:    "",
-		Path:     "/api/v1/auth",
-		HTTPOnly: true,
+		HTTPOnly: false,
 		Secure:   cfg.CookieSecure,
 		SameSite: parseSameSite(cfg.CookieSameSite),
 		Domain:   cookieDomain(cfg.CookieDomain),
@@ -69,12 +74,12 @@ func ClearAuthCookies(c *fiber.Ctx, cfg config.SecurityConfig) {
 	})
 	// Also clear the access token cookie
 	c.Cookie(&fiber.Cookie{
-		Name:     "gapak_at",
+		Name:     AccessCookieName,
 		Value:    "",
 		Path:     "/",
 		HTTPOnly: true,
 		Secure:   cfg.CookieSecure,
-		SameSite: "Lax",
+		SameSite: parseSameSite(cfg.CookieSameSite),
 		Domain:   cookieDomain(cfg.CookieDomain),
 		Expires:  expiredAt,
 	})

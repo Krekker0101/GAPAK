@@ -10,6 +10,7 @@ import type {
 } from './types';
 import { authManager } from '../api/authManager';
 import { RealtimeEventRouter } from './EventRouter';
+import { RealtimeCursorStore } from './CursorStore';
 
 class RealtimeManager {
   private connection: ConnectionManager | null = null;
@@ -22,7 +23,12 @@ class RealtimeManager {
 
   private readonly subscribedChats = new Set<string>();
   private readonly activeChatSubscriptions = new Set<string>();
-  private readonly lastAppliedSequence = new Map<string, number>();
+  /**
+   * Local resync cursor: highest applied `sequence` per chat. Used to ask the
+   * backend to resume "after_sequence" on (re)subscribe. See CursorStore.ts
+   * and docs/REALTIME.md for what this does and does not guarantee.
+   */
+  private readonly lastAppliedSequence = new RealtimeCursorStore();
 
   initialize(queryClient: QueryClient): void {
     if (this.connection) return;
@@ -185,8 +191,12 @@ class RealtimeManager {
   }
 
   private recordSequence(chatId: string, sequence: number): void {
-    const current = this.lastAppliedSequence.get(chatId);
-    if (current === undefined || sequence > current) this.lastAppliedSequence.set(chatId, sequence);
+    this.lastAppliedSequence.advance(chatId, sequence);
+  }
+
+  /** Exposes the current local resync cursor for a chat (for UI/devtools/tests). */
+  getCursor(chatId: string): number | undefined {
+    return this.lastAppliedSequence.get(chatId);
   }
 
   private handleAuthFailure(error: Error): void {

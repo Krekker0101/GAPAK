@@ -253,3 +253,17 @@ Response highlights:
 - media performance, privacy, and fast playback are first-class requirements
 - anonymity and privacy must be implemented as real architectural principles, not as decorative claims
 - moderation and safety must exist without destroying the privacy model
+
+## GAPAK Frontend HTTP Contract Hardening (2026-08-12)
+
+The current production frontend contract is authoritative for these HTTP details:
+
+- Base path: `/api/v1`.
+- Successful JSON response: `{success:true,data,meta?}`.
+- Non-2xx JSON response: `{success:false,error:{code,message,details?},meta?}`.
+- `GET /chats/pre-key-bundles/{userId}` reads `userId` from the path and requires a UUID.
+- `GET /subscriptions/following` returns `data` as a JSON array of subscription items. It does not expose a cursor/page envelope.
+- Authenticated mutations may supply `X-Idempotency-Key`; the backend replays the persisted successful response for a duplicate key rather than creating a second mutation.
+- OAuth callback establishes the server session and redirects to the configured frontend origin (`OAUTH_FRONTEND_REDIRECT_URL`), not to a backend-only frontend route.
+
+`GET /subscriptions/following` intentionally does not introduce a new pagination protocol. The response is the complete list expected by the current frontend. Backend implementation must fail explicitly if a complete response cannot be produced; it must not truncate silently or return a placeholder list.

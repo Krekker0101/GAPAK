@@ -139,12 +139,22 @@ func (r *Repository) CreateUser(ctx context.Context, req RegisterRequest, email 
 	return user, nil
 }
 
+func (r *Repository) MarkSessionTwoFactorVerified(ctx context.Context, sessionID string) error {
+	_, err := r.db.Exec(ctx, `UPDATE device_sessions SET two_factor_verified_at = NOW(), last_used_at = NOW() WHERE id=$1 AND revoked_at IS NULL`, sessionID)
+	return err
+}
+
+func (r *Repository) RecentSessionTwoFactorVerified(ctx context.Context, userID, sessionID string, window time.Duration) (bool, error) {
+	var ok bool
+	err := r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM device_sessions WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL AND two_factor_verified_at IS NOT NULL AND two_factor_verified_at >= NOW() - $3::interval)`, sessionID, userID, fmt.Sprintf("%d seconds", int(window.Seconds()))).Scan(&ok)
+	return ok, err
+}
 func (r *Repository) CreateSession(ctx context.Context, session model.DeviceSession) error {
 	const query = `
 		INSERT INTO device_sessions
 			(id, user_id, refresh_token_hash, refresh_token_family, user_agent, device_name, device_fingerprint,
 			 ip_address, is_current, security_level, last_used_at, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
 	_, err := r.db.Exec(ctx, query,
 		session.ID,
 		session.UserID,
@@ -158,6 +168,7 @@ func (r *Repository) CreateSession(ctx context.Context, session model.DeviceSess
 		string(session.SecurityLevel),
 		session.LastUsedAt,
 		session.ExpiresAt,
+		session.CreatedAt,
 	)
 	return err
 }

@@ -107,6 +107,29 @@ On successful backend panic execution the frontend:
 
 The backend remains authoritative for session/grant/device revocation.
 
+## Unsupported action policy (hide-vs-friendly-error criterion)
+
+Some Security Center actions have no corresponding backend endpoint yet: acknowledging/dismissing a `DeviceAlert`, mutating a `SecurityFlag`, and locally "resetting" panic mode (no reset endpoint exists at all). The frontend must never fake success for these. Two options exist, and the choice is made by one criterion:
+
+> **Is the action on the primary/critical path of the screen the user navigated to, or is it secondary/administrative?**
+>
+> - **Secondary/administrative → (a) hide.** Remove the mutating control entirely and replace it with a short, plain-language explanation of why it isn't there (e.g. "The current backend exposes no read or dismiss mutation for these records."). Viewing the data is still the primary value of the screen; a disabled or error-throwing button for a side action would only add noise and false affordance.
+> - **Primary/critical path → (b) stay active with a friendly contract error.** If a user opened a screen specifically to perform an action, removing the button removes the feature. In that case the control stays clickable and calls the real backend; if the backend rejects it, the UI surfaces the backend's own error message (never a fabricated success), same as any other mutation.
+>
+> There is a middle case that resolves to (a) automatically: if the action was **never promised by the backend at all** (no endpoint exists or is planned, e.g. "reset panic mode locally"), there is nothing to attempt — the frontend documents this in the UI copy instead of drawing a button that would always fail.
+
+Applied consistently:
+
+| Action | Backend endpoint | Criticality | Decision |
+| --- | --- | --- | --- |
+| Acknowledge/dismiss a security alert | none | Secondary (viewing alerts is the primary value; ack is administrative) | (a) hidden — `AlertsSection` renders no control, only an explanation |
+| Mutate/resolve a security flag | none | Secondary (read-only telemetry) | (a) hidden — `SecurityFlagsSection` renders no control, only an explanation |
+| Locally reset panic mode | none, and none planned | N/A — not a real capability | (a) never rendered; `PanicModeSection` states plainly that no reset endpoint exists |
+| Execute panic mode | `POST /security/panic-mode` (real) | Primary — the entire purpose of the Panic screen | (b) active; on backend rejection the UI shows `e.message` from the failed request, never a fabricated `PanicModeResponse` |
+| Revoke a session/device, configure 2FA | real endpoints | Primary | (b) active, real requests, real errors |
+
+`tests/security/unsupported-security-actions-contract.test.ts` locks this table as a regression guard: it fails if a mutating control for alerts/flags/panic-reset is reintroduced, or if `SecurityService`/`securityApi` grow a method that pretends to perform one of these unsupported mutations.
+
 ## Remaining blockers
 
 1. Backend cryptographic protocol contract is required before claiming full E2EE.

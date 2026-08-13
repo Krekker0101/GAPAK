@@ -4,6 +4,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/gapak/backend/internal/platform/concurrency"
 	"github.com/gapak/backend/internal/platform/httpx"
 	"github.com/gapak/backend/internal/platform/middleware"
 )
@@ -36,6 +37,9 @@ func (c *Controller) Subscribe(ctx *fiber.Ctx) error {
 }
 
 func (c *Controller) Unsubscribe(ctx *fiber.Ctx) error {
+	if err := concurrency.PrepareMutation(ctx); err != nil {
+		return err
+	}
 	userID := middleware.ClaimsFromContext(ctx).UserID
 	creatorID, err := httpx.UUIDParam(ctx, "creatorId")
 	if err != nil {
@@ -48,6 +52,9 @@ func (c *Controller) Unsubscribe(ctx *fiber.Ctx) error {
 }
 
 func (c *Controller) ChangeSubscriptionType(ctx *fiber.Ctx) error {
+	if err := concurrency.PrepareMutation(ctx); err != nil {
+		return err
+	}
 	userID := middleware.ClaimsFromContext(ctx).UserID
 	creatorID, err := httpx.UUIDParam(ctx, "creatorId")
 	if err != nil {
@@ -96,29 +103,11 @@ func (c *Controller) GetSubscribers(ctx *fiber.Ctx) error {
 
 func (c *Controller) GetSubscriptions(ctx *fiber.Ctx) error {
 	userID := middleware.ClaimsFromContext(ctx).UserID
-	query, err := httpx.BindQuery[paginationQuery](ctx, c.validate)
+	creators, _, err := c.service.GetSubscriptions(ctx.Context(), userID, 0, 0)
 	if err != nil {
 		return err
 	}
-	if query.Page < 1 {
-		query.Page = 1
-	}
-	if query.Limit < 1 {
-		query.Limit = 20
-	}
-	offset := (query.Page - 1) * query.Limit
-	creators, total, err := c.service.GetSubscriptions(ctx.Context(), userID, query.Limit, offset)
-	if err != nil {
-		return err
-	}
-	hasMore := total > (query.Page * query.Limit)
-	return ctx.JSON(httpx.OK(PagedCreatorsResponse{
-		Items:    creators,
-		Total:    total,
-		Page:     query.Page,
-		PageSize: query.Limit,
-		HasMore:  hasMore,
-	}, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
+	return ctx.JSON(httpx.OK(creators, ctx.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
 func (c *Controller) IsSubscribed(ctx *fiber.Ctx) error {

@@ -166,13 +166,19 @@ func New(ctx context.Context) (*App, error) {
 		AllowCredentials: true,
 		AllowOrigins:     joinOrigins(cfg.App.CORSOrigins),
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-CSRF-Token, X-Idempotency-Key, X-Request-Id",
+		AllowMethods:     "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
 		ExposeHeaders:    "X-Request-Id, X-Next-Cursor",
+		MaxAge:           600,
 	}))
+	// Browser-originated unsafe mutations must carry the CSRF header. Server-to-server
+	// requests without an Origin remain possible; unknown browser origins are rejected.
+	fiberApp.Use(middleware.BrowserMutationCSRF(cfg.Security, cfg.App.CORSOrigins...))
 	fiberApp.Use(helmet.New(helmet.Config{
 		ContentSecurityPolicy: "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 	}))
 	fiberApp.Use(middleware.SecurityHeaders(63072000))
 	fiberApp.Use(middleware.RequestLogger(log, privacyService, obs))
+	fiberApp.Use(middleware.Idempotency(redisClient, db, jwtManager))
 	fiberApp.Use(middleware.RateLimiter{
 		Redis:   redisClient,
 		Prefix:  "rl:global",
@@ -255,6 +261,9 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
+	if a.WebSocket != nil {
+		a.WebSocket.Stop(ctx)
+	}
 	var shutdownErr error
 	if a.Fiber != nil {
 		shutdownErr = a.Fiber.ShutdownWithContext(ctx)

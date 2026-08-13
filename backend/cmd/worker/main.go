@@ -12,9 +12,11 @@ import (
 
 	"github.com/gapak/backend/internal/config"
 	"github.com/gapak/backend/internal/platform/cache"
+	appcrypto "github.com/gapak/backend/internal/platform/crypto"
 	"github.com/gapak/backend/internal/platform/database"
 	"github.com/gapak/backend/internal/platform/logger"
 	"github.com/gapak/backend/internal/platform/observability"
+	pushplatform "github.com/gapak/backend/internal/platform/push"
 	"github.com/gapak/backend/internal/platform/queue"
 	"github.com/gapak/backend/internal/platform/storage"
 	"github.com/gapak/backend/internal/platform/version"
@@ -57,6 +59,14 @@ func main() {
 
 	repo := workers.NewRepository(db)
 	redisQueue := queue.NewRedisQueue(redisClient)
+	encryptor, err := appcrypto.NewEncryptor(cfg.Security.EncryptionKey)
+	if err != nil {
+		log.Fatalf("push encryption init failed: %v", err)
+	}
+	pushDispatcher, err := pushplatform.NewDispatcher(cfg.Push, db, encryptor)
+	if err != nil {
+		log.Fatalf("push dispatcher init failed: %v", err)
+	}
 	var objectStore storage.ObjectStore
 	switch cfg.Storage.Provider {
 	case "", "local":
@@ -82,7 +92,7 @@ func main() {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	runner := workers.NewRunner(cfg, appLogger, repo, redisQueue, objectStore, obs)
+	runner := workers.NewRunner(cfg, appLogger, repo, redisQueue, objectStore, obs, pushDispatcher)
 
 	if err := runner.Run(ctx); err != nil {
 		log.Fatalf("worker exited with error: %v", err)

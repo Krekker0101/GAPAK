@@ -154,6 +154,11 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, meta common.Reque
 	if err != nil {
 		return AuthResponse{}, "", err
 	}
+	if user.TwoFactorEnabled {
+		if err := s.repo.MarkSessionTwoFactorVerified(ctx, response.Session.ID); err != nil {
+			return AuthResponse{}, "", err
+		}
+	}
 
 	_ = s.repo.CreateDeviceLoginAlert(ctx, user.ID, response.Session.ID)
 
@@ -420,6 +425,13 @@ func (s *Service) DisableTwoFactor(ctx context.Context, userID, sessionID string
 	if !user.TwoFactorEnabled {
 		return AcceptedResponse{Accepted: true}, nil
 	}
+	recentlyVerified, err := s.repo.RecentSessionTwoFactorVerified(ctx, userID, sessionID, 15*time.Minute)
+	if err != nil {
+		return AcceptedResponse{}, err
+	}
+	if !recentlyVerified {
+		return AcceptedResponse{}, apperrors.New(403, "auth.reauthentication_required", "Recent two-factor authentication is required before disabling two-factor authentication")
+	}
 	if err := s.repo.DisableTwoFactor(ctx, userID); err != nil {
 		return AcceptedResponse{}, err
 	}
@@ -434,6 +446,7 @@ func (s *Service) issueSession(ctx context.Context, user *model.User, meta commo
 		return AuthResponse{}, "", err
 	}
 
+	createdAt := time.Now().UTC()
 	session := model.DeviceSession{
 		ID:                 sessionID,
 		UserID:             user.ID,
@@ -445,16 +458,15 @@ func (s *Service) issueSession(ctx context.Context, user *model.User, meta commo
 		IPAddress:          stringPointer(meta.IP),
 		IsCurrent:          true,
 		SecurityLevel:      enums.SessionSecurityTrusted,
-		LastUsedAt:         time.Now().UTC(),
+		LastUsedAt:         createdAt,
 		ExpiresAt:          pair.RefreshExpiresAt,
+		CreatedAt:          createdAt,
 	}
 	if err := s.repo.CreateSession(ctx, session); err != nil {
 		return AuthResponse{}, "", err
 	}
 
-	sessionCopy := session
-	sessionCopy.CreatedAt = time.Now().UTC()
-	return s.buildAuthResponse(user, &sessionCopy, pair), pair.RefreshToken, nil
+	return s.buildAuthResponse(user, &session, pair), pair.RefreshToken, nil
 }
 
 func (s *Service) buildAuthResponse(user *model.User, session *model.DeviceSession, pair authplatform.TokenPair) AuthResponse {

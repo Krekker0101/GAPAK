@@ -4,6 +4,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/gapak/backend/internal/platform/concurrency"
 	"github.com/gapak/backend/internal/platform/httpx"
 	"github.com/gapak/backend/internal/platform/middleware"
 )
@@ -49,6 +50,9 @@ func (ctl *Controller) create(c *fiber.Ctx) error {
 }
 
 func (ctl *Controller) accept(c *fiber.Ctx) error {
+	if err := concurrency.PrepareMutation(c); err != nil {
+		return err
+	}
 	connectionID, err := httpx.UUIDParam(c, "connectionId")
 	if err != nil {
 		return err
@@ -58,10 +62,16 @@ func (ctl *Controller) accept(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if err := concurrency.SetMutationETag(c, "connection", connectionID); err != nil {
+		return err
+	}
 	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
 func (ctl *Controller) setTrusted(c *fiber.Ctx) error {
+	if err := concurrency.PrepareMutation(c); err != nil {
+		return err
+	}
 	connectionID, err := httpx.UUIDParam(c, "connectionId")
 	if err != nil {
 		return err
@@ -75,10 +85,16 @@ func (ctl *Controller) setTrusted(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if err := concurrency.SetMutationETag(c, "connection", connectionID); err != nil {
+		return err
+	}
 	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
 func (ctl *Controller) remove(c *fiber.Ctx) error {
+	if err := concurrency.PrepareMutation(c); err != nil {
+		return err
+	}
 	connectionID, err := httpx.UUIDParam(c, "connectionId")
 	if err != nil {
 		return err
@@ -86,6 +102,9 @@ func (ctl *Controller) remove(c *fiber.Ctx) error {
 	claims := middleware.ClaimsFromContext(c)
 	response, err := ctl.service.Remove(c.UserContext(), claims.UserID, connectionID)
 	if err != nil {
+		return err
+	}
+	if err := concurrency.SetMutationETag(c, "connection", connectionID); err != nil {
 		return err
 	}
 	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))

@@ -20,10 +20,6 @@ type LoginRequest struct {
 	DeviceFingerprint string `json:"deviceFingerprint" validate:"omitempty,max=255"`
 }
 
-type RefreshRequest struct {
-	RefreshToken string `json:"refreshToken" validate:"omitempty,min=32,max=2048"`
-}
-
 type LogoutRequest struct {
 	AllDevices bool `json:"allDevices"`
 }
@@ -62,6 +58,7 @@ type AuthSession struct {
 	CreatedAt     time.Time `json:"createdAt"`
 }
 
+// AuthResponse is safe for browser JavaScript. The refresh token is intentionally never serialized.
 type AuthResponse struct {
 	User         AuthUser    `json:"user"`
 	Session      AuthSession `json:"session"`

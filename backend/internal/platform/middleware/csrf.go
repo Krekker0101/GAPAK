@@ -2,7 +2,10 @@ package middleware
 
 import (
 	"crypto/subtle"
+	"net/url"
 	"strings"
+
+	auth "github.com/gapak/backend/internal/platform/auth"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -26,30 +29,75 @@ func ValidateCSRF(cfg config.SecurityConfig) fiber.Handler {
 
 func ValidateCSRFForMutations(cfg config.SecurityConfig, allowedOrigins ...string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		if !isSafeMethod(c.Method()) {
+			origin := strings.TrimSpace(c.Get("Origin"))
+			if origin != "" {
+				if !isAllowedOrigin(origin, allowedOrigins) {
+					return apperrors.ErrCSRFInvalid
+				}
+			} else if ref := strings.TrimSpace(c.Get("Referer")); ref != "" {
+				if !refererMatchesAllowedOrigin(ref, allowedOrigins) {
+					return apperrors.ErrCSRFInvalid
+				}
+			} else if c.Cookies(auth.AccessCookieName) != "" || c.Cookies(cfg.RefreshCookieName) != "" {
+				// Cookie-authenticated browser mutations without Origin/Referer are
+				// ambiguous and must not be accepted as CSRF-safe. Token-authenticated
+				// non-browser clients can use Authorization without these headers.
+				if strings.TrimSpace(c.Get("Authorization")) == "" {
+					return apperrors.ErrCSRFInvalid
+				}
+			}
+		}
 		headerValue := c.Get("X-CSRF-Token")
 		if headerValue == "" {
 			return apperrors.ErrCSRFInvalid
 		}
 		cookieValue := c.Cookies(cfg.CSRFCookieName)
-		// Prefer the strict double-submit-cookie check whenever the browser can
-		// send the CSRF cookie. Cross-site SPA deployments such as Vercel ->
-		// Railway can legitimately have third-party-cookie restrictions, however.
-		// In that case the custom X-CSRF-Token header is still a browser-enforced
-		// CORS preflight boundary. Accept it only when the request Origin exactly
-		// matches an explicitly configured application origin; never accept a
-		// header-only token from an unknown origin.
-		if cookieValue != "" {
-			if subtle.ConstantTimeCompare([]byte(cookieValue), []byte(headerValue)) != 1 {
-				return apperrors.ErrCSRFInvalid
-			}
-			return c.Next()
+		// Browser mutations use strict double-submit CSRF protection: the token
+		// must be present in both the readable cookie and the custom header.
+		// CORS origin validation remains a separate browser-origin boundary.
+		if cookieValue == "" {
+			return apperrors.ErrCSRFInvalid
 		}
-		origin := c.Get("Origin")
-		if origin == "" || !isAllowedOrigin(origin, allowedOrigins) {
+		if subtle.ConstantTimeCompare([]byte(cookieValue), []byte(headerValue)) != 1 {
 			return apperrors.ErrCSRFInvalid
 		}
 		return c.Next()
 	}
+}
+
+func BrowserMutationCSRF(cfg config.SecurityConfig, allowedOrigins ...string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if isSafeMethod(c.Method()) {
+			return c.Next()
+		}
+		if c.Get("Origin") == "" && c.Get("Referer") == "" && c.Cookies(auth.AccessCookieName) == "" && c.Cookies(cfg.RefreshCookieName) == "" {
+			// Explicit bearer-token/server-to-server clients do not need browser CSRF.
+			return c.Next()
+		}
+		return ValidateCSRFForMutations(cfg, allowedOrigins...)(c)
+	}
+}
+
+func isSafeMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case "GET", "HEAD", "OPTIONS":
+		return true
+	default:
+		return false
+	}
+}
+
+func refererMatchesAllowedOrigin(raw string, allowedOrigins []string) bool {
+	ref := strings.TrimSpace(raw)
+	if ref == "" {
+		return false
+	}
+	u, err := url.Parse(ref)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	return isAllowedOrigin(u.Scheme+"://"+u.Host, allowedOrigins)
 }
 
 func isAllowedOrigin(origin string, allowedOrigins []string) bool {

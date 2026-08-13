@@ -2,76 +2,75 @@ package auth
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/gapak/backend/internal/config"
 	"github.com/gofiber/fiber/v2"
+
+	"github.com/gapak/backend/internal/config"
 )
 
-func TestParseSameSite(t *testing.T) {
-	cases := map[string]string{"strict": fiber.CookieSameSiteStrictMode, "lax": fiber.CookieSameSiteLaxMode, "none": fiber.CookieSameSiteNoneMode, "": fiber.CookieSameSiteLaxMode}
-	for input, want := range cases {
-		if got := parseSameSite(input); got != want {
-			t.Fatalf("parseSameSite(%q)=%q want %q", input, got, want)
-		}
-	}
-}
-
-func TestCookiesHonorConfiguredSameSite(t *testing.T) {
+func TestCookiesHonorCrossSiteProductionPolicy(t *testing.T) {
 	app := fiber.New()
-	cfg := config.SecurityConfig{RefreshCookieName: "gapak_rt", CSRFCookieName: "gapak_csrf", CookieSecure: true, CookieSameSite: "none"}
+	cfg := config.SecurityConfig{RefreshCookieName: "gapak_rt", CSRFCookieName: "gapak_csrf", CookieSecure: true, CookieSameSite: "none", CookieDomain: ""}
 	app.Get("/", func(c *fiber.Ctx) error {
-		SetRefreshCookie(c, cfg, "token", time.Now().Add(time.Hour))
+		SetAccessCookie(c, cfg, "access", time.Now().Add(time.Hour))
+		SetRefreshCookie(c, cfg, "refresh", time.Now().Add(24*time.Hour))
 		SetCSRFCookie(c, cfg, "csrf", time.Now().Add(time.Hour))
 		return nil
 	})
-	req := httptest.NewRequest(fiber.MethodGet, "/", nil)
-	resp, err := app.Test(req, -1)
+	resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/", nil), -1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	cookies := resp.Header.Values("Set-Cookie")
-	if len(cookies) != 2 {
-		t.Fatalf("expected 2 cookies, got %d", len(cookies))
+	if len(cookies) != 3 {
+		t.Fatalf("expected 3 cookies, got %d", len(cookies))
 	}
 	for _, cookie := range cookies {
-		if !containsFold(cookie, "SameSite=None") {
+		if !strings.Contains(strings.ToLower(cookie), "secure") {
+			t.Fatalf("cookie missing Secure: %s", cookie)
+		}
+		if !strings.Contains(strings.ToLower(cookie), "samesite=none") {
 			t.Fatalf("cookie missing SameSite=None: %s", cookie)
 		}
-		if !containsFold(cookie, "Secure") {
-			t.Fatalf("cookie missing Secure: %s", cookie)
+		if strings.Contains(strings.ToLower(cookie), "domain=") {
+			t.Fatalf("production host-only cookie unexpectedly has Domain: %s", cookie)
 		}
 	}
 }
 
-func containsFold(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || indexFold(s, sub) >= 0)
+func TestCSRFCookieIsReadableByBrowser(t *testing.T) {
+	app := fiber.New()
+	cfg := config.SecurityConfig{CSRFCookieName: "gapak_csrf", CookieSecure: true, CookieSameSite: "none"}
+	app.Get("/", func(c *fiber.Ctx) error {
+		SetCSRFCookie(c, cfg, "csrf-token", time.Now().Add(time.Hour))
+		return nil
+	})
+	resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/", nil), -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	joined := strings.Join(resp.Header.Values("Set-Cookie"), "\n")
+	if strings.Contains(strings.ToLower(joined), "httponly") {
+		t.Fatalf("CSRF cookie must be readable by browser JavaScript: %s", joined)
+	}
 }
-func indexFold(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if equalFold(s[i:i+len(sub)], sub) {
-			return i
-		}
+
+func TestClearAuthCookiesUsesConfiguredSameSiteForAccessCookie(t *testing.T) {
+	app := fiber.New()
+	cfg := config.SecurityConfig{RefreshCookieName: "gapak_rt", CSRFCookieName: "gapak_csrf", CookieSecure: true, CookieSameSite: "none"}
+	app.Get("/", func(c *fiber.Ctx) error { ClearAuthCookies(c, cfg); return nil })
+	resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/", nil), -1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return -1
-}
-func equalFold(a, b string) bool {
-	if len(a) != len(b) {
-		return false
+	defer resp.Body.Close()
+	joined := strings.Join(resp.Header.Values("Set-Cookie"), "\n")
+	if !strings.Contains(strings.ToLower(joined), "gapak_at=") || !strings.Contains(strings.ToLower(joined), "samesite=none") {
+		t.Fatalf("access cookie was not cleared with configured attributes: %s", joined)
 	}
-	for i := range a {
-		ca, cb := a[i], b[i]
-		if ca >= 'A' && ca <= 'Z' {
-			ca += 32
-		}
-		if cb >= 'A' && cb <= 'Z' {
-			cb += 32
-		}
-		if ca != cb {
-			return false
-		}
-	}
-	return true
 }

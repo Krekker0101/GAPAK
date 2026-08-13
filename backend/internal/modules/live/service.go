@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	apperrors "github.com/gapak/backend/internal/platform/errors"
 
@@ -23,6 +24,9 @@ func NewService(repo *Repository, eventChannelBase string) *Service {
 }
 
 func (s *Service) Create(ctx context.Context, userID string, req CreateLiveStreamRequest) (LiveStreamResponse, error) {
+	if req.ScheduledFor != nil && !req.ScheduledFor.After(time.Now().UTC()) {
+		return LiveStreamResponse{}, apperrors.New(400, "live.scheduled_for_invalid", "Scheduled live start time must be in the future")
+	}
 	if req.Visibility == "TRUST_ROOM" {
 		if req.TrustRoomID == nil || *req.TrustRoomID == "" {
 			return LiveStreamResponse{}, apperrors.New(400, "live.trust_room_required", "Trust room is required for TRUST_ROOM visibility")
@@ -87,6 +91,9 @@ func (s *Service) Join(ctx context.Context, userID, streamID string, req JoinLiv
 	if err != nil {
 		return AcceptedResponse{}, err
 	}
+	if stream.Status != enums.LiveStatusLive {
+		return AcceptedResponse{}, apperrors.New(409, "live.not_live", "Live room is not currently live")
+	}
 
 	role, ghost, ok := authorizeJoin(stream.HostUserID, userID, enums.LiveParticipantRole(req.Role), req.IsGhostMode)
 	if !ok {
@@ -114,8 +121,12 @@ func authorizeJoin(hostUserID, userID string, requestedRole enums.LiveParticipan
 }
 
 func (s *Service) PostChatMessage(ctx context.Context, userID, streamID string, req LiveChatMessageRequest) (LiveChatMessageResponse, error) {
-	if _, err := s.repo.GetVisible(ctx, userID, streamID); err != nil {
+	stream, err := s.repo.GetVisible(ctx, userID, streamID)
+	if err != nil {
 		return LiveChatMessageResponse{}, err
+	}
+	if stream.Status != enums.LiveStatusLive {
+		return LiveChatMessageResponse{}, apperrors.New(409, "live.chat_closed", "Live chat is closed because the stream is not live")
 	}
 	item, err := s.repo.CreateChatMessage(ctx, streamID, userID, req.Body)
 	if err != nil {

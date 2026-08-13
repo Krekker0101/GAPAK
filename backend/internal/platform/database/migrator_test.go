@@ -47,3 +47,50 @@ func TestMigrationChecksumIsDeterministic(t *testing.T) {
 		t.Fatalf("checksum is not deterministic: %q vs %q", first[0].Checksum, second[0].Checksum)
 	}
 }
+
+func TestIsSchemaOnlyMigration(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want bool
+	}{
+		{name: "ddl", sql: `CREATE TABLE users(id UUID PRIMARY KEY); ALTER TABLE users ADD COLUMN created_at TIMESTAMPTZ;`, want: true},
+		{name: "insert", sql: `CREATE TABLE seed(id INT); INSERT INTO seed(id) VALUES (1);`, want: false},
+		{name: "update in function body", sql: `CREATE FUNCTION bump() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN UPDATE users SET id = id; RETURN NEW; END $$;`, want: false},
+		{name: "comment only", sql: `-- UPDATE users SET id = id;
+CREATE TABLE users(id INT);`, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSchemaOnlyMigration(tt.sql); got != tt.want {
+				t.Fatalf("isSchemaOnlyMigration() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRepositoryMigrationsClassifyFunctionDMLAsSchemaOnly(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "db", "migrations", "20260522000000_add_likes_and_comments.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isSchemaOnlyMigration(string(content)) {
+		t.Fatal("function trigger UPDATE statements must not classify the migration as data-changing")
+	}
+}
+
+func TestSchemaOnlyClassifierIgnoresForeignKeyOnUpdate(t *testing.T) {
+	if !isSchemaOnlyMigration(`CREATE TABLE child(id UUID, parent_id UUID REFERENCES parent(id) ON UPDATE CASCADE);`) {
+		t.Fatal("ON UPDATE CASCADE must not be classified as data-changing")
+	}
+}
+
+func TestRepositoryMigrationsKeepRealDataChanges(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "db", "migrations", "20260715000000_add_trusted_chat_e2ee.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isSchemaOnlyMigration(string(content)) {
+		t.Fatal("trusted E2EE migration contains real data updates and must remain data-changing")
+	}
+}

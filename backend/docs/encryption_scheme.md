@@ -1,3 +1,5 @@
+> **AUTHORITATIVE STATUS (2026-08-12):** This document is historical design material and is **not** the production cryptographic contract. The deployed implementation uses the **GAPAK E2EE protocol v1**. It does not implement Signal Protocol, X3DH, Double Ratchet, PQXDH, or equivalent standardized ratcheting protocols. Use `docs/BACKEND_GAPAK_E2EE_REPORT.md` and `docs/BACKEND_FRONTEND_CONTRACT.md` for the current contract.
+
 # GAPAK Messaging System - Encryption Scheme
 
 ## Overview

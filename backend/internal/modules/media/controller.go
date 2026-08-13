@@ -10,6 +10,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/gapak/backend/internal/platform/concurrency"
 	"github.com/gapak/backend/internal/platform/httpx"
 	"github.com/gapak/backend/internal/platform/middleware"
 
@@ -128,7 +129,7 @@ func (ctl *Controller) getAsset(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+	return concurrency.WriteVersionedJSON(c, "media", mediaID, response, nil)
 }
 
 func (ctl *Controller) createPlaybackGrant(c *fiber.Ctx) error {

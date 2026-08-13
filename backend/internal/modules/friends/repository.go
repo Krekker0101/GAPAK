@@ -11,7 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gapak/backend/internal/domain/enums"
+	"github.com/gapak/backend/internal/platform/concurrency"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
+	"github.com/gapak/backend/internal/platform/events"
+	"github.com/gapak/backend/internal/platform/observability"
 )
 
 type Repository struct {
@@ -34,49 +37,68 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 }
 
 func (r *Repository) CreateRequest(ctx context.Context, requesterID, addresseeID string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
 	const existingQuery = `
-		SELECT 1
-		FROM friend_connections
-		WHERE deleted_at IS NULL
-		  AND (
-		    (requester_id = $1 AND addressee_id = $2)
-		    OR (requester_id = $2 AND addressee_id = $1)
-		  )
-		LIMIT 1`
+		SELECT 1 FROM friend_connections
+		WHERE deleted_at IS NULL AND ((requester_id = $1 AND addressee_id = $2) OR (requester_id = $2 AND addressee_id = $1)) LIMIT 1`
 	var existing int
-	if err := r.db.QueryRow(ctx, existingQuery, requesterID, addresseeID).Scan(&existing); err == nil {
+	if err := tx.QueryRow(ctx, existingQuery, requesterID, addresseeID).Scan(&existing); err == nil {
 		return apperrors.ErrConflict
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-
-	const query = `
-		INSERT INTO friend_connections (id, requester_id, addressee_id, status, updated_at)
-		VALUES ($1, $2, $3, $4, NOW())`
-	_, err := r.db.Exec(ctx, query, uuid.NewString(), requesterID, addresseeID, string(enums.ConnectionPending))
-	if err != nil {
+	connectionID := uuid.NewString()
+	const query = `INSERT INTO friend_connections (id, requester_id, addressee_id, status, updated_at) VALUES ($1, $2, $3, $4, NOW())`
+	if _, err := tx.Exec(ctx, query, connectionID, requesterID, addresseeID, string(enums.ConnectionPending)); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return apperrors.ErrConflict
 		}
 		return err
 	}
-	return nil
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.ConnectionRequestCreated, AggregateType: "connection", AggregateID: connectionID,
+		ActorID: strPtr(requesterID), RecipientUserIDs: []string{addresseeID},
+		Payload:        map[string]any{"connectionId": connectionID, "requesterId": requesterID, "addresseeId": addresseeID},
+		IdempotencyKey: "connection-request-created:" + connectionID, CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) Accept(ctx context.Context, currentUserID, connectionID string) error {
-	const query = `
-		UPDATE friend_connections
-		SET status = 'ACCEPTED', accepted_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND addressee_id = $2 AND status = 'PENDING' AND deleted_at IS NULL`
-	tag, err := r.db.Exec(ctx, query, connectionID, currentUserID)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return apperrors.ErrNotFound
+	defer tx.Rollback(ctx)
+	if err := concurrency.NewStore(r.db, "").GuardTx(ctx, tx, "connection", connectionID); err != nil {
+		return err
 	}
-	return nil
+	var requesterID string
+	if err := tx.QueryRow(ctx, `SELECT requester_id FROM friend_connections WHERE id = $1 AND addressee_id = $2 AND status = 'PENDING' AND deleted_at IS NULL FOR UPDATE`, connectionID, currentUserID).Scan(&requesterID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return apperrors.ErrNotFound
+		}
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE friend_connections SET status='ACCEPTED', accepted_at=NOW(), updated_at=NOW() WHERE id=$1`, connectionID); err != nil {
+		return err
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.ConnectionRequestAccepted, AggregateType: "connection", AggregateID: connectionID,
+		ActorID: strPtr(currentUserID), RecipientUserIDs: []string{requesterID},
+		Payload:        map[string]any{"connectionId": connectionID, "requesterId": requesterID, "addresseeId": currentUserID},
+		IdempotencyKey: "connection-request-accepted:" + connectionID, CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) Remove(ctx context.Context, currentUserID, connectionID string) error {
@@ -85,6 +107,9 @@ func (r *Repository) Remove(ctx context.Context, currentUserID, connectionID str
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := concurrency.NewStore(r.db, "").GuardTx(ctx, tx, "connection", connectionID); err != nil {
+		return err
+	}
 
 	const findQuery = `
 		SELECT requester_id, addressee_id
@@ -119,8 +144,22 @@ func (r *Repository) Remove(ctx context.Context, currentUserID, connectionID str
 		return err
 	}
 
+	recipientID := requesterID
+	if requesterID == currentUserID {
+		recipientID = addresseeID
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.ConnectionRemoved, AggregateType: "connection", AggregateID: connectionID,
+		ActorID: strPtr(currentUserID), RecipientUserIDs: []string{recipientID},
+		Payload:        map[string]any{"connectionId": connectionID, "requesterId": requesterID, "addresseeId": addresseeID},
+		IdempotencyKey: "connection-removed:" + connectionID + ":" + currentUserID, CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
+
+func strPtr(v string) *string { return &v }
 
 func (r *Repository) SetTrusted(ctx context.Context, currentUserID, connectionID string, enabled bool) error {
 	const query = `

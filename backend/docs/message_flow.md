@@ -1,3 +1,5 @@
+> **AUTHORITATIVE STATUS (2026-08-12):** Historical message-flow proposal. The current production encrypted-message contract is the **GAPAK E2EE protocol v1** as documented in `docs/BACKEND_GAPAK_E2EE_REPORT.md`.
+
 # GAPAK Messaging System - Message Flow Documentation
 
 ## Message Sending Process

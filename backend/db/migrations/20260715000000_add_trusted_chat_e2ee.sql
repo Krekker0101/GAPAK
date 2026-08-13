@@ -11,9 +11,12 @@ UPDATE chats
 SET encryption_protocol = 'SIGNAL'
 WHERE encryption_protocol = 'NONE';
 
-ALTER TABLE chats
-    ADD CONSTRAINT chats_encryption_protocol_check
-    CHECK (encryption_protocol <> 'NONE');
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chats_encryption_protocol_check' AND conrelid = 'chats'::regclass) THEN
+        ALTER TABLE chats ADD CONSTRAINT chats_encryption_protocol_check CHECK (encryption_protocol <> 'NONE');
+    END IF;
+END $$;
 
 ALTER TABLE messages
     ADD COLUMN IF NOT EXISTS client_message_id VARCHAR(128),
@@ -35,11 +38,15 @@ UPDATE message_versions
 SET content = NULL
 WHERE content IS NOT NULL;
 
-ALTER TABLE messages
-    ADD CONSTRAINT messages_no_plaintext_content_check CHECK (content IS NULL);
-
-ALTER TABLE message_versions
-    ADD CONSTRAINT message_versions_no_plaintext_content_check CHECK (content IS NULL);
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'messages_no_plaintext_content_check' AND conrelid = 'messages'::regclass) THEN
+        ALTER TABLE messages ADD CONSTRAINT messages_no_plaintext_content_check CHECK (content IS NULL);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'message_versions_no_plaintext_content_check' AND conrelid = 'message_versions'::regclass) THEN
+        ALTER TABLE message_versions ADD CONSTRAINT message_versions_no_plaintext_content_check CHECK (content IS NULL);
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS trusted_chat_devices (
     id UUID NOT NULL,
@@ -120,20 +127,24 @@ CREATE INDEX IF NOT EXISTS messages_sender_device_id_idx
     ON messages(sender_device_id)
     WHERE sender_device_id IS NOT NULL;
 
-ALTER TABLE messages
-    ADD CONSTRAINT messages_client_message_id_check CHECK (client_message_id IS NULL OR char_length(client_message_id) >= 8);
-
-ALTER TABLE messages
-    ADD CONSTRAINT messages_sender_device_id_fkey FOREIGN KEY (sender_device_id) REFERENCES trusted_chat_devices(id) ON DELETE SET NULL;
-
-ALTER TABLE messages
-    ADD CONSTRAINT messages_client_message_id_unique UNIQUE (chat_id, client_message_id);
-
-ALTER TABLE messages
-    ADD CONSTRAINT messages_key_envelope_required_check CHECK (encryption_protocol = 'NONE' OR ciphertext IS NOT NULL);
-
-ALTER TABLE messages
-    ADD CONSTRAINT messages_ratcheted_check CHECK (ratchet_counter IS NULL OR ratchet_counter >= 0);
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'messages_client_message_id_check' AND conrelid = 'messages'::regclass) THEN
+        ALTER TABLE messages ADD CONSTRAINT messages_client_message_id_check CHECK (client_message_id IS NULL OR char_length(client_message_id) >= 8);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'messages_sender_device_id_fkey' AND conrelid = 'messages'::regclass) THEN
+        ALTER TABLE messages ADD CONSTRAINT messages_sender_device_id_fkey FOREIGN KEY (sender_device_id) REFERENCES trusted_chat_devices(id) ON DELETE SET NULL;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'messages_client_message_id_unique' AND conrelid = 'messages'::regclass) THEN
+        ALTER TABLE messages ADD CONSTRAINT messages_client_message_id_unique UNIQUE (chat_id, client_message_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'messages_key_envelope_required_check' AND conrelid = 'messages'::regclass) THEN
+        ALTER TABLE messages ADD CONSTRAINT messages_key_envelope_required_check CHECK (encryption_protocol = 'NONE' OR ciphertext IS NOT NULL);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'messages_ratcheted_check' AND conrelid = 'messages'::regclass) THEN
+        ALTER TABLE messages ADD CONSTRAINT messages_ratcheted_check CHECK (ratchet_counter IS NULL OR ratchet_counter >= 0);
+    END IF;
+END $$;
 
 ALTER TABLE messages
     ALTER COLUMN status SET DEFAULT 'SENT';

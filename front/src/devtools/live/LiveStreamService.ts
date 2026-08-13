@@ -178,11 +178,29 @@ export class LiveStreamService {
   /**
    * Send Rate-Limited Live Chat Message
    * Rate limit: max 1 msg per 2 seconds per user.
+   *
+   * `clientMessageId` is a client-generated idempotency key. If a message
+   * with the same key was already accepted for this stream, the existing
+   * message is returned instead of creating a duplicate: this mirrors the
+   * `clientMessageId` contract used by src/domains/chats (see chatsApi.sendMessage)
+   * and is what the real backend endpoint (see docs/REALTIME.md TODO) must
+   * also honor once live chat moves off this local mock.
+   *
+   * NOTE: this service has no real network transport, so a send here cannot
+   * actually fail or need a retry-with-backoff — that behavior is exercised
+   * end-to-end only once the backend WebSocket/HTTP endpoint for live chat
+   * exists. Messages are marked 'sent' immediately, and `status`/`clientMessageId`
+   * are populated now so the UI and retry plumbing (`retryChatMessage`) do not
+   * need to change again when that backend contract lands.
    */
   public static sendChatMessage(
     streamId: string,
-    text: string
+    text: string,
+    clientMessageId: string = crypto.randomUUID(),
   ): { success: boolean; message?: LiveChatMessage; error?: string; cooldownSec?: number } {
+    const existing = (this.chatMap[streamId] || []).find((m) => m.clientMessageId === clientMessageId);
+    if (existing) return { success: true, message: existing };
+
     const now = Date.now();
     const lastSent = this.lastSentTimestamp.get(CURRENT_USER.id) || 0;
     const cooldownMs = 2000;
@@ -203,6 +221,8 @@ export class LiveStreamService {
       streamId,
       sender: CURRENT_USER,
       text,
+      clientMessageId,
+      status: 'sent',
       createdAt: new Date().toISOString(),
     };
 
@@ -210,6 +230,24 @@ export class LiveStreamService {
     this.notifyChat(streamId);
 
     return { success: true, message: newMsg };
+  }
+
+  /**
+   * Re-attempts a failed outbound live-chat message using the same
+   * idempotency key. The text the user typed is preserved by the caller
+   * (the message object itself) regardless of outcome; this never mutates
+   * or clears `text` on failure.
+   */
+  public static retryChatMessage(streamId: string, clientMessageId: string): { success: boolean; message?: LiveChatMessage; error?: string } {
+    const current = (this.chatMap[streamId] || []).find((m) => m.clientMessageId === clientMessageId);
+    if (!current) return { success: false, error: 'Message no longer available for retry in this session.' };
+    if (current.status !== 'failed') return { success: true, message: current };
+
+    const result = this.sendChatMessage(streamId, current.text, clientMessageId);
+    if (!result.success) return { success: false, error: result.error };
+    this.chatMap[streamId] = (this.chatMap[streamId] || []).map((m) => (m.clientMessageId === clientMessageId ? { ...m, status: 'sent' as const } : m));
+    this.notifyChat(streamId);
+    return { success: true, message: result.message };
   }
 
   /**

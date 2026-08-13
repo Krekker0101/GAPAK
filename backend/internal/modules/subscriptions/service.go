@@ -31,33 +31,14 @@ func (s *Service) Subscribe(ctx context.Context, subscriberID, creatorID string)
 		return nil, apperrors.New(403, "subscriptions.blocked", "you are blocked from subscribing to this user")
 	}
 
-	existing, err := s.repo.GetSubscriptionByUsers(ctx, subscriberID, creatorID)
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil {
-		if existing.Status == enums.SubscriptionStatusActive {
-			return mapSubscriptionToResponse(existing), nil
-		}
-		err = s.repo.DeleteSubscription(ctx, existing.ID)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	subscription := &model.Subscription{
 		ID:               uuid.NewString(),
 		SubscriberID:     subscriberID,
 		CreatorID:        creatorID,
 		Status:           enums.SubscriptionStatusActive,
 		SubscriptionType: enums.SubscriptionTypeVisible,
-		SubscribedAt:     time.Now(),
-		CreatedAt:        time.Now(),
-		UpdatedAt:        time.Now(),
 	}
-
-	err = s.repo.CreateSubscription(ctx, subscription)
-	if err != nil {
+	if err := s.repo.UpsertActiveSubscription(ctx, subscription); err != nil {
 		return nil, err
 	}
 
@@ -68,10 +49,10 @@ func (s *Service) Subscribe(ctx context.Context, subscriberID, creatorID string)
 		NotifyOnStory: true,
 		NotifyOnLive:  true,
 		NotifyOnClip:  true,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
 	}
-	_ = s.repo.SetNotificationPreference(ctx, prefs)
+	if err := s.repo.SetNotificationPreference(ctx, prefs); err != nil {
+		return nil, err
+	}
 
 	return mapSubscriptionToResponse(subscription), nil
 }
@@ -107,19 +88,19 @@ func (s *Service) ChangeSubscriptionType(ctx context.Context, subscriberID, crea
 }
 
 func (s *Service) GetSubscribers(ctx context.Context, creatorID string, limit, offset int) ([]SubscribersListResponse, int, error) {
-	subscriptions, total, err := s.repo.GetSubscribers(ctx, creatorID, limit, offset)
+	subscribers, total, err := s.repo.GetSubscribers(ctx, creatorID, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	var result []SubscribersListResponse
-	for _, sub := range subscriptions {
+	result := make([]SubscribersListResponse, 0, len(subscribers))
+	for _, row := range subscribers {
 		result = append(result, SubscribersListResponse{
-			ID:           sub.SubscriberID,
-			Username:     "",
-			DisplayName:  "",
-			AvatarFileID: "",
-			Bio:          "",
+			ID:           row.Subscription.SubscriberID,
+			Username:     row.Username,
+			DisplayName:  row.DisplayName,
+			AvatarFileID: valueOrEmpty(row.AvatarFileID),
+			Bio:          valueOrEmpty(row.Bio),
 		})
 	}
 
@@ -132,19 +113,26 @@ func (s *Service) GetSubscriptions(ctx context.Context, subscriberID string, lim
 		return nil, 0, err
 	}
 
-	var result []CreatorsListResponse
-	for _, sub := range subscriptions {
+	result := make([]CreatorsListResponse, 0, len(subscriptions))
+	for _, row := range subscriptions {
 		result = append(result, CreatorsListResponse{
-			ID:               sub.CreatorID,
-			Username:         "",
-			DisplayName:      "",
-			AvatarFileID:     "",
-			Bio:              "",
-			SubscriptionType: string(sub.SubscriptionType),
+			ID:               row.Subscription.CreatorID,
+			Username:         row.Username,
+			DisplayName:      row.DisplayName,
+			AvatarFileID:     valueOrEmpty(row.AvatarFileID),
+			Bio:              valueOrEmpty(row.Bio),
+			SubscriptionType: string(row.Subscription.SubscriptionType),
 		})
 	}
 
 	return result, total, nil
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (s *Service) IsSubscribed(ctx context.Context, subscriberID, creatorID string) (bool, error) {

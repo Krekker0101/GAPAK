@@ -21,20 +21,27 @@ import (
 	"github.com/gapak/backend/internal/modules/notifications"
 	"github.com/gapak/backend/internal/modules/posts"
 	"github.com/gapak/backend/internal/modules/presence"
+	pushmodule "github.com/gapak/backend/internal/modules/push"
 	"github.com/gapak/backend/internal/modules/security"
 	"github.com/gapak/backend/internal/modules/sessions"
 	"github.com/gapak/backend/internal/modules/stories"
 	"github.com/gapak/backend/internal/modules/subscriptions"
+	syncmodule "github.com/gapak/backend/internal/modules/sync"
 	"github.com/gapak/backend/internal/modules/trustrooms"
 	"github.com/gapak/backend/internal/modules/users"
+	authplatform "github.com/gapak/backend/internal/platform/auth"
+	"github.com/gapak/backend/internal/platform/concurrency"
+	apperrors "github.com/gapak/backend/internal/platform/errors"
 	"github.com/gapak/backend/internal/platform/middleware"
 	"github.com/gapak/backend/internal/services/websocket"
 )
 
 func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 	api := app.Group("/api/v1")
+	concurrencyStore := concurrency.NewStore(deps.DB, deps.Config.Security.JWTAccessSecret)
+	app.Use(func(c *fiber.Ctx) error { concurrency.WithStore(c, concurrencyStore); return c.Next() })
 
-	requireAuth := middleware.RequireAuth(deps.JWT)
+	requireAuth := middleware.RequireAuthWithSessionStore(deps.JWT, deps.DB)
 	authLimiter := middleware.RateLimiter{
 		Redis:   deps.Redis,
 		Prefix:  "rl:auth",
@@ -51,7 +58,6 @@ func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 		Window:  deps.Config.RateLimit.PasswordWindow,
 		KeyFn:   deps.Privacy.RateLimitKey,
 	}.Handler()
-	idempotency := middleware.Idempotency(deps.Redis)
 	requireModerationRead := middleware.RequirePermissions(deps.RolePermissions, enums.PermissionAdminModerationRead)
 	requireModerationWrite := middleware.RequirePermissions(deps.RolePermissions, enums.PermissionAdminModerationWrite)
 	requireAdminDashboard := middleware.RequirePermissions(deps.RolePermissions, enums.PermissionAdminDashboardRead)
@@ -73,9 +79,10 @@ func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 		deps.Validate,
 		deps.Config.Security,
 		deps.Privacy,
+		deps.Config.OAuth.FrontendRedirectURL,
 		deps.Config.App.CORSOrigins...,
 	)
-	authController.RegisterRoutes(api, requireAuth, authLimiter, passwordLimiter, idempotency)
+	authController.RegisterRoutes(api, requireAuth, authLimiter, passwordLimiter)
 
 	users.NewController(users.NewService(users.NewRepository(deps.DB), media.NewRepository(deps.DB), deps.Privacy), deps.Validate).
 		RegisterRoutes(api, requireAuth)
@@ -89,7 +96,9 @@ func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 		RegisterRoutes(api, requireAuth)
 	security.NewController(security.NewService(security.NewRepository(deps.DB), deps.Privacy), deps.Validate).
 		RegisterRoutes(api, requireAuth)
-	notifications.NewController(deps.DB).RegisterRoutes(api, requireAuth)
+	notifications.NewController(notifications.NewService(notifications.NewRepository(deps.DB)), deps.Validate).RegisterRoutes(api, requireAuth)
+	syncmodule.NewController(syncmodule.NewService(syncmodule.NewRepository(deps.DB), syncmodule.NewCursorCodec(deps.Config.Security.JWTAccessSecret)), deps.Validate).RegisterRoutes(api, requireAuth)
+	pushmodule.NewController(pushmodule.NewService(pushmodule.NewRepository(deps.DB, deps.Encryptor)), deps.Validate).RegisterRoutes(api, requireAuth)
 	friends.NewController(friends.NewService(friends.NewRepository(deps.DB)), deps.Validate).
 		RegisterRoutes(api, requireAuth)
 	subscriptions.NewController(subscriptions.NewService(subscriptions.NewRepository(deps.DB)), deps.Validate).
@@ -130,21 +139,36 @@ func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 
 func websocketAuth(deps Dependencies) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		token := strings.TrimSpace(c.Query("access_token"))
+		if origin := strings.TrimRight(strings.TrimSpace(c.Get("Origin")), "/"); origin != "" && !isAllowedOrigin(origin, deps.Config.App.CORSOrigins) {
+			return fiber.NewError(fiber.StatusForbidden, "WebSocket origin is not allowed")
+		}
+
+		token := strings.TrimSpace(c.Cookies(authplatform.AccessCookieName))
 		if token == "" {
 			token = bearerToken(c.Get(fiber.HeaderAuthorization))
 		}
 		if token == "" {
+			// Fall through to the existing first-frame auth for non-browser clients.
 			return c.Next()
 		}
 		claims, err := deps.JWT.VerifyAccessToken(c.UserContext(), token)
 		if err != nil {
-			return c.Next()
+			return fiber.NewError(fiber.StatusUnauthorized, "Invalid access token")
 		}
 		c.Locals("userId", claims.UserID)
-		c.Locals("deviceId", claims.SessionID)
+		c.Locals("sessionId", claims.SessionID)
 		return c.Next()
 	}
+}
+
+func isAllowedOrigin(origin string, allowed []string) bool {
+	origin = strings.TrimRight(strings.TrimSpace(origin), "/")
+	for _, candidate := range allowed {
+		if strings.EqualFold(origin, strings.TrimRight(strings.TrimSpace(candidate), "/")) {
+			return true
+		}
+	}
+	return false
 }
 
 func bearerToken(rawHeader string) string {
@@ -248,4 +272,26 @@ func (a *wsChatAdapter) ListChatMemberIDs(ctx context.Context, userID, chatID st
 func (a *wsChatAdapter) AssertChatAccess(ctx context.Context, userID, chatID string) error {
 	_, err := a.svc.GetChat(ctx, chatID, userID)
 	return err
+}
+
+func (a *wsChatAdapter) ValidateSession(ctx context.Context, userID, sessionID string) error {
+	var ok int
+	if err := a.svc.ValidateSession(ctx, userID, sessionID); err != nil {
+		return err
+	}
+	_ = ok
+	return nil
+}
+
+func (a *wsChatAdapter) ValidateDevice(ctx context.Context, userID, deviceID string) error {
+	devices, err := a.svc.ListTrustedDevices(ctx, userID)
+	if err != nil {
+		return err
+	}
+	for _, device := range devices {
+		if device.ID == deviceID && device.RevokedAt == nil && device.TrustStatus == "TRUSTED" {
+			return nil
+		}
+	}
+	return apperrors.ErrForbidden
 }

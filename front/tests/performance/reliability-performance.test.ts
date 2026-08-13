@@ -5,13 +5,13 @@ const read=(f:string)=>readFileSync(f,'utf8');
 
 test('realtime lifecycle has bounded reconnect, generation guards and idempotent subscriptions', () => {
   const t=read('src/shared/realtime/WebSocketTransport.ts'); const m=read('src/shared/realtime/RealtimeManager.ts');
-  assert.match(t,/maxReconnectAttempts/); assert.match(t,/connectionGeneration/); assert.match(t,/stableConnectionMs/);
-  assert.match(m,/activeChatSubscriptions/); assert.match(m,/subscribedChats\.has/);
+  assert.match(t,/maxReconnectAttempts/); assert.match(t,/reconnectAttempts/); assert.match(t,/stableConnectionMs/); assert.match(t,/RECONNECTING/);
+  assert.match(m,/subscribeToChat/); assert.match(m,/subscribedChats\.add/); assert.match(m,/subscribedChats\.delete/);
 });
 
 test('realtime routing rejects duplicates and stale ordering', () => {
   const s=read('src/shared/realtime/EventRouter.ts');
-  assert.match(s,/processedTtlMs/); assert.match(s,/event\.version <= previous/); assert.match(s,/timestampMs < previousTimestamp/);
+  assert.match(s,/processedTtlMs/); assert.match(s,/event\.sequence <= previous/); assert.match(s,/latestSequence/);
 });
 
 test('performance budget is executable and bounded', () => {

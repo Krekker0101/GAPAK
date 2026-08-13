@@ -4,6 +4,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/gapak/backend/internal/platform/concurrency"
 	"github.com/gapak/backend/internal/platform/httpx"
 	"github.com/gapak/backend/internal/platform/middleware"
 )
@@ -53,7 +54,7 @@ func (ctl *Controller) get(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+	return concurrency.WriteVersionedJSON(c, "live_stream", streamID, response, nil)
 }
 
 func (ctl *Controller) events(c *fiber.Ctx) error {
@@ -87,6 +88,9 @@ func (ctl *Controller) create(c *fiber.Ctx) error {
 }
 
 func (ctl *Controller) start(c *fiber.Ctx) error {
+	if err := concurrency.PrepareMutation(c); err != nil {
+		return err
+	}
 	streamID, err := httpx.UUIDParam(c, "streamId")
 	if err != nil {
 		return err
@@ -96,10 +100,16 @@ func (ctl *Controller) start(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if err := concurrency.SetMutationETag(c, "live_stream", streamID); err != nil {
+		return err
+	}
 	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
 func (ctl *Controller) end(c *fiber.Ctx) error {
+	if err := concurrency.PrepareMutation(c); err != nil {
+		return err
+	}
 	streamID, err := httpx.UUIDParam(c, "streamId")
 	if err != nil {
 		return err
@@ -107,6 +117,9 @@ func (ctl *Controller) end(c *fiber.Ctx) error {
 	claims := middleware.ClaimsFromContext(c)
 	response, err := ctl.service.End(c.UserContext(), claims.UserID, streamID)
 	if err != nil {
+		return err
+	}
+	if err := concurrency.SetMutationETag(c, "live_stream", streamID); err != nil {
 		return err
 	}
 	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))

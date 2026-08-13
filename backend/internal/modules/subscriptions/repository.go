@@ -11,7 +11,10 @@ import (
 
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
+	"github.com/gapak/backend/internal/platform/concurrency"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
+	"github.com/gapak/backend/internal/platform/events"
+	"github.com/gapak/backend/internal/platform/observability"
 )
 
 type Repository struct {
@@ -41,6 +44,22 @@ func (r *Repository) CreateSubscription(ctx context.Context, subscription *model
 	)
 
 	return err
+}
+
+func (r *Repository) UpsertActiveSubscription(ctx context.Context, subscription *model.Subscription) error {
+	const query = `
+		INSERT INTO subscriptions (id, subscriber_id, creator_id, status, subscription_type, subscribed_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT (subscriber_id, creator_id) DO UPDATE
+		SET status = EXCLUDED.status,
+		    subscription_type = EXCLUDED.subscription_type,
+		    subscribed_at = CURRENT_TIMESTAMP,
+		    updated_at = CURRENT_TIMESTAMP
+		RETURNING id, subscriber_id, creator_id, status, subscription_type, subscribed_at, created_at, updated_at`
+	return r.db.QueryRow(ctx, query, subscription.ID, subscription.SubscriberID, subscription.CreatorID, subscription.Status, subscription.SubscriptionType).Scan(
+		&subscription.ID, &subscription.SubscriberID, &subscription.CreatorID, &subscription.Status,
+		&subscription.SubscriptionType, &subscription.SubscribedAt, &subscription.CreatedAt, &subscription.UpdatedAt,
+	)
 }
 
 // GetSubscription получить подписку по ID
@@ -113,29 +132,54 @@ func (r *Repository) GetSubscriptionByUsers(ctx context.Context, subscriberID, c
 
 // UpdateSubscriptionType изменить тип подписки
 func (r *Repository) UpdateSubscriptionType(ctx context.Context, subscriptionID string, subType enums.SubscriptionType) error {
-	query := `
-		UPDATE subscriptions
-		SET subscription_type = $1, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $2
-	`
-
-	_, err := r.db.Exec(ctx, query, subType, subscriptionID)
-	return err
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := concurrency.NewStore(r.db, "").GuardTx(ctx, tx, "subscription", subscriptionID); err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `UPDATE subscriptions SET subscription_type=$1, updated_at=CURRENT_TIMESTAMP WHERE id=$2`, subType, subscriptionID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return tx.Commit(ctx)
 }
 
 // DeleteSubscription удалить подписку
 func (r *Repository) DeleteSubscription(ctx context.Context, subscriptionID string) error {
-	query := `
-		DELETE FROM subscriptions
-		WHERE id = $1
-	`
-
-	_, err := r.db.Exec(ctx, query, subscriptionID)
-	return err
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := concurrency.NewStore(r.db, "").GuardTx(ctx, tx, "subscription", subscriptionID); err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `DELETE FROM subscriptions WHERE id=$1`, subscriptionID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return tx.Commit(ctx)
 }
 
 // GetSubscribers получить подписчиков пользователя (followers)
-func (r *Repository) GetSubscribers(ctx context.Context, userID string, limit, offset int) ([]model.Subscription, int, error) {
+type SubscriberRow struct {
+	Subscription model.Subscription
+	Username     string
+	DisplayName  string
+	AvatarFileID *string
+	Bio          *string
+}
+
+func (r *Repository) GetSubscribers(ctx context.Context, userID string, limit, offset int) ([]SubscriberRow, int, error) {
 	countQuery := `
 		SELECT COUNT(*) FROM subscriptions
 		WHERE creator_id = $1 AND status = $2
@@ -146,14 +190,19 @@ func (r *Repository) GetSubscribers(ctx context.Context, userID string, limit, o
 	if err != nil {
 		return nil, 0, err
 	}
+	if limit <= 0 {
+		limit = total
+	}
 
 	query := `
-		SELECT 
-			id, subscriber_id, creator_id, status, subscription_type, 
-			subscribed_at, created_at, updated_at
-		FROM subscriptions
-		WHERE creator_id = $1 AND status = $2
-		ORDER BY subscribed_at DESC
+		SELECT
+		s.id, s.subscriber_id, s.creator_id, s.status, s.subscription_type,
+		s.subscribed_at, s.created_at, s.updated_at,
+		u.username, u.display_name, u.avatar_file_id, u.bio
+		FROM subscriptions s
+		JOIN users u ON u.id = s.subscriber_id AND u.deleted_at IS NULL
+		WHERE s.creator_id = $1 AND s.status = $2
+		ORDER BY s.subscribed_at DESC
 		LIMIT $3 OFFSET $4
 	`
 
@@ -163,30 +212,41 @@ func (r *Repository) GetSubscribers(ctx context.Context, userID string, limit, o
 	}
 	defer rows.Close()
 
-	var subscriptions []model.Subscription
+	result := make([]SubscriberRow, 0)
 	for rows.Next() {
-		var sub model.Subscription
-		err := rows.Scan(
-			&sub.ID,
-			&sub.SubscriberID,
-			&sub.CreatorID,
-			&sub.Status,
-			&sub.SubscriptionType,
-			&sub.SubscribedAt,
-			&sub.CreatedAt,
-			&sub.UpdatedAt,
-		)
-		if err != nil {
+		var row SubscriberRow
+		if err := rows.Scan(
+			&row.Subscription.ID,
+			&row.Subscription.SubscriberID,
+			&row.Subscription.CreatorID,
+			&row.Subscription.Status,
+			&row.Subscription.SubscriptionType,
+			&row.Subscription.SubscribedAt,
+			&row.Subscription.CreatedAt,
+			&row.Subscription.UpdatedAt,
+			&row.Username,
+			&row.DisplayName,
+			&row.AvatarFileID,
+			&row.Bio,
+		); err != nil {
 			return nil, 0, err
 		}
-		subscriptions = append(subscriptions, sub)
+		result = append(result, row)
 	}
 
-	return subscriptions, total, rows.Err()
+	return result, total, rows.Err()
 }
 
 // GetSubscriptions получить авторов на которых подписан пользователь
-func (r *Repository) GetSubscriptions(ctx context.Context, subscriberID string, limit, offset int) ([]model.Subscription, int, error) {
+type CreatorSubscriptionRow struct {
+	Subscription model.Subscription
+	Username     string
+	DisplayName  string
+	AvatarFileID *string
+	Bio          *string
+}
+
+func (r *Repository) GetSubscriptions(ctx context.Context, subscriberID string, limit, offset int) ([]CreatorSubscriptionRow, int, error) {
 	countQuery := `
 		SELECT COUNT(*) FROM subscriptions
 		WHERE subscriber_id = $1 AND status = $2
@@ -199,12 +259,14 @@ func (r *Repository) GetSubscriptions(ctx context.Context, subscriberID string, 
 	}
 
 	query := `
-		SELECT 
-			id, subscriber_id, creator_id, status, subscription_type, 
-			subscribed_at, created_at, updated_at
-		FROM subscriptions
-		WHERE subscriber_id = $1 AND status = $2
-		ORDER BY subscribed_at DESC
+		SELECT
+			s.id, s.subscriber_id, s.creator_id, s.status, s.subscription_type,
+			s.subscribed_at, s.created_at, s.updated_at,
+			u.username, u.display_name, u.avatar_file_id, u.bio
+		FROM subscriptions s
+		JOIN users u ON u.id = s.creator_id AND u.deleted_at IS NULL
+		WHERE s.subscriber_id = $1 AND s.status = $2
+		ORDER BY s.subscribed_at DESC
 		LIMIT $3 OFFSET $4
 	`
 
@@ -214,26 +276,29 @@ func (r *Repository) GetSubscriptions(ctx context.Context, subscriberID string, 
 	}
 	defer rows.Close()
 
-	var subscriptions []model.Subscription
+	result := make([]CreatorSubscriptionRow, 0)
 	for rows.Next() {
-		var sub model.Subscription
-		err := rows.Scan(
-			&sub.ID,
-			&sub.SubscriberID,
-			&sub.CreatorID,
-			&sub.Status,
-			&sub.SubscriptionType,
-			&sub.SubscribedAt,
-			&sub.CreatedAt,
-			&sub.UpdatedAt,
-		)
-		if err != nil {
+		var row CreatorSubscriptionRow
+		if err := rows.Scan(
+			&row.Subscription.ID,
+			&row.Subscription.SubscriberID,
+			&row.Subscription.CreatorID,
+			&row.Subscription.Status,
+			&row.Subscription.SubscriptionType,
+			&row.Subscription.SubscribedAt,
+			&row.Subscription.CreatedAt,
+			&row.Subscription.UpdatedAt,
+			&row.Username,
+			&row.DisplayName,
+			&row.AvatarFileID,
+			&row.Bio,
+		); err != nil {
 			return nil, 0, err
 		}
-		subscriptions = append(subscriptions, sub)
+		result = append(result, row)
 	}
 
-	return subscriptions, total, rows.Err()
+	return result, total, rows.Err()
 }
 
 // IsSubscribed проверить подписан ли пользователь
@@ -252,26 +317,26 @@ func (r *Repository) IsSubscribed(ctx context.Context, subscriberID, creatorID s
 
 // CreateSubscriptionRequest создать запрос на подписку
 func (r *Repository) CreateSubscriptionRequest(ctx context.Context, req *model.SubscriptionRequest) error {
-	query := `
-		INSERT INTO subscription_requests (
-			id, subscriber_id, creator_id, status, message, created_at, updated_at
-		) VALUES (
-			$1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-		)
-	`
-
-	_, err := r.db.Exec(ctx, query,
-		req.ID,
-		req.SubscriberID,
-		req.CreatorID,
-		req.Status,
-		req.Message,
-	)
-
-	return err
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	query := `INSERT INTO subscription_requests (id, subscriber_id, creator_id, status, message, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`
+	if _, err := tx.Exec(ctx, query, req.ID, req.SubscriberID, req.CreatorID, req.Status, req.Message); err != nil {
+		return err
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.SubscriptionCreated, AggregateType: "subscription_request", AggregateID: req.ID,
+		ActorID: strPtrSub(req.SubscriberID), RecipientUserIDs: []string{req.CreatorID},
+		Payload:        map[string]any{"subscriptionId": req.ID, "subscriberId": req.SubscriberID, "creatorId": req.CreatorID},
+		IdempotencyKey: "subscription-created:" + req.ID, CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
-// GetSubscriptionRequest получить запрос на подписку
 func (r *Repository) GetSubscriptionRequest(ctx context.Context, requestID string) (*model.SubscriptionRequest, error) {
 	query := `
 		SELECT 
@@ -414,11 +479,21 @@ func (r *Repository) ApproveSubscriptionRequest(ctx context.Context, creatorID, 
 		&subscription.SubscriptionType, &subscription.SubscribedAt, &subscription.CreatedAt, &subscription.UpdatedAt); err != nil {
 		return nil, err
 	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.SubscriptionAccepted, AggregateType: "subscription", AggregateID: subscription.ID,
+		ActorID: strPtrSub(creatorID), RecipientUserIDs: []string{subscriberID},
+		Payload:        map[string]any{"subscriptionId": subscription.ID, "requestId": requestID, "subscriberId": subscriberID, "creatorId": creatorID},
+		IdempotencyKey: "subscription-accepted:" + requestID, CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return subscription, nil
 }
+
+func strPtrSub(v string) *string { return &v }
 
 func (r *Repository) RejectSubscriptionRequest(ctx context.Context, creatorID, requestID string) error {
 	const query = `

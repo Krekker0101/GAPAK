@@ -7,12 +7,17 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
+	"github.com/gapak/backend/internal/platform/concurrency"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
+	"github.com/gapak/backend/internal/platform/events"
+	"github.com/gapak/backend/internal/platform/observability"
 )
 
 type Repository struct {
@@ -145,7 +150,6 @@ func (r *Repository) UpdateProfile(ctx context.Context, userID string, req Updat
 	fields := []string{}
 	args := []any{userID}
 	index := 2
-
 	if req.DisplayName != nil {
 		fields = append(fields, "display_name = $"+itoa(index))
 		args = append(args, strings.TrimSpace(*req.DisplayName))
@@ -169,13 +173,42 @@ func (r *Repository) UpdateProfile(ctx context.Context, userID string, req Updat
 	if len(fields) == 0 {
 		return nil
 	}
-
-	query := "UPDATE users SET " + strings.Join(fields, ", ") + ", updated_at = NOW() WHERE id = $1"
-	_, err := r.db.Exec(ctx, query, args...)
-	return err
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := concurrency.NewStore(r.db, "").GuardTx(ctx, tx, "user_profile", userID); err != nil {
+		return err
+	}
+	query := "UPDATE users SET " + strings.Join(fields, ", ") + ", updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
+	if tag, err := tx.Exec(ctx, query, args...); err != nil {
+		return err
+	} else if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.UserUpdated, AggregateType: "user", AggregateID: userID,
+		ActorID: strPtrUser(userID), RecipientUserIDs: []string{userID},
+		Payload: map[string]any{"userId": userID}, IdempotencyKey: "user-updated:" + userID + ":" + uuid.NewString(),
+		CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
+func strPtrUser(v string) *string { return &v }
+
 func (r *Repository) UpdatePrivacy(ctx context.Context, userID string, req UpdatePrivacyRequest) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := concurrency.NewStore(r.db, "").GuardTx(ctx, tx, "user_profile", userID); err != nil {
+		return err
+	}
 	const query = `
 		UPDATE user_privacy_settings
 		SET profile_visibility = $2,
@@ -188,18 +221,10 @@ func (r *Repository) UpdatePrivacy(ctx context.Context, userID string, req Updat
 		    show_online_status = $9,
 		    updated_at = NOW()
 		WHERE user_id = $1`
-	_, err := r.db.Exec(ctx, query,
-		userID,
-		req.ProfileVisibility,
-		req.LastSeenVisibility,
-		req.AllowFriendRequests,
-		req.AllowTrustedInvites,
-		req.SearchableByEmail,
-		req.SearchableByUsername,
-		req.PostDefaultPrivacy,
-		req.ShowOnlineStatus,
-	)
-	return err
+	if _, err := tx.Exec(ctx, query, userID, req.ProfileVisibility, req.LastSeenVisibility, req.AllowFriendRequests, req.AllowTrustedInvites, req.SearchableByEmail, req.SearchableByUsername, req.PostDefaultPrivacy, req.ShowOnlineStatus); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func itoa(value int) string {
@@ -217,10 +242,20 @@ func (r *Repository) GetTheme(ctx context.Context, userID string) (string, error
 }
 
 func (r *Repository) UpdateTheme(ctx context.Context, userID, theme string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := concurrency.NewStore(r.db, "").GuardTx(ctx, tx, "user_profile", userID); err != nil {
+		return err
+	}
 	const query = `
 		INSERT INTO user_settings (user_id, theme, created_at, updated_at)
 		VALUES ($1, $2, NOW(), NOW())
 		ON CONFLICT (user_id) DO UPDATE SET theme = $2, updated_at = NOW()`
-	_, err := r.db.Exec(ctx, query, userID, theme)
-	return err
+	if _, err := tx.Exec(ctx, query, userID, theme); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

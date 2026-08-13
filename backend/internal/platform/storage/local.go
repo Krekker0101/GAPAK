@@ -58,7 +58,7 @@ func (s *LocalStorage) PresignUploadPart(req UploadPartRequest) SignedRequest {
 	}
 	base := strings.TrimRight(s.cfg.PublicBaseURL, "/")
 	if base == "" {
-		base = "https://storage.local"
+		return SignedRequest{Method: "PUT", URL: "", Headers: map[string]string{}, ExpiresAt: time.Time{}}
 	}
 
 	values := url.Values{}
@@ -90,7 +90,7 @@ func (s *LocalStorage) PresignPlayback(req PlaybackRequest) SignedRequest {
 	}
 	base := strings.TrimRight(s.cfg.ProtectedBaseURL, "/")
 	if base == "" {
-		base = "https://storage.local/protected"
+		return SignedRequest{Method: "GET", URL: "", Headers: map[string]string{}, ExpiresAt: time.Time{}}
 	}
 
 	values := url.Values{}

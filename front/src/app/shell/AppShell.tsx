@@ -50,6 +50,8 @@ import { useNetworkState } from '../../shared/ux/useNetworkState';
 import { CommandPalette } from '../../shared/ux/CommandPalette';
 import { Avatar, Badge, IconButton } from '../../shared/design-system/primitives';
 import { DOMAINS_REGISTRY } from '../../domains';
+import { GlobalUploadCenter } from '../../domains/media/GlobalUploadCenter';
+import { UploadRecoveryPrompt } from '../../domains/media/UploadRecoveryPrompt';
 import { PermissionGuard } from '../../shared/permissions/permissions';
 import { NotificationsController } from '../../domains/notifications/NotificationsController';
 import { isNotificationRead } from '../../domains/notifications/notificationsState';
@@ -537,6 +539,10 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         onClose={() => setIsCommandOpen(false)}
         onSelectDomain={onNavigate}
       />
+
+      {/* Global background media-upload status + reload-recovery prompt */}
+      <GlobalUploadCenter />
+      <UploadRecoveryPrompt />
     </div>
   );
 };

@@ -41,6 +41,9 @@ export interface LiveStream {
   createdAt: string;
 }
 
+/** Client-side delivery status for an outbound live-chat message. See docs/REALTIME.md. */
+export type LiveChatMessageStatus = 'pending' | 'sent' | 'failed';
+
 export interface LiveChatMessage {
   id: string;
   streamId: string;
@@ -50,6 +53,10 @@ export interface LiveChatMessage {
   isPinned?: boolean;
   badges?: string[];
   createdAt: string;
+  /** Client-generated idempotency key for outbound messages; absent on system/inbound messages. */
+  clientMessageId?: string;
+  /** Delivery status for outbound messages; absent on system/inbound messages. */
+  status?: LiveChatMessageStatus;
 }
 
 export interface LiveStreamEvent {

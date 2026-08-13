@@ -26,6 +26,7 @@ type Config struct {
 	Worker    WorkerConfig
 	RateLimit RateLimitConfig
 	Metrics   MetricsConfig
+	Push      PushConfig
 }
 
 type AppConfig struct {
@@ -85,9 +86,10 @@ type OAuthProviderConfig struct {
 }
 
 type OAuthConfig struct {
-	Google   OAuthProviderConfig
-	GitHub   OAuthProviderConfig
-	Facebook OAuthProviderConfig
+	Google              OAuthProviderConfig
+	GitHub              OAuthProviderConfig
+	Facebook            OAuthProviderConfig
+	FrontendRedirectURL string
 }
 
 type AnonymityConfig struct {
@@ -153,6 +155,42 @@ type WorkerConfig struct {
 type MetricsConfig struct {
 	Enabled bool
 	Token   string
+}
+
+type PushConfig struct {
+	Enabled      bool
+	Providers    []string
+	WebPush      WebPushConfig
+	FCM          FCMConfig
+	APNs         APNsConfig
+	PollInterval time.Duration
+	BatchSize    int
+	MaxAttempts  int
+	BaseRetry    time.Duration
+	MaxRetry     time.Duration
+}
+
+type WebPushConfig struct {
+	VAPIDSubject            string
+	VAPIDPublicKeyBase64URL string
+	VAPIDPrivateKeyPEM      string
+	AudienceOverride        string
+}
+
+type FCMConfig struct {
+	ProjectID     string
+	ClientEmail   string
+	PrivateKeyPEM string
+	TokenEndpoint string
+	APIBaseURL    string
+}
+
+type APNsConfig struct {
+	TeamID        string
+	KeyID         string
+	PrivateKeyPEM string
+	BundleID      string
+	Production    bool
 }
 
 type RateLimitConfig struct {
@@ -239,6 +277,7 @@ func Load() (Config, error) {
 				RedirectURI:  getEnv("OAUTH_FACEBOOK_REDIRECT_URI", strings.TrimRight(getEnv("APP_BASE_URL", "http://localhost:8080"), "/")+"/api/v1/auth/callback/facebook"),
 				Scopes:       []string{"email", "public_profile"},
 			},
+			FrontendRedirectURL: getEnv("OAUTH_FRONTEND_REDIRECT_URL", ""),
 		},
 		Anonymity: AnonymityConfig{
 			Enabled:                   getEnvBool("ANONYMITY_ENABLED", true),
@@ -297,6 +336,18 @@ func Load() (Config, error) {
 			CleanupInterval:         getEnvDuration("WORKER_MEDIA_CLEANUP_INTERVAL", 30*time.Minute),
 		},
 		Metrics: MetricsConfig{Enabled: getEnvBool("METRICS_ENABLED", true), Token: getEnv("METRICS_TOKEN", "")},
+		Push: PushConfig{
+			Enabled:      getEnvBool("PUSH_ENABLED", true),
+			Providers:    getEnvSlice("PUSH_PROVIDERS", nil),
+			WebPush:      WebPushConfig{VAPIDSubject: getEnv("PUSH_WEBPUSH_VAPID_SUBJECT", ""), VAPIDPublicKeyBase64URL: getEnv("PUSH_WEBPUSH_VAPID_PUBLIC_KEY", ""), VAPIDPrivateKeyPEM: getEnv("PUSH_WEBPUSH_VAPID_PRIVATE_KEY_PEM", ""), AudienceOverride: getEnv("PUSH_WEBPUSH_AUDIENCE", "")},
+			FCM:          FCMConfig{ProjectID: getEnv("PUSH_FCM_PROJECT_ID", ""), ClientEmail: getEnv("PUSH_FCM_CLIENT_EMAIL", ""), PrivateKeyPEM: getEnv("PUSH_FCM_PRIVATE_KEY_PEM", ""), TokenEndpoint: getEnv("PUSH_FCM_TOKEN_ENDPOINT", "https://oauth2.googleapis.com/token"), APIBaseURL: getEnv("PUSH_FCM_API_BASE_URL", "https://fcm.googleapis.com/v1/projects")},
+			APNs:         APNsConfig{TeamID: getEnv("PUSH_APNS_TEAM_ID", ""), KeyID: getEnv("PUSH_APNS_KEY_ID", ""), PrivateKeyPEM: getEnv("PUSH_APNS_PRIVATE_KEY_PEM", ""), BundleID: getEnv("PUSH_APNS_BUNDLE_ID", ""), Production: getEnvBool("PUSH_APNS_PRODUCTION", true)},
+			PollInterval: getEnvDuration("PUSH_WORKER_POLL_INTERVAL", 2*time.Second),
+			BatchSize:    getEnvInt("PUSH_WORKER_BATCH_SIZE", 20),
+			MaxAttempts:  getEnvInt("PUSH_WORKER_MAX_ATTEMPTS", 8),
+			BaseRetry:    getEnvDuration("PUSH_WORKER_BASE_RETRY", 5*time.Second),
+			MaxRetry:     getEnvDuration("PUSH_WORKER_MAX_RETRY", 30*time.Minute),
+		},
 		RateLimit: RateLimitConfig{
 			GlobalWindow:   getEnvDuration("RATE_LIMIT_GLOBAL_WINDOW", time.Minute),
 			GlobalMax:      int64(getEnvInt("RATE_LIMIT_GLOBAL_MAX", 120)),
@@ -318,11 +369,25 @@ func Load() (Config, error) {
 		cfg.Storage.ProtectedBaseURL = strings.TrimRight(cfg.App.BaseURL, "/") + "/api/v1/media/protected"
 	}
 
+	if strings.TrimSpace(cfg.OAuth.FrontendRedirectURL) == "" && len(cfg.App.CORSOrigins) > 0 {
+		cfg.OAuth.FrontendRedirectURL = strings.TrimRight(strings.TrimSpace(cfg.App.CORSOrigins[0]), "/") + "/"
+	}
+
 	if err := validate(cfg); err != nil {
 		return Config{}, err
 	}
 
 	return cfg, nil
+}
+
+func containsOrigin(origins []string, target string) bool {
+	target = strings.TrimRight(strings.TrimSpace(target), "/")
+	for _, origin := range origins {
+		if strings.EqualFold(strings.TrimRight(strings.TrimSpace(origin), "/"), target) {
+			return true
+		}
+	}
+	return false
 }
 
 func rejectInsecureProductionDefaults(cfg Config) error {
@@ -479,7 +544,59 @@ func getEnvSlice(key string, fallback []string) []string {
 	return result
 }
 
+func validateTypedEnvironment() error {
+	ints := []string{
+		"DATABASE_MAX_OPEN_CONNS", "DATABASE_MIN_OPEN_CONNS", "MEDIA_FFMPEG_CONCURRENCY", "MEDIA_FFMPEG_THREADS",
+		"RATE_LIMIT_AUTH_MAX", "RATE_LIMIT_GLOBAL_MAX", "RATE_LIMIT_PASSWORD_MAX", "TOTP_WINDOW", "WORKER_BATCH_SIZE", "WORKER_MEDIA_CONCURRENCY", "PUSH_WORKER_BATCH_SIZE", "PUSH_WORKER_MAX_ATTEMPTS",
+	}
+	int64s := []string{"MEDIA_FFMPEG_MAX_OUTPUT_BYTES", "STORAGE_MAX_UPLOAD_BYTES", "STORAGE_MULTIPART_PART_SIZE_BYTES"}
+	bools := []string{
+		"ANONYMITY_ALLOW_ANONYMOUS_SIGNUP", "ANONYMITY_ALLOW_EMAIL_SIGNUP", "ANONYMITY_ALLOW_PASSWORD_RECOVERY", "ANONYMITY_ENABLED",
+		"ANONYMITY_EXPOSE_EMAIL_IN_RESPONSES", "ANONYMITY_LOG_NETWORK_METADATA", "ANONYMITY_REQUIRE_PSEUDONYMOUS_SIGNUP", "ANONYMITY_STORE_DEVICE_FINGERPRINT",
+		"ANONYMITY_STORE_IP", "ANONYMITY_STORE_USER_AGENT", "ANONYMITY_TRUST_PROXY_HEADERS", "AUTO_MIGRATE", "COOKIE_SECURE", "METRICS_ENABLED", "REDIS_ENABLED", "PUSH_ENABLED", "PUSH_APNS_PRODUCTION",
+	}
+	durations := []string{
+		"DATABASE_MAX_CONN_IDLE_TIME", "DATABASE_MAX_CONN_LIFETIME", "HTTP_IDLE_TIMEOUT", "HTTP_READ_TIMEOUT", "HTTP_WRITE_TIMEOUT", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL",
+		"LIVE_REPLAY_RETENTION", "MEDIA_FFMPEG_MAX_DURATION", "MEDIA_FFMPEG_TIMEOUT", "QUEUE_CLAIM_TTL", "RATE_LIMIT_AUTH_WINDOW", "RATE_LIMIT_GLOBAL_WINDOW",
+		"RATE_LIMIT_PASSWORD_WINDOW", "STORAGE_PLAYBACK_GRANT_TTL", "STORAGE_SIGNED_URL_TTL", "STORAGE_UPLOAD_INTENT_TTL", "STORY_DEFAULT_TTL",
+		"WORKER_MEDIA_CLEANUP_INTERVAL", "WORKER_POLL_INTERVAL", "PUSH_WORKER_POLL_INTERVAL", "PUSH_WORKER_BASE_RETRY", "PUSH_WORKER_MAX_RETRY",
+	}
+	for _, key := range ints {
+		if raw, ok := os.LookupEnv(key); ok && strings.TrimSpace(raw) != "" {
+			if _, err := strconv.Atoi(strings.TrimSpace(raw)); err != nil {
+				return fmt.Errorf("%s must be a valid integer: %w", key, err)
+			}
+		}
+	}
+	for _, key := range int64s {
+		if raw, ok := os.LookupEnv(key); ok && strings.TrimSpace(raw) != "" {
+			if _, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err != nil {
+				return fmt.Errorf("%s must be a valid int64: %w", key, err)
+			}
+		}
+	}
+	for _, key := range bools {
+		if raw, ok := os.LookupEnv(key); ok && strings.TrimSpace(raw) != "" {
+			if _, err := strconv.ParseBool(strings.TrimSpace(raw)); err != nil {
+				return fmt.Errorf("%s must be a valid boolean: %w", key, err)
+			}
+		}
+	}
+	for _, key := range durations {
+		if raw, ok := os.LookupEnv(key); ok && strings.TrimSpace(raw) != "" {
+			if _, err := time.ParseDuration(strings.TrimSpace(raw)); err != nil {
+				return fmt.Errorf("%s must be a valid duration: %w", key, err)
+			}
+		}
+	}
+	return nil
+}
+
 func validate(cfg Config) error {
+	if err := validateTypedEnvironment(); err != nil {
+		return err
+	}
+
 	required := map[string]string{
 		"DATABASE_URL": cfg.Database.URL,
 	}
@@ -556,6 +673,20 @@ func validate(cfg Config) error {
 	if len(cfg.App.CORSOrigins) == 0 {
 		return fmt.Errorf("CORS_ORIGINS must contain at least one explicit origin")
 	}
+	frontendRedirect, err := url.Parse(cfg.OAuth.FrontendRedirectURL)
+	if err != nil || frontendRedirect.Host == "" || (frontendRedirect.Path != "/" && frontendRedirect.Path != "") || frontendRedirect.RawQuery != "" || frontendRedirect.Fragment != "" {
+		return fmt.Errorf("OAUTH_FRONTEND_REDIRECT_URL must be a valid frontend origin URL")
+	}
+	if strings.EqualFold(cfg.App.Environment, "production") && !strings.EqualFold(frontendRedirect.Scheme, "https") {
+		return fmt.Errorf("OAUTH_FRONTEND_REDIRECT_URL must use HTTPS in production")
+	}
+	if !containsOrigin(cfg.App.CORSOrigins, strings.TrimRight(cfg.OAuth.FrontendRedirectURL, "/")) {
+		return fmt.Errorf("OAUTH_FRONTEND_REDIRECT_URL must match an allowed CORS origin")
+	}
+	if strings.EqualFold(cfg.App.Environment, "production") && strings.TrimSpace(cfg.Security.CookieDomain) != "" {
+		return fmt.Errorf("COOKIE_DOMAIN must be empty in production for the Vercel-to-Railway cross-site deployment")
+	}
+
 	for _, origin := range cfg.App.CORSOrigins {
 		if origin == "*" {
 			return fmt.Errorf("wildcard CORS origins are not allowed with credentialed auth")
@@ -589,6 +720,35 @@ func validate(cfg Config) error {
 	}
 	if len(decodedKey) != 32 {
 		return fmt.Errorf("ENCRYPTION_KEY_BASE64 must decode to exactly 32 bytes")
+	}
+	if cfg.Push.BatchSize <= 0 || cfg.Push.BatchSize > 500 {
+		return fmt.Errorf("PUSH_WORKER_BATCH_SIZE must be between 1 and 500")
+	}
+	if cfg.Push.MaxAttempts < 1 || cfg.Push.MaxAttempts > 100 {
+		return fmt.Errorf("PUSH_WORKER_MAX_ATTEMPTS must be between 1 and 100")
+	}
+	if cfg.Push.BaseRetry <= 0 || cfg.Push.MaxRetry < cfg.Push.BaseRetry {
+		return fmt.Errorf("invalid push retry configuration")
+	}
+	if cfg.Push.Enabled {
+		for _, provider := range cfg.Push.Providers {
+			switch strings.ToLower(strings.TrimSpace(provider)) {
+			case "webpush":
+				if cfg.Push.WebPush.VAPIDSubject == "" || cfg.Push.WebPush.VAPIDPrivateKeyPEM == "" {
+					return fmt.Errorf("webpush provider requires VAPID subject and private key")
+				}
+			case "fcm":
+				if cfg.Push.FCM.ProjectID == "" || cfg.Push.FCM.ClientEmail == "" || cfg.Push.FCM.PrivateKeyPEM == "" {
+					return fmt.Errorf("fcm provider requires project id, client email and private key")
+				}
+			case "apns":
+				if cfg.Push.APNs.TeamID == "" || cfg.Push.APNs.KeyID == "" || cfg.Push.APNs.PrivateKeyPEM == "" || cfg.Push.APNs.BundleID == "" {
+					return fmt.Errorf("apns provider requires team id, key id, private key and bundle id")
+				}
+			default:
+				return fmt.Errorf("unsupported PUSH_PROVIDERS value: %s", provider)
+			}
+		}
 	}
 	return nil
 }

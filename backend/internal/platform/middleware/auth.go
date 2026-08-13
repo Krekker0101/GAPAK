@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"context"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gapak/backend/internal/platform/auth"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
@@ -12,8 +14,15 @@ import (
 const claimsContextKey = "authClaims"
 
 func RequireAuth(jwtManager *auth.Manager) fiber.Handler {
+	return RequireAuthWithSessionStore(jwtManager, nil)
+}
+
+func RequireAuthWithSessionStore(jwtManager *auth.Manager, db *pgxpool.Pool) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		token := bearerToken(c.Get(fiber.HeaderAuthorization))
+		if token == "" {
+			token = strings.TrimSpace(c.Cookies(auth.AccessCookieName))
+		}
 		if token == "" {
 			return apperrors.ErrUnauthorized
 		}
@@ -21,14 +30,38 @@ func RequireAuth(jwtManager *auth.Manager) fiber.Handler {
 		if err != nil {
 			return apperrors.ErrInvalidToken
 		}
+		if db != nil {
+			active, err := activeSession(c.UserContext(), db, claims.UserID, claims.SessionID)
+			if err != nil {
+				return apperrors.ErrUnauthorized
+			}
+			if !active {
+				return apperrors.ErrInvalidToken
+			}
+		}
 		c.Locals(claimsContextKey, claims)
 		return c.Next()
 	}
 }
 
+func activeSession(ctx context.Context, db *pgxpool.Pool, userID, sessionID string) (bool, error) {
+	var one int
+	err := db.QueryRow(ctx, `
+		SELECT 1 FROM device_sessions
+		WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL AND expires_at > NOW()
+		LIMIT 1`, sessionID, userID).Scan(&one)
+	if err != nil {
+		return false, err
+	}
+	return one == 1, nil
+}
+
 func OptionalAuth(jwtManager *auth.Manager) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		token := bearerToken(c.Get(fiber.HeaderAuthorization))
+		if token == "" {
+			token = strings.TrimSpace(c.Cookies(auth.AccessCookieName))
+		}
 		if token == "" {
 			return c.Next()
 		}

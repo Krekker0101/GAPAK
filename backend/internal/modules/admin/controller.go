@@ -7,6 +7,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 
+	apperrors "github.com/gapak/backend/internal/platform/errors"
 	"github.com/gapak/backend/internal/platform/httpx"
 	"github.com/gapak/backend/internal/platform/middleware"
 )
@@ -47,12 +48,20 @@ func (ctl *Controller) overview(c *fiber.Ctx) error {
 }
 
 func (ctl *Controller) listUsers(c *fiber.Ctx) error {
+	limit, err := intQuery(c, "limit", defaultUserLimit)
+	if err != nil {
+		return err
+	}
+	offset, err := intQuery(c, "offset", 0)
+	if err != nil {
+		return err
+	}
 	response, err := ctl.service.ListUsers(c.UserContext(), ListUsersParams{
 		Search: strings.TrimSpace(c.Query("search")),
 		Role:   strings.TrimSpace(c.Query("role")),
 		Status: strings.TrimSpace(c.Query("status")),
-		Limit:  intQuery(c, "limit", defaultUserLimit),
-		Offset: intQuery(c, "offset", 0),
+		Limit:  limit,
+		Offset: offset,
 	})
 	if err != nil {
 		return err
@@ -107,14 +116,17 @@ func (ctl *Controller) updatePage(c *fiber.Ctx) error {
 	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
-func intQuery(c *fiber.Ctx, key string, fallback int) int {
+func intQuery(c *fiber.Ctx, key string, fallback int) (int, error) {
 	value := strings.TrimSpace(c.Query(key))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
-		return fallback
+		return 0, apperrors.New(400, "admin.invalid_query", key+" must be an integer")
 	}
-	return parsed
+	if parsed < 0 {
+		return 0, apperrors.New(400, "admin.invalid_query", key+" must be non-negative")
+	}
+	return parsed, nil
 }

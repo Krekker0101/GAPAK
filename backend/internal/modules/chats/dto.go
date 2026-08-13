@@ -30,23 +30,23 @@ type UpdateChatRequest struct {
 
 type SendMessageRequest struct {
 	ClientMessageID     string                      `json:"clientMessageId" validate:"required,min=8,max=128"`
-	SenderDeviceID      string                      `json:"senderDeviceId" validate:"omitempty,uuid"`
+	SenderDeviceID      string                      `json:"senderDeviceId" validate:"required,uuid"`
 	Type                string                      `json:"type" validate:"required,oneof=TEXT IMAGE VIDEO AUDIO DOCUMENT VOICE STICKER SYSTEM LOCATION CONTACT"`
-	Ciphertext          string                      `json:"ciphertext" validate:"required,min=1,max=50000"`
-	Nonce               string                      `json:"nonce" validate:"required,min=8,max=255"`
+	Ciphertext          string                      `json:"ciphertext" validate:"required,min=32,max=50000"`
+	Nonce               string                      `json:"nonce" validate:"required,len=24"`
 	SenderKeyID         string                      `json:"senderKeyId" validate:"required,min=3,max=255"`
-	EncryptionProtocol  string                      `json:"encryptionProtocol" validate:"omitempty,oneof=SIGNAL OMEMO TRUSTED_CHAT NONE"`
+	EncryptionProtocol  string                      `json:"encryptionProtocol" validate:"required,eq=TRUSTED_CHAT"`
 	EncryptionAlgorithm string                      `json:"encryptionAlgorithm" validate:"omitempty,max=64"`
 	AssociatedData      string                      `json:"associatedData" validate:"omitempty,max=4096"`
 	RatchetCounter      *int64                      `json:"ratchetCounter" validate:"omitempty,min=0"`
-	AuthenticationTag   string                      `json:"authenticationTag" validate:"omitempty,max=255"`
+	AuthenticationTag   string                      `json:"authenticationTag" validate:"required,len=128"`
 	Content             string                      `json:"content" validate:"omitempty,max=50000"`
 	Metadata            map[string]interface{}      `json:"metadata"`
 	ReplyToMessageID    string                      `json:"replyToMessageId" validate:"omitempty,uuid"`
 	ForwardedFromID     string                      `json:"forwardedFromId" validate:"omitempty,uuid"`
 	ExpiresInSeconds    *int                        `json:"expiresInSeconds" validate:"omitempty,min=1,max=604800"` // Max 7 days
 	Attachments         []CreateAttachmentRequest   `json:"attachments"`
-	KeyEnvelopes        []MessageKeyEnvelopeRequest `json:"keyEnvelopes" validate:"omitempty,dive"`
+	KeyEnvelopes        []MessageKeyEnvelopeRequest `json:"keyEnvelopes" validate:"required,min=1,max=100,dive"`
 }
 
 type MessageKeyEnvelopeRequest struct {
@@ -73,14 +73,16 @@ type CreateAttachmentRequest struct {
 }
 
 type EditMessageRequest struct {
-	Ciphertext         string                      `json:"ciphertext" validate:"required,min=1,max=50000"`
-	Nonce              string                      `json:"nonce" validate:"required,min=8,max=255"`
-	Content            string                      `json:"content" validate:"omitempty,max=50000"`
-	Metadata           map[string]interface{}      `json:"metadata"`
-	EncryptionProtocol string                      `json:"encryptionProtocol" validate:"omitempty,oneof=SIGNAL OMEMO TRUSTED_CHAT NONE"`
-	AssociatedData     string                      `json:"associatedData" validate:"omitempty,max=4096"`
-	RatchetCounter     *int64                      `json:"ratchetCounter" validate:"omitempty,min=0"`
-	KeyEnvelopes       []MessageKeyEnvelopeRequest `json:"keyEnvelopes" validate:"omitempty,dive"`
+	Ciphertext          string                      `json:"ciphertext" validate:"required,min=32,max=50000"`
+	Nonce               string                      `json:"nonce" validate:"required,len=24"`
+	Content             string                      `json:"content" validate:"omitempty,max=50000"`
+	Metadata            map[string]interface{}      `json:"metadata"`
+	EncryptionProtocol  string                      `json:"encryptionProtocol" validate:"omitempty,eq=TRUSTED_CHAT"`
+	EncryptionAlgorithm string                      `json:"encryptionAlgorithm" validate:"omitempty"`
+	AssociatedData      string                      `json:"associatedData" validate:"omitempty,max=4096"`
+	RatchetCounter      *int64                      `json:"ratchetCounter" validate:"omitempty,min=0"`
+	AuthenticationTag   string                      `json:"authenticationTag" validate:"required,len=128"`
+	KeyEnvelopes        []MessageKeyEnvelopeRequest `json:"keyEnvelopes" validate:"omitempty,max=100,dive"`
 }
 
 type RegisterTrustedDeviceRequest struct {

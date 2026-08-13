@@ -11,7 +11,10 @@ import (
 
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
+	"github.com/gapak/backend/internal/platform/concurrency"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
+	"github.com/gapak/backend/internal/platform/events"
+	"github.com/gapak/backend/internal/platform/observability"
 )
 
 type Repository struct {
@@ -62,7 +65,14 @@ func (r *Repository) Create(ctx context.Context, authorID string, req CreateStor
 	if err := r.replaceAudience(ctx, tx, story.ID, req.CustomAudienceUserIDs, story.Privacy, story.ExpiresAt); err != nil {
 		return nil, err
 	}
-
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.StoryCreated, AggregateType: "story", AggregateID: story.ID,
+		ActorID: strPtrStory(authorID), RecipientUserIDs: nil,
+		Payload:        map[string]any{"storyId": story.ID, "mediaFileId": story.MediaFileID},
+		IdempotencyKey: "story-created:" + story.ID, CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -212,46 +222,102 @@ func (r *Repository) ViewerCount(ctx context.Context, storyID string) (int, erro
 }
 
 func (r *Repository) MarkViewed(ctx context.Context, storyID, viewerID string) error {
-	const query = `
-		INSERT INTO story_viewers (story_id, viewer_user_id, viewed_at)
-		VALUES ($1, $2, NOW())
-		ON CONFLICT (story_id, viewer_user_id)
-		DO UPDATE SET viewed_at = NOW()`
-	_, err := r.db.Exec(ctx, query, storyID, viewerID)
-	return err
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	const query = `INSERT INTO story_viewers (story_id, viewer_user_id, viewed_at) VALUES ($1, $2, NOW()) ON CONFLICT (story_id, viewer_user_id) DO UPDATE SET viewed_at = NOW()`
+	if _, err := tx.Exec(ctx, query, storyID, viewerID); err != nil {
+		return err
+	}
+	var authorID string
+	if err := tx.QueryRow(ctx, `SELECT author_id FROM stories WHERE id=$1 AND deleted_at IS NULL`, storyID).Scan(&authorID); err != nil {
+		return err
+	}
+	if authorID != viewerID {
+		if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+			Type: events.StoryViewed, AggregateType: "story", AggregateID: storyID,
+			ActorID: strPtrStory(viewerID), RecipientUserIDs: []string{authorID},
+			Payload:        map[string]any{"storyId": storyID},
+			IdempotencyKey: "story-viewed:" + storyID + ":" + viewerID, CorrelationID: observability.CorrelationID(ctx),
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) React(ctx context.Context, storyID, viewerID string, reaction enums.StoryReactionType) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
 	const query = `
 		INSERT INTO story_viewers (story_id, viewer_user_id, reaction_type, viewed_at, reacted_at)
 		VALUES ($1, $2, $3, NOW(), NOW())
 		ON CONFLICT (story_id, viewer_user_id)
 		DO UPDATE SET reaction_type = EXCLUDED.reaction_type, reacted_at = NOW(), viewed_at = NOW()`
-	_, err := r.db.Exec(ctx, query, storyID, viewerID, string(reaction))
-	return err
+	if _, err := tx.Exec(ctx, query, storyID, viewerID, string(reaction)); err != nil {
+		return err
+	}
+	var authorID string
+	if err := tx.QueryRow(ctx, `SELECT author_id FROM stories WHERE id=$1 AND deleted_at IS NULL`, storyID).Scan(&authorID); err != nil {
+		return err
+	}
+	if authorID != viewerID {
+		if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+			Type: events.StoryReactionCreated, AggregateType: "story", AggregateID: storyID,
+			ActorID: strPtrStory(viewerID), RecipientUserIDs: []string{authorID},
+			Payload:        map[string]any{"storyId": storyID, "reactionType": string(reaction)},
+			IdempotencyKey: "story-reaction-created:" + storyID + ":" + viewerID + ":" + string(reaction), CorrelationID: observability.CorrelationID(ctx),
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
+func strPtrStory(v string) *string { return &v }
+
 func (r *Repository) Highlight(ctx context.Context, authorID, storyID, title string) error {
-	const query = `
-		UPDATE stories
-		SET status = 'HIGHLIGHTED', highlight_title = $3, updated_at = NOW()
-		WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL`
-	tag, err := r.db.Exec(ctx, query, storyID, authorID, title)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	defer tx.Rollback(ctx)
+	if err := concurrency.NewStore(r.db, "").GuardTx(ctx, tx, "story", storyID); err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `UPDATE stories SET status='HIGHLIGHTED', highlight_title=$3, updated_at=NOW() WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL`, storyID, authorID, title)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) ListViewers(ctx context.Context, authorID, storyID string) ([]model.StoryViewer, error) {
+	var exists bool
+	if err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM stories
+			WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL
+		)
+	`, storyID, authorID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, apperrors.ErrNotFound
+	}
+
 	const query = `
 		SELECT sv.story_id, sv.viewer_user_id, sv.reaction_type, sv.viewed_at, sv.reacted_at
 		FROM story_viewers sv
-		JOIN stories s ON s.id = sv.story_id
-		WHERE sv.story_id = $1 AND s.author_id = $2
+		WHERE sv.story_id = $1
 		ORDER BY sv.viewed_at DESC`
 	rows, err := r.db.Query(ctx, query, storyID, authorID)
 	if err != nil {
@@ -276,18 +342,33 @@ func (r *Repository) ListViewers(ctx context.Context, authorID, storyID string) 
 }
 
 func (r *Repository) Delete(ctx context.Context, authorID, storyID string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := concurrency.NewStore(r.db, "").GuardTx(ctx, tx, "story", storyID); err != nil {
+		return err
+	}
 	const query = `
 		UPDATE stories
 		SET deleted_at = NOW(), updated_at = NOW()
 		WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL`
-	tag, err := r.db.Exec(ctx, query, storyID, authorID)
+	tag, err := tx.Exec(ctx, query, storyID, authorID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
 	}
-	return nil
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.StoryDeleted, AggregateType: "story", AggregateID: storyID,
+		ActorID: &authorID, RecipientUserIDs: []string{authorID},
+		Payload: map[string]any{"storyId": storyID}, IdempotencyKey: "story-deleted:" + storyID,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) replaceAudience(ctx context.Context, tx pgx.Tx, storyID string, audience []string, privacy enums.PostPrivacy, expiresAt time.Time) error {

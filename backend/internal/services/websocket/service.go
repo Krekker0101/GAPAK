@@ -2,17 +2,17 @@ package websocket
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	fastws "github.com/fasthttp/websocket"
 	fiberws "github.com/gofiber/websocket/v2"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
@@ -25,10 +25,15 @@ const (
 	maxWebSocketMessageBytes = 1 << 20
 	maxSubscriptionsPerConn  = 100
 	maxSendQueueDepth        = 256
-	authTimeout              = 10 * time.Second
-	readTimeout              = 65 * time.Second
-	pingInterval             = 30 * time.Second
 	writeTimeout             = 10 * time.Second
+	inboundRateWindow        = time.Second
+	inboundRateBurst         = 60
+)
+
+var (
+	authTimeout  = 10 * time.Second
+	readTimeout  = 65 * time.Second
+	pingInterval = 30 * time.Second
 )
 
 // Service handles WebSocket connections and real-time messaging.
@@ -40,6 +45,8 @@ type Service struct {
 	authService     AuthService
 	logger          zerolog.Logger
 	metrics         *observability.Registry
+	stopOnce        sync.Once
+	stopFunc        context.CancelFunc
 }
 
 // ConnectionRegistry manages active WebSocket connections keyed by device ID.
@@ -72,6 +79,9 @@ type Connection struct {
 	closeOnce     sync.Once
 	done          chan struct{}
 	seenEvents    map[string]time.Time
+	rateMu        sync.Mutex
+	rateWindow    time.Time
+	rateCount     int
 }
 
 // MessageService interface for message operations.
@@ -84,6 +94,8 @@ type MessageService interface {
 	MarkAsDelivered(ctx context.Context, userID, chatID, messageID string) (interface{}, error)
 	AssertChatAccess(ctx context.Context, userID, chatID string) error
 	ListChatMemberIDs(ctx context.Context, userID, chatID string) ([]string, error)
+	ValidateDevice(ctx context.Context, userID, deviceID string) error
+	ValidateSession(ctx context.Context, userID, sessionID string) error
 }
 
 // PresenceService interface for presence operations.
@@ -142,15 +154,34 @@ func NewService(
 // events are written to PostgreSQL first and relayed by the worker. Redis is
 // only a fan-out transport; reconnecting clients recover from PostgreSQL.
 func (s *Service) Start(ctx context.Context) {
-	if s.redis == nil {
+	if s.redis == nil || s.stopFunc != nil {
 		return
 	}
-	go s.redisSubscribeLoop(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
+	s.stopFunc = cancel
+	go s.redisSubscribeLoop(runCtx)
+}
+
+// Stop closes active connections with the standard WebSocket Going Away code
+// and stops the instance-local Redis subscriber.
+func (s *Service) Stop(ctx context.Context) {
+	s.stopOnce.Do(func() {
+		if s.stopFunc != nil {
+			s.stopFunc()
+		}
+		for _, conn := range s.connections.snapshot() {
+			conn.close(fastws.CloseGoingAway, "server shutdown")
+		}
+	})
+	select {
+	case <-ctx.Done():
+	case <-time.After(10 * time.Millisecond):
+	}
 }
 
 func (s *Service) redisSubscribeLoop(ctx context.Context) {
 	for ctx.Err() == nil {
-		pubsub := s.redis.PSubscribe(ctx, "chat:*")
+		pubsub := s.redis.PSubscribe(ctx, "chat:*", "notifications:*")
 		_, err := pubsub.Receive(ctx)
 		if err != nil {
 			_ = pubsub.Close()
@@ -190,17 +221,25 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 }
 
 func (s *Service) handleRealtimeEvent(ctx context.Context, event realtimeEnvelope) {
-	if event.ChatID == "" {
+	if event.EventID == "" {
+		return
+	}
+	isNotification := strings.HasPrefix(event.Type, "notification.")
+	if event.ChatID == "" && !isNotification {
 		return
 	}
 	for _, conn := range s.connections.snapshot() {
 		if event.EventID != "" && s.markEventSeen(conn, event.EventID) {
 			continue
 		}
-		if !s.isSubscribed(conn, event.ChatID) {
+		if !isNotification && !s.isSubscribed(conn, event.ChatID) {
 			continue
 		}
-		if event.Type != "chat.message.created" {
+		if isNotification {
+			if !s.isAuthorizedRealtimeRecipient(conn, event) {
+				continue
+			}
+		} else if event.Type != "chat.message.created" {
 			if !s.isAuthorizedRealtimeRecipient(conn, event) {
 				continue
 			}
@@ -295,7 +334,6 @@ func (s *Service) isSubscribed(conn *Connection, chatID string) bool {
 func (s *Service) HandleConnection(c *fiberws.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer c.Close()
 
 	authCtx, authCancel := context.WithTimeout(ctx, authTimeout)
 	userID, deviceID := s.authenticateConnection(authCtx, c)
@@ -311,14 +349,14 @@ func (s *Service) HandleConnection(c *fiberws.Conn) {
 		Conn:          c,
 		Send:          make(chan []byte, maxSendQueueDepth),
 		Subscriptions: make(map[string]bool),
-		CreatedAt:     time.Now(),
-		LastPing:      time.Now(),
+		CreatedAt:     time.Now().UTC(),
+		LastPing:      time.Now().UTC(),
 		done:          make(chan struct{}),
 		seenEvents:    make(map[string]time.Time),
 	}
 
 	if !s.connections.Register(connection) {
-		_ = c.WriteJSON(WebSocketMessage{Type: "error", Data: "connection limit reached"})
+		_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.ClosePolicyViolation, "connection limit reached"), time.Now().Add(time.Second))
 		return
 	}
 	defer s.connections.Unregister(connection.ID)
@@ -348,49 +386,64 @@ func (s *Service) HandleConnection(c *fiberws.Conn) {
 
 func (s *Service) authenticateConnection(ctx context.Context, c *fiberws.Conn) (userID, deviceID string) {
 	if uid, ok := c.Locals("userId").(string); ok && uid != "" {
-		if did, ok := c.Locals("deviceId").(string); ok {
-			return uid, did
+		if sessionID, ok := c.Locals("sessionId").(string); ok && sessionID != "" {
+			if err := s.messageService.ValidateSession(ctx, uid, sessionID); err != nil {
+				_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.ClosePolicyViolation, "session invalid"), time.Now().Add(time.Second))
+				return "", ""
+			}
+			return uid, "session:" + sessionID
 		}
-		return uid, generateDeviceID()
 	}
 
+	// No browser/query/header credentials reached the upgrade middleware.
+	// Require an explicit first-frame auth message within authTimeout.
+	_ = c.SetReadDeadline(time.Now().Add(authTimeout))
 	var authMsg WebSocketMessage
 	if err := c.ReadJSON(&authMsg); err != nil {
-		s.logger.Error().Err(err).Msg("failed to read auth message")
+		if ctx.Err() != nil {
+			_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.ClosePolicyViolation, "authentication timeout"), time.Now().Add(time.Second))
+		} else {
+			_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.CloseProtocolError, "invalid authentication frame"), time.Now().Add(time.Second))
+		}
 		return "", ""
 	}
 
 	if authMsg.Type != "auth" {
-		s.logger.Warn().Str("type", authMsg.Type).Msg("expected auth message first")
-		_ = c.WriteJSON(WebSocketMessage{Type: "error", Data: "authentication required"})
+		_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.ClosePolicyViolation, "authentication required"), time.Now().Add(time.Second))
 		return "", ""
 	}
-
 	authData, ok := authMsg.Data.(map[string]interface{})
 	if !ok {
-		_ = c.WriteJSON(WebSocketMessage{Type: "error", Data: "invalid auth data"})
+		_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.CloseProtocolError, "invalid auth data"), time.Now().Add(time.Second))
 		return "", ""
 	}
-
 	token, ok := authData["token"].(string)
-	if !ok {
-		_ = c.WriteJSON(WebSocketMessage{Type: "error", Data: "token required"})
+	if !ok || strings.TrimSpace(token) == "" {
+		_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.ClosePolicyViolation, "token required"), time.Now().Add(time.Second))
 		return "", ""
 	}
+	did, ok := authData["device_id"].(string)
+	if !ok || strings.TrimSpace(did) == "" {
+		_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.ClosePolicyViolation, "device_id required"), time.Now().Add(time.Second))
+		return "", ""
+	}
+	uid, err := s.authenticateFirstFrame(ctx, token, did)
+	if err != nil {
+		_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.ClosePolicyViolation, err.Error()), time.Now().Add(time.Second))
+		return "", ""
+	}
+	return uid, did
+}
 
+func (s *Service) authenticateFirstFrame(ctx context.Context, token, deviceID string) (string, error) {
 	uid, err := s.authService.ValidateToken(ctx, token)
 	if err != nil {
-		s.logger.Error().Err(err).Msg("authentication failed")
-		_ = c.WriteJSON(WebSocketMessage{Type: "error", Data: "authentication failed"})
-		return "", ""
+		return "", errors.New("authentication failed")
 	}
-
-	did, _ := authData["device_id"].(string)
-	if did == "" {
-		did = generateDeviceID()
+	if err := s.messageService.ValidateDevice(ctx, uid, deviceID); err != nil {
+		return "", errors.New("invalid device")
 	}
-
-	return uid, did
+	return uid, nil
 }
 
 func (s *Service) readPump(ctx context.Context, conn *Connection) {
@@ -422,13 +475,18 @@ func (s *Service) readPump(ctx context.Context, conn *Connection) {
 			break
 		}
 
+		if !conn.allowInboundFrame() {
+			_ = conn.Conn.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.CloseTryAgainLater, "rate limit exceeded"), time.Now().Add(time.Second))
+			break
+		}
+
 		var wsMsg WebSocketMessage
 		if s.metrics != nil {
 			s.metrics.WSMessages.Inc(observability.Label("direction", "inbound"))
 		}
 
 		if err := json.Unmarshal(message, &wsMsg); err != nil {
-			s.logger.Error().Err(err).Msg("failed to unmarshal message")
+			_ = s.enqueue(conn, WebSocketMessage{Type: "error", Data: map[string]interface{}{"code": "INVALID_JSON", "message": "invalid JSON frame"}})
 			continue
 		}
 
@@ -442,7 +500,7 @@ func (s *Service) readPump(ctx context.Context, conn *Connection) {
 			if publicErr.Status >= 500 {
 				message = "Request could not be processed"
 			}
-			_ = s.enqueue(conn, WebSocketMessage{Type: "error", Data: map[string]string{"code": publicErr.Code, "message": message}})
+			_ = s.enqueue(conn, WebSocketMessage{Type: "error", Data: map[string]interface{}{"code": publicErr.Code, "message": message}})
 		}
 	}
 }
@@ -483,8 +541,7 @@ func (s *Service) writePump(conn *Connection) {
 func (s *Service) handleMessage(ctx context.Context, conn *Connection, msg *WebSocketMessage) error {
 	switch msg.Type {
 	case "auth":
-		// Browser clients may send an auth frame immediately after opening even
-		// when the upgrade request was already authenticated via query token.
+		// Duplicate auth frames on an already-authenticated connection are ignored.
 		// Treat duplicate auth frames as idempotent so they do not poison the
 		// connection with an unknown-message error.
 		return nil
@@ -520,6 +577,20 @@ func (s *Service) handleSubscribe(ctx context.Context, conn *Connection, msg *We
 		return err
 	}
 
+	conn.mu.Lock()
+	if conn.Subscriptions[chatID] {
+		conn.mu.Unlock()
+		return nil
+	}
+	if len(conn.Subscriptions) >= maxSubscriptionsPerConn {
+		conn.mu.Unlock()
+		return errors.New("subscription limit reached")
+	}
+	// Reserve the subscription before the history query so concurrent duplicate
+	// subscribe frames cannot both pass the check and enqueue duplicate history.
+	conn.Subscriptions[chatID] = true
+	conn.mu.Unlock()
+
 	var (
 		messages []interface{}
 		err      error
@@ -534,17 +605,12 @@ func (s *Service) handleSubscribe(ctx context.Context, conn *Connection, msg *We
 		messages, err = s.messageService.GetMessages(ctx, conn.UserID, chatID, 50, nil)
 	}
 	if err != nil {
+		conn.mu.Lock()
+		delete(conn.Subscriptions, chatID)
+		conn.mu.Unlock()
 		s.logger.Error().Err(err).Str("chat_id", chatID).Msg("failed to recover chat messages")
 		return err
 	}
-
-	conn.mu.Lock()
-	if len(conn.Subscriptions) >= maxSubscriptionsPerConn && !conn.Subscriptions[chatID] {
-		conn.mu.Unlock()
-		return errors.New("subscription limit reached")
-	}
-	conn.Subscriptions[chatID] = true
-	conn.mu.Unlock()
 
 	response := WebSocketMessage{
 		ID:   generateConnectionID(),
@@ -829,17 +895,20 @@ func parseSequence(value interface{}) (int64, bool) {
 }
 
 func generateConnectionID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("conn_%d", time.Now().UnixNano())
-	}
-	return "conn_" + hex.EncodeToString(b)
+	return "conn_" + uuid.NewString()
 }
 
-func generateDeviceID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("device_%d", time.Now().UnixNano())
+func (c *Connection) allowInboundFrame() bool {
+	now := time.Now()
+	c.rateMu.Lock()
+	defer c.rateMu.Unlock()
+	if c.rateWindow.IsZero() || now.Sub(c.rateWindow) >= inboundRateWindow {
+		c.rateWindow = now
+		c.rateCount = 0
 	}
-	return "device_" + hex.EncodeToString(b)
+	if c.rateCount >= inboundRateBurst {
+		return false
+	}
+	c.rateCount++
+	return true
 }

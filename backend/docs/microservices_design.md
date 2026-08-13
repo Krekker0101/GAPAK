@@ -1,3 +1,5 @@
+> **AUTHORITATIVE STATUS (2026-08-12):** Historical architecture proposal. It is not evidence of implemented cryptographic protocols. The production encrypted-chat implementation is the **GAPAK E2EE protocol v1**.
+
 # GAPAK Messaging System - Microservices Design
 
 ## Service Overview

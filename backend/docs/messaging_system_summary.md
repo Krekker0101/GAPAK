@@ -1,3 +1,5 @@
+> **AUTHORITATIVE STATUS (2026-08-12):** Historical implementation summary. Its cryptographic sections are non-authoritative. Production chat encryption is the **GAPAK E2EE protocol v1**; no Signal Protocol, X3DH, or Double Ratchet implementation is claimed.
+
 # GAPAK Messaging System - Implementation Summary
 
 ## Overview

@@ -35,6 +35,8 @@ tags:
     description: Privacy-aware live rooms, live chat, replay foundations, and realtime event flows.
   - name: Battles
     description: Live duel challenges, rounds, voting, reactions, and replay/history foundations.
+  - name: Synchronization
+    description: Versioned cross-domain delta synchronization and replay.
   - name: Moderation
     description: Safety and reporting architecture that preserves the privacy model.
 components:
@@ -43,7 +45,55 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    accessCookie:
+      type: apiKey
+      in: cookie
+      name: gapak_at
   schemas:
+    SyncChange:
+      type: object
+      required: [id, entityType, operation, revision]
+      properties:
+        id: { type: string, format: uuid }
+        entityType: { type: string }
+        operation: { type: string, enum: [upsert, readAll] }
+        revision: { type: integer, format: int64 }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: string, format: date-time }
+        data: { type: object, additionalProperties: true }
+    SyncResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [cursor, hasMore, changes, deleted]
+          properties:
+            cursor: { type: string }
+            nextCursor: { type: string }
+            hasMore: { type: boolean }
+            changes:
+              type: object
+              properties:
+                users: { type: array, items: { $ref: '#/components/schemas/SyncChange' } }
+                connections: { type: array, items: { $ref: '#/components/schemas/SyncChange' } }
+                chats: { type: array, items: { $ref: '#/components/schemas/SyncChange' } }
+                messages: { type: array, items: { $ref: '#/components/schemas/SyncChange' } }
+                notifications: { type: array, items: { $ref: '#/components/schemas/SyncChange' } }
+                stories: { type: array, items: { $ref: '#/components/schemas/SyncChange' } }
+                subscriptions: { type: array, items: { $ref: '#/components/schemas/SyncChange' } }
+                live: { type: array, items: { $ref: '#/components/schemas/SyncChange' } }
+            deleted:
+              type: array
+              items:
+                type: object
+                required: [id, entityType, revision]
+                properties:
+                  id: { type: string, format: uuid }
+                  entityType: { type: string }
+                  revision: { type: integer, format: int64 }
+                  deletedAt: { type: string, format: date-time }
     RegisterRequest:
       type: object
       required: [username, displayName, password]
@@ -165,7 +215,37 @@ components:
         targetId: { type: string, format: uuid }
         reason: { type: string, enum: [HARASSMENT, SPAM, ILLEGAL_CONTENT, IMPERSONATION] }
         description: { type: string }
+x-gapak-idempotency:
+  header: X-Idempotency-Key
+  behavior: For authenticated mutations, a successful completed response is replayed for the same key; in-flight duplicates return 409.
 paths:
+  /api/v1/sync:
+    get:
+      tags: [Synchronization]
+      summary: Versioned cross-domain synchronization
+      security:
+        - bearerAuth: []
+        - accessCookie: []
+      parameters:
+        - in: query
+          name: cursor
+          required: false
+          schema: { type: string, maxLength: 2048 }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Synchronization changes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResponse'
+        '400':
+          description: Invalid or expired cursor
+        '401':
+          description: Unauthorized
   /api/v1/auth/register:
     post:
       tags: [Auth]
@@ -208,14 +288,45 @@ paths:
           name: X-CSRF-Token
           schema: { type: string }
       responses:
-        '200': { description: New access and refresh tokens }
+        '200': { description: New access token plus rotated HttpOnly refresh cookie; refresh token is never present in the JSON body }
   /api/v1/auth/logout:
     post:
       tags: [Auth]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { accessCookie: [] }]
       summary: Logout current or all sessions
       responses:
         '200': { description: Logout completed }
+  /api/v1/auth/oauth/{provider}:
+    get:
+      tags: [Auth]
+      summary: Return the provider authorization URL
+      parameters:
+        - in: path
+          name: provider
+          required: true
+          schema: { type: string, enum: [google, github, facebook] }
+      responses:
+        '200': { description: OAuth authorization URL }
+  /api/v1/auth/callback/{provider}:
+    get:
+      tags: [Auth]
+      summary: Complete the OAuth callback, establish the server session, then redirect to the configured frontend origin
+      parameters:
+        - in: path
+          name: provider
+          required: true
+          schema: { type: string, enum: [google, github, facebook] }
+        - in: query
+          name: code
+          required: true
+          schema: { type: string }
+        - in: query
+          name: state
+          required: true
+          schema: { type: string }
+      responses:
+        '307': { description: Redirect to the configured frontend origin after session establishment }
+        '400': { description: Invalid OAuth state or missing authorization code }
   /api/v1/auth/forgot-password:
     post:
       tags: [Auth]
@@ -443,6 +554,22 @@ paths:
       summary: Create or reuse E2EE-friendly private dialog
       responses:
         '201': { description: Chat created or reused }
+  /api/v1/chats/pre-key-bundles/{userId}:
+    get:
+      tags: [Chats]
+      security: [{ bearerAuth: [] }]
+      summary: Get the authoritative E2EE pre-key bundle for a recipient user
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Pre-key bundle returned in the standard success envelope }
+        '400': { description: Invalid userId }
+        '401': { description: Authentication required }
+        '403': { description: Recipient is not visible to the current user }
+        '404': { description: Recipient has no usable trusted device bundle }
   /api/v1/chats/{chatId}/messages:
     get:
       tags: [Chats]
@@ -621,6 +748,14 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         '200': { description: Access data }
+  /api/v1/subscriptions/following:
+    get:
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      summary: Return the complete list of creators followed by the current user
+      responses:
+        '200': { description: Following list; `data` is a JSON array inside the standard success envelope }
+        '401': { description: Authentication required }
   /api/v1/stories/feed:
     get:
       tags: [Stories]
@@ -769,3 +904,6 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         '200': { description: Report resolved }
+
+# Frontend compatibility additions (2026-08-12)
+# The existing OpenAPI document remains the source of general API descriptions.

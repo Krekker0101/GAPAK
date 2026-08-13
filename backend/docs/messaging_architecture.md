@@ -1,3 +1,5 @@
+> **AUTHORITATIVE STATUS (2026-08-12):** Architectural background document. Current encrypted messaging must be interpreted through the **GAPAK E2EE protocol v1** contract; this document does not establish Signal/X3DH/Double Ratchet support.
+
 # GAPAK Messaging System Architecture
 
 ## Overview

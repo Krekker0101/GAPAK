@@ -63,7 +63,11 @@ func (s *Service) CreateUploadSession(ctx context.Context, ownerID string, req C
 		return UploadSessionResponse{}, err
 	}
 
-	return s.toUploadSessionResponse(session, min(totalParts, 3)), nil
+	response, err := s.toUploadSessionResponse(session, min(totalParts, 3))
+	if err != nil {
+		return UploadSessionResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) GetUploadSession(ctx context.Context, ownerID, sessionID string) (UploadSessionResponse, error) {
@@ -71,7 +75,11 @@ func (s *Service) GetUploadSession(ctx context.Context, ownerID, sessionID strin
 	if err != nil {
 		return UploadSessionResponse{}, err
 	}
-	return s.toUploadSessionResponse(session, 0), nil
+	response, err := s.toUploadSessionResponse(session, 0)
+	if err != nil {
+		return UploadSessionResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) RequestUploadPart(ctx context.Context, ownerID, sessionID string, req RequestUploadPartRequest) (UploadPartGrantResponse, error) {
@@ -86,17 +94,18 @@ func (s *Service) RequestUploadPart(ctx context.Context, ownerID, sessionID stri
 		return UploadPartGrantResponse{}, apperrors.New(400, "media.part_number_out_of_range", "Requested upload part exceeds total parts for this session")
 	}
 
-	return UploadPartGrantResponse{
-		PartNumber: req.PartNumber,
-		Request: s.toSignedRequest(s.storage.PresignUploadPart(storage.UploadPartRequest{
-			Bucket:          session.Bucket,
-			ObjectKey:       session.ObjectKey,
-			UploadSessionID: session.ID,
-			PartNumber:      req.PartNumber,
-			ContentType:     session.MimeType,
-			ExpiresAt:       time.Now().UTC().Add(s.config.Storage.SignedURLTTL),
-		})),
-	}, nil
+	signed, err := s.signedRequest(s.storage.PresignUploadPart(storage.UploadPartRequest{
+		Bucket:          session.Bucket,
+		ObjectKey:       session.ObjectKey,
+		UploadSessionID: session.ID,
+		PartNumber:      req.PartNumber,
+		ContentType:     session.MimeType,
+		ExpiresAt:       time.Now().UTC().Add(s.config.Storage.SignedURLTTL),
+	}))
+	if err != nil {
+		return UploadPartGrantResponse{}, err
+	}
+	return UploadPartGrantResponse{PartNumber: req.PartNumber, Request: signed}, nil
 }
 
 func (s *Service) CompleteUploadSession(ctx context.Context, ownerID, sessionID string, req CompleteUploadSessionRequest) (UploadSessionResponse, error) {
@@ -144,7 +153,11 @@ func (s *Service) CompleteUploadSession(ctx context.Context, ownerID, sessionID 
 		}
 	}
 
-	return s.toUploadSessionResponse(session, 0), nil
+	response, err := s.toUploadSessionResponse(session, 0)
+	if err != nil {
+		return UploadSessionResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) AbortUploadSession(ctx context.Context, ownerID, sessionID string) (AcceptedResponse, error) {
@@ -181,19 +194,19 @@ func (s *Service) CreatePlaybackGrant(ctx context.Context, viewerID, mediaID str
 	if err != nil {
 		return PlaybackGrantResponse{}, err
 	}
+	signed, err := s.signedRequest(s.storage.PresignPlayback(storage.PlaybackRequest{
+		Bucket:       mediaFile.Bucket,
+		ObjectKey:    mediaFile.ObjectKey,
+		ViewerUserID: viewerID,
+		GrantID:      grant.ID,
+		ExpiresAt:    grant.ExpiresAt,
+	}))
+	if err != nil {
+		return PlaybackGrantResponse{}, err
+	}
 	response := PlaybackGrantResponse{
-		ID:        grant.ID,
-		Status:    string(grant.Status),
-		MaxViews:  grant.MaxViews,
-		UsedViews: grant.UsedViews,
-		ExpiresAt: grant.ExpiresAt,
-		Request: s.toSignedRequest(s.storage.PresignPlayback(storage.PlaybackRequest{
-			Bucket:       mediaFile.Bucket,
-			ObjectKey:    mediaFile.ObjectKey,
-			ViewerUserID: viewerID,
-			GrantID:      grant.ID,
-			ExpiresAt:    grant.ExpiresAt,
-		})),
+		ID: grant.ID, Status: string(grant.Status), MaxViews: grant.MaxViews,
+		UsedViews: grant.UsedViews, ExpiresAt: grant.ExpiresAt, Request: signed,
 	}
 	if strings.HasPrefix(mediaFile.MimeType, "video/") {
 		if aggregate, err := s.repo.GetAggregate(ctx, viewerID, mediaID); err == nil && aggregate.VideoAsset != nil {
@@ -206,25 +219,32 @@ func (s *Service) CreatePlaybackGrant(ctx context.Context, viewerID, mediaID str
 				if strings.HasSuffix(strings.ToLower(variant.PlaylistObjectKey), ".m3u8") {
 					hasHLSVariants = true
 				}
-				response.VariantRequests[variant.Label] = s.toSignedRequest(s.storage.PresignPlayback(storage.PlaybackRequest{
+				signedVariant, err := s.signedRequest(s.storage.PresignPlayback(storage.PlaybackRequest{
 					Bucket:       mediaFile.Bucket,
 					ObjectKey:    variant.PlaylistObjectKey,
 					ViewerUserID: viewerID,
 					GrantID:      grant.ID,
 					ExpiresAt:    grant.ExpiresAt,
 				}))
+				if err != nil {
+					return PlaybackGrantResponse{}, err
+				}
+				response.VariantRequests[variant.Label] = signedVariant
 			}
 			if len(response.VariantRequests) == 0 {
 				response.VariantRequests = nil
 			}
 			if hasHLSVariants && aggregate.VideoAsset.MasterPlaylistKey != nil && strings.TrimSpace(*aggregate.VideoAsset.MasterPlaylistKey) != "" {
-				adaptive := s.toSignedRequest(s.storage.PresignPlayback(storage.PlaybackRequest{
+				adaptive, err := s.signedRequest(s.storage.PresignPlayback(storage.PlaybackRequest{
 					Bucket:       mediaFile.Bucket,
 					ObjectKey:    *aggregate.VideoAsset.MasterPlaylistKey,
 					ViewerUserID: viewerID,
 					GrantID:      grant.ID,
 					ExpiresAt:    grant.ExpiresAt,
 				}))
+				if err != nil {
+					return PlaybackGrantResponse{}, err
+				}
 				response.AdaptiveRequest = &adaptive
 			}
 		}
@@ -240,29 +260,10 @@ func (s *Service) CreateIntent(ctx context.Context, ownerID string, req CreateUp
 }
 
 func (s *Service) Access(ctx context.Context, ownerID, mediaID string) (UploadIntentResponse, error) {
-	aggregate, err := s.repo.GetAggregate(ctx, ownerID, mediaID)
-	if err != nil {
-		return UploadIntentResponse{}, err
-	}
-	if aggregate.Media.OwnerID != ownerID {
-		// The legacy endpoint returns internal storage coordinates and is an
-		// upload-management surface, not a public playback surface. Never expose
-		// object keys to a non-owner.
-		return UploadIntentResponse{}, apperrors.ErrForbidden
-	}
-	response := UploadIntentResponse{
-		ID:          aggregate.Media.ID,
-		MediaFileID: aggregate.Media.ID,
-		Purpose:     string(enums.UploadPurposePostAttachment),
-		Status:      string(aggregate.Media.Status),
-		Bucket:      aggregate.Media.Bucket,
-		ObjectKey:   aggregate.Media.ObjectKey,
-		FileName:    deref(aggregate.Media.OriginalName),
-		MimeType:    aggregate.Media.MimeType,
-		SizeBytes:   aggregate.Media.SizeBytes,
-		ExpiresAt:   time.Now().UTC().Add(s.config.Storage.SignedURLTTL),
-	}
-	return response, nil
+	_ = ctx
+	_ = ownerID
+	_ = mediaID
+	return UploadIntentResponse{}, apperrors.New(410, "media.legacy_access_deprecated", "Legacy media access endpoint is deprecated; use playback grants or upload sessions")
 }
 
 func (s *Service) Finalize(ctx context.Context, ownerID, sessionID string, req FinalizeUploadRequest) (AcceptedResponse, error) {
@@ -298,7 +299,7 @@ func (s *Service) storageProvider() enums.StorageProvider {
 	}
 }
 
-func (s *Service) toUploadSessionResponse(session *model.UploadSession, grantCount int) UploadSessionResponse {
+func (s *Service) toUploadSessionResponse(session *model.UploadSession, grantCount int) (UploadSessionResponse, error) {
 	response := UploadSessionResponse{
 		ID:            session.ID,
 		MediaFileID:   session.MediaFileID,
@@ -316,20 +317,21 @@ func (s *Service) toUploadSessionResponse(session *model.UploadSession, grantCou
 	if grantCount > 0 {
 		response.PartGrants = make([]UploadPartGrantResponse, 0, grantCount)
 		for partNumber := 1; partNumber <= grantCount; partNumber++ {
-			response.PartGrants = append(response.PartGrants, UploadPartGrantResponse{
-				PartNumber: partNumber,
-				Request: s.toSignedRequest(s.storage.PresignUploadPart(storage.UploadPartRequest{
-					Bucket:          session.Bucket,
-					ObjectKey:       session.ObjectKey,
-					UploadSessionID: session.ID,
-					PartNumber:      partNumber,
-					ContentType:     session.MimeType,
-					ExpiresAt:       time.Now().UTC().Add(s.config.Storage.SignedURLTTL),
-				})),
-			})
+			signed, err := s.signedRequest(s.storage.PresignUploadPart(storage.UploadPartRequest{
+				Bucket:          session.Bucket,
+				ObjectKey:       session.ObjectKey,
+				UploadSessionID: session.ID,
+				PartNumber:      partNumber,
+				ContentType:     session.MimeType,
+				ExpiresAt:       time.Now().UTC().Add(s.config.Storage.SignedURLTTL),
+			}))
+			if err != nil {
+				return UploadSessionResponse{}, err
+			}
+			response.PartGrants = append(response.PartGrants, UploadPartGrantResponse{PartNumber: partNumber, Request: signed})
 		}
 	}
-	return response
+	return response, nil
 }
 
 func (s *Service) toMediaAssetResponse(viewerID string, aggregate *MediaAggregate) MediaAssetResponse {
@@ -417,13 +419,14 @@ func (s *Service) toMediaAssetResponse(viewerID string, aggregate *MediaAggregat
 	return response
 }
 
-func (s *Service) toSignedRequest(request storage.SignedRequest) SignedRequestResponse {
-	return SignedRequestResponse{
-		Method:    request.Method,
-		URL:       request.URL,
-		Headers:   request.Headers,
-		ExpiresAt: request.ExpiresAt,
+func (s *Service) signedRequest(request storage.SignedRequest) (SignedRequestResponse, error) {
+	if strings.TrimSpace(request.URL) == "" || request.ExpiresAt.IsZero() || !request.ExpiresAt.After(time.Now().UTC()) {
+		return SignedRequestResponse{}, apperrors.New(503, "media.signed_url_unavailable", "Storage provider could not issue a valid signed URL")
 	}
+	if request.Method != "GET" && request.Method != "PUT" {
+		return SignedRequestResponse{}, apperrors.New(503, "media.signed_url_unavailable", "Storage provider returned an invalid signed URL method")
+	}
+	return SignedRequestResponse{Method: request.Method, URL: request.URL, Headers: request.Headers, ExpiresAt: request.ExpiresAt}, nil
 }
 
 func deref(value *string) string {

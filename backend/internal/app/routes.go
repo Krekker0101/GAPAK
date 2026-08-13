@@ -46,10 +46,11 @@ func registerBaseRoutes(app *fiber.App, deps Dependencies) {
 		}
 		mode := "full"
 
-		if deps.DB != nil {
-			if err := deps.DB.Ping(ctx); err != nil {
-				return apperrors.New(fiber.StatusServiceUnavailable, "health.postgres_unavailable", "PostgreSQL is unavailable")
-			}
+		if deps.DB == nil {
+			return apperrors.New(fiber.StatusServiceUnavailable, "health.postgres_unavailable", "PostgreSQL is not configured")
+		}
+		if err := deps.DB.Ping(ctx); err != nil {
+			return apperrors.New(fiber.StatusServiceUnavailable, "health.postgres_unavailable", "PostgreSQL is unavailable")
 		}
 
 		if !deps.Config.Redis.Enabled {
@@ -67,13 +68,15 @@ func registerBaseRoutes(app *fiber.App, deps Dependencies) {
 		}
 
 		if dependencies["redis"]["critical"].(bool) && dependencies["redis"]["status"] != "up" {
-			return c.Status(fiber.StatusServiceUnavailable).JSON(httpx.OK(map[string]any{
+			err := apperrors.New(fiber.StatusServiceUnavailable, "health.dependencies_unavailable", "One or more critical dependencies are unavailable")
+			err.Details = map[string]any{
 				"status":        "unavailable",
 				"mode":          mode,
 				"dependencies":  dependencies,
 				"timestamp":     time.Now().UTC(),
 				"postgres_pool": poolSnapshot(deps.Observability),
-			}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+			}
+			return err
 		}
 
 		return c.JSON(httpx.OK(map[string]any{

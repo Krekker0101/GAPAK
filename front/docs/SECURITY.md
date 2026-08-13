@@ -13,6 +13,11 @@ Date: 2026-08-09
 - Permission guards are UX controls only; backend authorization remains authoritative.
 - Media playback requires an expiring server grant.
 - Panic Mode clears local crypto state and disconnects realtime/uploads after server confirmation.
+- Security Center never fakes success for backend actions that don't exist yet (alert ack/dismiss, security-flag mutation, local panic reset): see "Unsupported action policy" below.
+
+## Unsupported action policy
+
+See `docs/SECURITY_AUDIT.md` § "Unsupported action policy" for the full criterion and the current decision table. Summary: secondary/administrative actions with no backend endpoint are hidden from the UI and replaced with a plain-language explanation (never a disabled button pretending the feature is "coming soon"); primary/critical-path actions stay active and, on backend rejection, surface the backend's real error — never a fabricated success. `tests/security/unsupported-security-actions-contract.test.ts` enforces this as a regression contract.
 
 ## CSRF
 

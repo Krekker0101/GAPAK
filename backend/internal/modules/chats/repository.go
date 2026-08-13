@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,8 @@ import (
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
+	"github.com/gapak/backend/internal/platform/events"
+	"github.com/gapak/backend/internal/platform/observability"
 )
 
 // dbConn abstracts *pgxpool.Pool and pgx.Tx so repository methods can run inside a transaction.
@@ -449,6 +452,21 @@ func (r *Repository) AssertChatMembership(ctx context.Context, chatID, userID st
 // MESSAGE OPERATIONS
 // ============================================================================
 
+func assertMessageCounterAvailable(ctx context.Context, conn dbConn, senderDeviceID string, counter int64) error {
+	lockKey := senderDeviceID + ":" + strconv.FormatInt(counter, 10)
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return err
+	}
+	var exists bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM messages WHERE sender_device_id = $1 AND ratchet_counter = $2)`, senderDeviceID, counter).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return apperrors.New(409, "chats.e2ee.replay_detected", "GAPAK E2EE ratchet counter was already used by this device")
+	}
+	return nil
+}
+
 func (r *Repository) CreateMessage(ctx context.Context, message *model.Message) (*model.Message, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -492,6 +510,12 @@ func (r *Repository) createMessageOnConn(ctx context.Context, message *model.Mes
 			return existing, nil
 		}
 		if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
+			return nil, err
+		}
+	}
+
+	if message.SenderDeviceID != nil && message.RatchetCounter != nil {
+		if err := assertMessageCounterAvailable(ctx, r.db, *message.SenderDeviceID, *message.RatchetCounter); err != nil {
 			return nil, err
 		}
 	}
@@ -1278,27 +1302,34 @@ func (r *Repository) MarkMessagesAsDeliveredBatch(ctx context.Context, messageID
 // ============================================================================
 
 func (r *Repository) RegisterTrustedDevice(ctx context.Context, device *model.TrustedDevice) (*model.TrustedDevice, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
 	device.ID = uuid.NewString()
 	device.Fingerprint = trustedDeviceFingerprint(device.IdentityKeyPublic)
 	device.TrustStatus = "TRUSTED"
-
 	const query = `
-		INSERT INTO trusted_chat_devices (
-			id, user_id, device_name, identity_key_public, signing_key_public, fingerprint, trust_status
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, user_id, device_name, identity_key_public, signing_key_public,
-		          fingerprint, trust_status, created_at, last_seen_at, revoked_at
-	`
-	return r.scanTrustedDevice(r.db.QueryRow(ctx, query,
-		device.ID,
-		device.UserID,
-		device.DeviceName,
-		device.IdentityKeyPublic,
-		device.SigningKeyPublic,
-		device.Fingerprint,
-		device.TrustStatus,
-	))
+		INSERT INTO trusted_chat_devices (id,user_id,device_name,identity_key_public,signing_key_public,fingerprint,trust_status)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		RETURNING id,user_id,device_name,identity_key_public,signing_key_public,fingerprint,trust_status,created_at,last_seen_at,revoked_at`
+	created, err := r.scanTrustedDevice(tx.QueryRow(ctx, query, device.ID, device.UserID, device.DeviceName, device.IdentityKeyPublic, device.SigningKeyPublic, device.Fingerprint, device.TrustStatus))
+	if err != nil {
+		return nil, err
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.TrustedDeviceAdded, AggregateType: "trusted_device", AggregateID: device.ID,
+		ActorID: strPtrChat(device.UserID), RecipientUserIDs: []string{device.UserID},
+		Payload:        map[string]any{"deviceId": device.ID, "fingerprint": device.Fingerprint},
+		IdempotencyKey: "trusted-device-added:" + device.ID, CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return created, nil
 }
 
 func (r *Repository) ListTrustedDevices(ctx context.Context, userID string) ([]*model.TrustedDevice, error) {
@@ -1336,20 +1367,41 @@ func (r *Repository) GetTrustedDevice(ctx context.Context, deviceID string) (*mo
 	return r.scanTrustedDevice(r.db.QueryRow(ctx, query, deviceID))
 }
 
-func (r *Repository) RevokeTrustedDevice(ctx context.Context, userID, deviceID string) error {
+// GetTrustedDeviceForUpdate locks the device row so trust/revocation cannot
+// change between authorization and the mutation committed in the same transaction.
+func (r *Repository) GetTrustedDeviceForUpdate(ctx context.Context, deviceID string) (*model.TrustedDevice, error) {
 	const query = `
-		UPDATE trusted_chat_devices
-		SET trust_status = 'REVOKED', revoked_at = NOW()
-		WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+		SELECT id, user_id, device_name, identity_key_public, signing_key_public,
+		       fingerprint, trust_status, created_at, last_seen_at, revoked_at
+		FROM trusted_chat_devices
+		WHERE id = $1
+		FOR UPDATE
 	`
-	tag, err := r.db.Exec(ctx, query, deviceID, userID)
+	return r.scanTrustedDevice(r.db.QueryRow(ctx, query, deviceID))
+}
+
+func (r *Repository) RevokeTrustedDevice(ctx context.Context, userID, deviceID string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE trusted_chat_devices SET trust_status='REVOKED', revoked_at=NOW() WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL`, deviceID, userID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
 	}
-	return nil
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.TrustedDeviceRevoked, AggregateType: "trusted_device", AggregateID: deviceID,
+		ActorID: strPtrChat(userID), RecipientUserIDs: []string{userID},
+		Payload:        map[string]any{"deviceId": deviceID},
+		IdempotencyKey: "trusted-device-revoked:" + deviceID + ":" + userID, CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) PublishDevicePreKey(ctx context.Context, preKey *model.DevicePreKey) (*model.DevicePreKey, error) {
@@ -1394,6 +1446,7 @@ func (r *Repository) GetPreKeyBundle(ctx context.Context, userID string) (*model
 		WHERE user_id = $1 AND revoked_at IS NULL AND trust_status = 'TRUSTED'
 		ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
 		LIMIT 1
+		FOR UPDATE
 	`
 	device, err := r.scanTrustedDevice(tx.QueryRow(ctx, deviceQuery, userID))
 	if err != nil {
@@ -1430,7 +1483,7 @@ func (r *Repository) GetPreKeyBundle(ctx context.Context, userID string) (*model
 		if _, err := tx.Exec(ctx, `UPDATE trusted_chat_prekeys SET used_at = NOW() WHERE id = $1`, oneTimePreKey.ID); err != nil {
 			return nil, nil, nil, err
 		}
-		now := time.Now()
+		now := time.Now().UTC()
 		oneTimePreKey.UsedAt = &now
 	}
 
@@ -1924,3 +1977,32 @@ func trustedDeviceFingerprint(identityKey string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(identityKey)))
 	return hex.EncodeToString(sum[:])
 }
+
+// GetAllMessageKeyEnvelopes returns every persisted recipient envelope for a message.
+// It is used only for deterministic replay verification; recipient authorization is
+// enforced by the caller before exposing any response data.
+func (r *Repository) GetAllMessageKeyEnvelopes(ctx context.Context, messageID string) ([]*model.MessageKey, error) {
+	const query = `
+		SELECT id, message_id, recipient_id, recipient_device_id, sender_device_id,
+		       key_id, algorithm, encrypted_key, nonce, key_version, created_at
+		FROM trusted_chat_message_key_envelopes
+		WHERE message_id = $1
+		ORDER BY recipient_device_id ASC
+	`
+	rows, err := r.db.Query(ctx, query, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]*model.MessageKey, 0)
+	for rows.Next() {
+		env, err := r.scanMessageKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, env)
+	}
+	return result, rows.Err()
+}
+
+func strPtrChat(v string) *string { return &v }

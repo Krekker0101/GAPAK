@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -12,7 +13,10 @@ import (
 
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
+	"github.com/gapak/backend/internal/platform/concurrency"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
+	"github.com/gapak/backend/internal/platform/events"
+	"github.com/gapak/backend/internal/platform/observability"
 )
 
 type Repository struct {
@@ -186,11 +190,14 @@ func (r *Repository) Start(ctx context.Context, hostUserID, streamID string) err
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := concurrency.NewStore(r.db, "").GuardTx(ctx, tx, "live_stream", streamID); err != nil {
+		return err
+	}
 
 	const query = `
 		UPDATE live_streams
 		SET status = 'LIVE', started_at = COALESCE(started_at, NOW()), updated_at = NOW()
-		WHERE id = $1 AND host_user_id = $2 AND deleted_at IS NULL
+		WHERE id = $1 AND host_user_id = $2 AND status = 'SCHEDULED' AND deleted_at IS NULL
 		RETURNING viewer_count`
 	var viewerCount int
 	if err := tx.QueryRow(ctx, query, streamID, hostUserID).Scan(&viewerCount); err != nil {
@@ -207,6 +214,19 @@ func (r *Repository) Start(ctx context.Context, hostUserID, streamID string) err
 	}); err != nil {
 		return err
 	}
+	// Notify subscribed/participant users without exposing stream secrets.
+	recipients, err := r.listNotificationRecipientsTx(ctx, tx, streamID, hostUserID)
+	if err != nil {
+		return err
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.LiveStarted, AggregateType: "live_stream", AggregateID: streamID,
+		ActorID: strPtrLive(hostUserID), RecipientUserIDs: recipients,
+		Payload:        map[string]any{"liveStreamId": streamID, "viewerCount": viewerCount},
+		IdempotencyKey: "live-started:" + streamID + ":" + time.Now().UTC().Format(time.RFC3339Nano), CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -216,11 +236,14 @@ func (r *Repository) End(ctx context.Context, hostUserID, streamID string) error
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := concurrency.NewStore(r.db, "").GuardTx(ctx, tx, "live_stream", streamID); err != nil {
+		return err
+	}
 
 	const query = `
 		UPDATE live_streams
 		SET status = 'ENDED', ended_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND host_user_id = $2 AND deleted_at IS NULL
+		WHERE id = $1 AND host_user_id = $2 AND status = 'LIVE' AND deleted_at IS NULL
 		RETURNING viewer_count`
 	var viewerCount int
 	if err := tx.QueryRow(ctx, query, streamID, hostUserID).Scan(&viewerCount); err != nil {
@@ -234,6 +257,14 @@ func (r *Repository) End(ctx context.Context, hostUserID, streamID string) error
 		"streamId":    streamID,
 		"actorId":     hostUserID,
 		"viewerCount": viewerCount,
+	}); err != nil {
+		return err
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.LiveEnded, AggregateType: "live_stream", AggregateID: streamID,
+		ActorID: &hostUserID, RecipientUserIDs: []string{hostUserID},
+		Payload:        map[string]any{"liveStreamId": streamID, "viewerCount": viewerCount},
+		IdempotencyKey: "live-ended:" + streamID, CorrelationID: observability.CorrelationID(ctx),
 	}); err != nil {
 		return err
 	}
@@ -380,6 +411,25 @@ func (r *Repository) appendRealtimeEvent(ctx context.Context, tx pgx.Tx, streamI
 	_, err = tx.Exec(ctx, query, uuid.NewString(), r.eventChannel(streamID), streamID, eventType, rawPayload)
 	return err
 }
+
+func (r *Repository) listNotificationRecipientsTx(ctx context.Context, tx pgx.Tx, streamID, hostUserID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `SELECT DISTINCT user_id::text FROM live_participants WHERE stream_id=$1 AND user_id <> $2`, streamID, hostUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func strPtrLive(v string) *string { return &v }
 
 func (r *Repository) eventChannel(streamID string) string {
 	return fmt.Sprintf("%s:%s", r.eventChannelBase, streamID)

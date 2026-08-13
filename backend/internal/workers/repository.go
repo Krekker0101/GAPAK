@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
+	"github.com/gapak/backend/internal/platform/events"
 )
 
 var ErrJobNotReserved = errors.New("processing job is not reserved")
@@ -246,9 +248,30 @@ func (r *Repository) MarkMediaFailed(ctx context.Context, mediaID string) error 
 }
 
 func (r *Repository) MarkMediaReady(ctx context.Context, mediaID string) error {
-	const query = `UPDATE media_files SET status = 'READY', updated_at = NOW() WHERE id = $1`
-	_, err := r.db.Exec(ctx, query, mediaID)
-	return err
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var ownerID string
+	if err := tx.QueryRow(ctx, `SELECT owner_id FROM media_files WHERE id=$1 FOR UPDATE`, mediaID).Scan(&ownerID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE media_files SET status='READY', updated_at=NOW() WHERE id=$1`, mediaID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("media file not found: %s", mediaID)
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.MediaReady, AggregateType: "media_file", AggregateID: mediaID,
+		RecipientUserIDs: []string{ownerID}, Payload: map[string]any{"mediaFileId": mediaID},
+		IdempotencyKey: "media-ready:" + mediaID,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) EnsureVideoAsset(ctx context.Context, media *model.MediaFile) (string, error) {

@@ -19,6 +19,7 @@ import (
 	"github.com/gapak/backend/internal/domain/enums"
 	"github.com/gapak/backend/internal/domain/model"
 	"github.com/gapak/backend/internal/platform/observability"
+	pushplatform "github.com/gapak/backend/internal/platform/push"
 	"github.com/gapak/backend/internal/platform/queue"
 	"github.com/gapak/backend/internal/platform/storage"
 )
@@ -31,9 +32,10 @@ type Runner struct {
 	store     storage.ObjectStore
 	ffmpegSem chan struct{}
 	metrics   *observability.Registry
+	push      *pushplatform.Dispatcher
 }
 
-func NewRunner(cfg config.Config, logger zerolog.Logger, repo *Repository, q *queue.RedisQueue, store storage.ObjectStore, metrics *observability.Registry) *Runner {
+func NewRunner(cfg config.Config, logger zerolog.Logger, repo *Repository, q *queue.RedisQueue, store storage.ObjectStore, metrics *observability.Registry, pushDispatcher *pushplatform.Dispatcher) *Runner {
 	concurrency := cfg.Storage.FFmpegConcurrency
 	if concurrency <= 0 {
 		concurrency = 1
@@ -46,6 +48,7 @@ func NewRunner(cfg config.Config, logger zerolog.Logger, repo *Repository, q *qu
 		store:     store,
 		ffmpegSem: make(chan struct{}, concurrency),
 		metrics:   metrics,
+		push:      pushDispatcher,
 	}
 }
 
@@ -76,6 +79,14 @@ func (r *Runner) Run(ctx context.Context) error {
 		defer wg.Done()
 		r.runRealtimeRelay(ctx)
 	}()
+
+	if r.push != nil && r.push.Enabled() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.push.Run(ctx, r.cfg.Push.PollInterval, r.cfg.Push.BatchSize)
+		}()
+	}
 
 	wg.Add(1)
 	go func() {

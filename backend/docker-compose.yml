@@ -71,7 +71,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      DATABASE_URL: postgresql://gapak:${POSTGRES_PASSWORD}@postgres:5432/gapak?sslmode=disable
       MIGRATIONS_DIR: db/migrations
     depends_on:
       postgres:
@@ -86,7 +86,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      DATABASE_URL: postgresql://gapak:${POSTGRES_PASSWORD}@postgres:5432/gapak?sslmode=disable
       REDIS_URL: redis://redis:6379/5
       STORAGE_ENDPOINT: http://minio:9000
       STORAGE_ACCESS_KEY_ID: gapak
@@ -131,7 +131,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      DATABASE_URL: postgresql://gapak:${POSTGRES_PASSWORD}@postgres:5432/gapak?sslmode=disable
       REDIS_URL: redis://redis:6379/5
       STORAGE_ENDPOINT: http://minio:9000
       STORAGE_ACCESS_KEY_ID: gapak

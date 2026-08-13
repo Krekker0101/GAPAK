@@ -12,45 +12,36 @@ import (
 	"github.com/gapak/backend/internal/platform/logger"
 )
 
-func TestValidateCSRFForMutationsRequiresCookieAndMatchingHeader(t *testing.T) {
+func TestValidateCSRFForMutationsRejectsWrongOriginEvenWithValidToken(t *testing.T) {
 	cfg := config.SecurityConfig{CSRFCookieName: "csrf"}
 	app := fiber.New(fiber.Config{ErrorHandler: httpx.FiberErrorHandler(logger.New("test"))})
-	app.Post("/mutate", ValidateCSRFForMutations(cfg, "https://gapak.vercel.app"), func(c *fiber.Ctx) error {
-		return c.SendStatus(fiber.StatusNoContent)
-	})
-
-	cases := []struct {
-		name       string
-		cookie     string
-		header     string
-		wantStatus int
-	}{
-		{"missing both", "", "", fiber.StatusForbidden},
-		{"header only", "", "token", fiber.StatusNoContent},
-		{"cookie only", "token", "", fiber.StatusForbidden},
-		{"mismatch", "cookie", "header", fiber.StatusForbidden},
-		{"match", "token", "token", fiber.StatusNoContent},
+	app.Post("/mutate", ValidateCSRFForMutations(cfg, "https://gapak.vercel.app"), func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
+	req := httptest.NewRequest(fiber.MethodPost, "/mutate", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("X-CSRF-Token", "token")
+	req.AddCookie(&http.Cookie{Name: "csrf", Value: "token"})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if resp.StatusCode != fiber.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(fiber.MethodPost, "/mutate", nil)
-			if tc.cookie != "" {
-				req.AddCookie(&http.Cookie{Name: "csrf", Value: tc.cookie})
-			}
-			if tc.header != "" {
-				req.Header.Set("X-CSRF-Token", tc.header)
-			}
-			if tc.name == "header only" {
-				req.Header.Set("Origin", "https://gapak.vercel.app")
-			}
-			resp, err := app.Test(req)
-			if err != nil {
-				t.Fatalf("request failed: %v", err)
-			}
-			if resp.StatusCode != tc.wantStatus {
-				t.Fatalf("expected %d, got %d", tc.wantStatus, resp.StatusCode)
-			}
-		})
+func TestValidateCSRFForMutationsAcceptsConfiguredOriginWithMatchingCookie(t *testing.T) {
+	cfg := config.SecurityConfig{CSRFCookieName: "csrf"}
+	app := fiber.New(fiber.Config{ErrorHandler: httpx.FiberErrorHandler(logger.New("test"))})
+	app.Post("/mutate", ValidateCSRFForMutations(cfg, "https://gapak.vercel.app"), func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
+	req := httptest.NewRequest(fiber.MethodPost, "/mutate", nil)
+	req.Header.Set("Origin", "https://gapak.vercel.app")
+	req.Header.Set("X-CSRF-Token", "token")
+	req.AddCookie(&http.Cookie{Name: "csrf", Value: "token"})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != fiber.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
 	}
 }

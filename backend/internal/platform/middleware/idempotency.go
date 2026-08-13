@@ -3,56 +3,279 @@ package middleware
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
+
+	authplatform "github.com/gapak/backend/internal/platform/auth"
 )
 
 const idempotencyTTL = 5 * time.Minute
 
-// Idempotency reserves a client supplied key atomically in Redis. When Redis
-// is unavailable, the request continues without distributed deduplication:
-// idempotency is a safety optimization and must not make login/register
-// unavailable on a deployment that intentionally runs without Redis.
-func Idempotency(redisClient *redis.Client) fiber.Handler {
+type idempotentResponse struct {
+	Status      int                 `json:"status"`
+	ContentType string              `json:"contentType,omitempty"`
+	Headers     map[string][]string `json:"headers,omitempty"`
+	RequestHash string              `json:"requestHash,omitempty"`
+	Body        string              `json:"body,omitempty"` // base64-encoded response body
+}
+
+// Idempotency deduplicates client-keyed mutation retries and replays the exact
+// persisted successful HTTP response. Authentication routes keep their own
+// explicit idempotency middleware; the global registration skips /auth paths.
+// Redis unavailability does not make an otherwise healthy request unavailable.
+func Idempotency(redisClient *redis.Client, db *pgxpool.Pool, jwtManager *authplatform.Manager) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		if c.Method() == fiber.MethodGet || c.Method() == fiber.MethodHead {
+		if c.Method() == fiber.MethodGet || c.Method() == fiber.MethodHead || c.Method() == fiber.MethodOptions {
+			return c.Next()
+		}
+		if strings.HasPrefix(c.Path(), "/api/v1/auth/") {
 			return c.Next()
 		}
 
 		key := strings.TrimSpace(c.Get("X-Idempotency-Key"))
-		if key == "" || redisClient == nil {
+		if key == "" {
 			return c.Next()
 		}
 		if len(key) > 128 {
 			return fiber.NewError(fiber.StatusBadRequest, "Idempotency key is too long")
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		identity := idempotencyIdentity(c, jwtManager)
+		bodyHash := sha256.Sum256(c.Body())
+		requestHash := hex.EncodeToString(bodyHash[:])
+		digest := sha256.Sum256([]byte(strings.Join([]string{identity, c.Method(), c.Path(), key}, "|")))
+		redisKey := "idempotent:" + hex.EncodeToString(digest[:])
+
+		ctx, cancel := context.WithTimeout(c.UserContext(), 750*time.Millisecond)
 		defer cancel()
 
-		identity := strings.Join([]string{c.Method(), c.Path(), c.IP(), key}, "|")
-		digest := sha256.Sum256([]byte(identity))
-		redisKey := "idempotent:" + hex.EncodeToString(digest[:])
-		claimed, err := redisClient.SetNX(ctx, redisKey, "inflight", idempotencyTTL).Result()
-		if err != nil {
-			return c.Next()
-		}
-		if !claimed {
-			return fiber.NewError(fiber.StatusConflict, "Request with this idempotency key has already been processed")
+		if redisClient != nil {
+			stored, err := redisClient.Get(ctx, redisKey).Result()
+			if err == nil {
+				var response idempotentResponse
+				if json.Unmarshal([]byte(stored), &response) == nil {
+					if response.RequestHash != requestHash {
+						return fiber.NewError(fiber.StatusConflict, "Idempotency key was already used for a different request")
+					}
+					if response.Status >= 200 && response.Status < 400 {
+						return replayIdempotentResponse(c, response)
+					}
+				}
+			}
+			if err != nil && err != redis.Nil {
+				// Fall through to the authoritative PostgreSQL idempotency store.
+			}
+			claimed, err := redisClient.SetNX(ctx, redisKey, "inflight:"+requestHash, idempotencyTTL).Result()
+			if err == nil {
+				if !claimed {
+					stored, _ := redisClient.Get(ctx, redisKey).Result()
+					if strings.HasPrefix(stored, "inflight:") {
+						return fiber.NewError(fiber.StatusConflict, "Request with this idempotency key is already in progress")
+					}
+					var response idempotentResponse
+					if json.Unmarshal([]byte(stored), &response) == nil {
+						if response.RequestHash != requestHash {
+							return fiber.NewError(fiber.StatusConflict, "Idempotency key was already used for a different request")
+						}
+						return replayIdempotentResponse(c, response)
+					}
+					return fiber.NewError(fiber.StatusConflict, "Request with this idempotency key is already in progress")
+				}
+				return executeAndPersistRedis(c, redisClient, db, redisKey, ctx, identity, c.Method(), c.Path(), key, requestHash)
+			}
 		}
 
-		err = c.Next()
-		if err != nil || c.Response().StatusCode() >= 500 {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-			_ = redisClient.Del(cleanupCtx, redisKey).Err()
-			cleanupCancel()
+		if db == nil {
+			return c.Next()
+		}
+		return executeWithDBIdempotency(c, db, identity, c.Method(), c.Path(), key, requestHash)
+	}
+}
+
+func captureReplayHeaders(c *fiber.Ctx) map[string][]string {
+	headers := make(map[string][]string)
+	c.Response().Header.VisitAll(func(key, value []byte) {
+		name := string(key)
+		if strings.EqualFold(name, fiber.HeaderContentLength) ||
+			strings.EqualFold(name, "Connection") ||
+			strings.EqualFold(name, "Transfer-Encoding") {
+			return
+		}
+		headers[name] = append(headers[name], string(value))
+	})
+	return headers
+}
+
+func idempotencyIdentity(c *fiber.Ctx, jwtManager *authplatform.Manager) string {
+	if jwtManager != nil {
+		if token := bearerToken(c.Get(fiber.HeaderAuthorization)); token != "" {
+			if claims, err := jwtManager.VerifyAccessToken(c.UserContext(), token); err == nil {
+				return "user:" + claims.UserID + ":session:" + claims.SessionID
+			}
+		}
+		if token := strings.TrimSpace(c.Cookies(authplatform.AccessCookieName)); token != "" {
+			if claims, err := jwtManager.VerifyAccessToken(c.UserContext(), token); err == nil {
+				return "user:" + claims.UserID + ":session:" + claims.SessionID
+			}
+		}
+	}
+	path := c.Path()
+	if strings.HasPrefix(path, "/api/v1/auth/") {
+		var payload map[string]any
+		if len(c.Body()) > 0 && json.Unmarshal(c.Body(), &payload) == nil {
+			for _, field := range []string{"login", "email", "username", "token"} {
+				if v, ok := payload[field].(string); ok && strings.TrimSpace(v) != "" {
+					h := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(v))))
+					return "auth:" + hex.EncodeToString(h[:])
+				}
+			}
+		}
+	}
+	if csrf := strings.TrimSpace(c.Cookies("gapak_csrf")); csrf != "" {
+		return "csrf:" + csrf
+	}
+	if refresh := strings.TrimSpace(c.Cookies("gapak_rt")); refresh != "" {
+		h := sha256.Sum256([]byte(refresh))
+		return "refresh:" + hex.EncodeToString(h[:])
+	}
+	if fingerprint := strings.TrimSpace(c.Get("X-Device-Fingerprint")); fingerprint != "" {
+		return "device:" + fingerprint
+	}
+	return "ip:" + strings.TrimSpace(c.IP())
+}
+
+func replayIdempotentResponse(c *fiber.Ctx, response idempotentResponse) error {
+	body, decodeErr := base64.StdEncoding.DecodeString(response.Body)
+	if decodeErr != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "Stored idempotent response is invalid")
+	}
+	for header, values := range response.Headers {
+		for _, value := range values {
+			c.Append(header, value)
+		}
+	}
+	if response.ContentType != "" && len(response.Headers[fiber.HeaderContentType]) == 0 {
+		c.Set(fiber.HeaderContentType, response.ContentType)
+	}
+	return c.Status(response.Status).Send(body)
+}
+
+func executeAndPersistRedis(c *fiber.Ctx, redisClient *redis.Client, db *pgxpool.Pool, redisKey string, ctx context.Context, identity, method, path, key, requestHash string) error {
+
+	if err := c.Next(); err != nil || c.Response().StatusCode() >= 400 {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		_ = redisClient.Del(cleanupCtx, redisKey).Err()
+		cleanupCancel()
+		return err
+	}
+	response := idempotentResponse{Status: c.Response().StatusCode(), ContentType: string(c.Response().Header.ContentType()), Headers: captureReplayHeaders(c), RequestHash: requestHash, Body: base64.StdEncoding.EncodeToString(c.Response().Body())}
+	payload, marshalErr := json.Marshal(response)
+	if marshalErr != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		_ = redisClient.Del(cleanupCtx, redisKey).Err()
+		cleanupCancel()
+		return marshalErr
+	}
+	if err := redisClient.Set(ctx, redisKey, payload, idempotencyTTL).Err(); err != nil {
+		if db != nil {
+			if persistErr := persistDBIdempotency(ctx, db, identity, method, path, key, requestHash, response); persistErr == nil {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+				_ = redisClient.Del(cleanupCtx, redisKey).Err()
+				cleanupCancel()
+				return nil
+			}
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		_ = redisClient.Del(cleanupCtx, redisKey).Err()
+		cleanupCancel()
+	}
+	return nil
+}
+
+func persistDBIdempotency(ctx context.Context, db *pgxpool.Pool, identity, method, path, key, requestHash string, response idempotentResponse) error {
+	headersJSON, err := json.Marshal(response.Headers)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(ctx, `
+		INSERT INTO http_idempotency_records (id, identity_key, method, path, idempotency_key, request_hash, status, content_type, headers_json, body_b64, state, expires_at, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,'DONE',NOW()+INTERVAL '5 minutes',NOW(),NOW())
+		ON CONFLICT (identity_key, method, path, idempotency_key) DO UPDATE SET
+			request_hash=EXCLUDED.request_hash, status=EXCLUDED.status, content_type=EXCLUDED.content_type,
+			headers_json=EXCLUDED.headers_json, body_b64=EXCLUDED.body_b64, state='DONE', expires_at=EXCLUDED.expires_at, updated_at=NOW()`,
+		uuid.NewString(), identity, method, path, key, requestHash, response.Status, response.ContentType, headersJSON, response.Body)
+	return err
+}
+
+func executeWithDBIdempotency(c *fiber.Ctx, db *pgxpool.Pool, identity, method, path, key, requestHash string) error {
+	ctx, cancel := context.WithTimeout(c.UserContext(), 2*time.Second)
+	defer cancel()
+	var stored idempotentResponse
+	var responseBody string
+	var responseHeaders []byte
+	var status *int
+	var contentType string
+	var state string
+	row := db.QueryRow(ctx, `
+		INSERT INTO http_idempotency_records (id, identity_key, method, path, idempotency_key, request_hash, status, content_type, headers_json, body_b64, state, expires_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NULL, '', '{}'::jsonb, '', 'INFLIGHT', NOW() + INTERVAL '5 minutes', NOW(), NOW())
+		ON CONFLICT (identity_key, method, path, idempotency_key) DO NOTHING
+		RETURNING status, content_type, headers_json, body_b64, state`, uuid.NewString(), identity, method, path, key, requestHash)
+	if err := row.Scan(&status, &contentType, &responseHeaders, &responseBody, &state); err == nil {
+		if status != nil && *status >= 200 && *status < 400 && state == "DONE" {
+			_ = json.Unmarshal(responseHeaders, &stored.Headers)
+			stored.Status, stored.ContentType, stored.RequestHash, stored.Body = *status, contentType, requestHash, responseBody
+			return replayIdempotentResponse(c, stored)
+		}
+		if state == "INFLIGHT" {
+			// This request won the INSERT and owns the key.
+			goto EXECUTE
+		}
+	} else {
+		// No RETURNING row means another worker owns the key; inspect it.
+		row = db.QueryRow(ctx, `SELECT status, content_type, headers_json, body_b64, state, request_hash FROM http_idempotency_records WHERE identity_key=$1 AND method=$2 AND path=$3 AND idempotency_key=$4`, identity, method, path, key)
+		var existingHash string
+		if err := row.Scan(&status, &contentType, &responseHeaders, &responseBody, &state, &existingHash); err != nil {
 			return err
 		}
-		_ = redisClient.Set(ctx, redisKey, "completed", idempotencyTTL).Err()
-		return nil
+		if existingHash != requestHash {
+			return fiber.NewError(fiber.StatusConflict, "Idempotency key was already used for a different request")
+		}
+		if state == "DONE" && status != nil && *status >= 200 && *status < 400 {
+			_ = json.Unmarshal(responseHeaders, &stored.Headers)
+			stored.Status, stored.ContentType, stored.RequestHash, stored.Body = *status, contentType, requestHash, responseBody
+			return replayIdempotentResponse(c, stored)
+		}
+		if state == "INFLIGHT" {
+			var reclaimed int
+			err := db.QueryRow(ctx, `
+				UPDATE http_idempotency_records
+				SET id=$5, expires_at=NOW()+INTERVAL '5 minutes', updated_at=NOW()
+				WHERE identity_key=$1 AND method=$2 AND path=$3 AND idempotency_key=$4
+				  AND request_hash=$6 AND state='INFLIGHT' AND expires_at <= NOW()
+				RETURNING 1`, identity, method, path, key, uuid.NewString(), requestHash).Scan(&reclaimed)
+			if err == nil && reclaimed == 1 {
+				goto EXECUTE
+			}
+			return fiber.NewError(fiber.StatusConflict, "Request with this idempotency key is already in progress")
+		}
 	}
+EXECUTE:
+	if err := c.Next(); err != nil || c.Response().StatusCode() >= 400 {
+		_, _ = db.Exec(ctx, `DELETE FROM http_idempotency_records WHERE identity_key=$1 AND method=$2 AND path=$3 AND idempotency_key=$4 AND state='INFLIGHT'`, identity, method, path, key)
+		return err
+	}
+	stored = idempotentResponse{Status: c.Response().StatusCode(), ContentType: string(c.Response().Header.ContentType()), Headers: captureReplayHeaders(c), RequestHash: requestHash, Body: base64.StdEncoding.EncodeToString(c.Response().Body())}
+	headersJSON, _ := json.Marshal(stored.Headers)
+	_, err := db.Exec(ctx, `UPDATE http_idempotency_records SET status=$5, content_type=$6, headers_json=$7::jsonb, body_b64=$8, state='DONE', updated_at=NOW() WHERE identity_key=$1 AND method=$2 AND path=$3 AND idempotency_key=$4 AND request_hash=$9`, identity, method, path, key, stored.Status, stored.ContentType, headersJSON, stored.Body, requestHash)
+	return err
 }

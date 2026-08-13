@@ -68,14 +68,24 @@ export const LiveChat: React.FC<LiveChatProps> = ({ streamId, className = '', on
   const handleSend = () => {
     if (!inputText.trim() || cooldownSec > 0) return;
 
-    const res = LiveStreamService.sendChatMessage(streamId, inputText.trim());
+    // Client-side idempotency key: safe to resend this exact call (e.g. from a
+    // future retry-with-backoff path) without creating a duplicate message.
+    const clientMessageId = crypto.randomUUID();
+    const res = LiveStreamService.sendChatMessage(streamId, inputText.trim(), clientMessageId);
     if (res.success) {
       setInputText('');
       setRateLimitError(null);
     } else if (res.cooldownSec) {
+      // Rejected before send (rate limit): input text is intentionally left
+      // untouched so the user doesn't lose what they typed.
       setCooldownSec(res.cooldownSec);
       setRateLimitError(res.error || 'Rate limit active');
     }
+  };
+
+  const handleRetry = (targetStreamId: string, clientMessageId: string) => {
+    const res = LiveStreamService.retryChatMessage(targetStreamId, clientMessageId);
+    if (!res.success) setRateLimitError(res.error || 'Retry failed');
   };
 
   const pinnedMsg = messages.find((m) => m.isPinned);
@@ -128,7 +138,22 @@ export const LiveChat: React.FC<LiveChatProps> = ({ streamId, className = '', on
                     {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
+                {/* text is always rendered from the message object itself, never cleared on failure */}
                 <p className="text-slate-300 text-xs leading-relaxed break-words">{msg.text}</p>
+                {msg.status === 'pending' && (
+                  <span className="flex items-center gap-1 text-[9px] text-slate-500">
+                    <Clock className="w-2.5 h-2.5 animate-pulse" /> Sending…
+                  </span>
+                )}
+                {msg.status === 'failed' && (
+                  <button
+                    type="button"
+                    onClick={() => msg.clientMessageId && handleRetry(msg.streamId, msg.clientMessageId)}
+                    className="flex items-center gap-1 text-[9px] text-rose-400 hover:underline"
+                  >
+                    <AlertCircle className="w-2.5 h-2.5" /> Failed — tap to retry
+                  </button>
+                )}
               </div>
             </div>
           );
