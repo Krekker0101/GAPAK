@@ -209,11 +209,11 @@ class HttpClient {
     }
 
     telemetry.record('api', 'request_succeeded', 'debug', { requestId, status: responseStatus, method });
-    const data = this.unwrapSuccess<T>(responseData, responseStatus, requestId);
+    const unwrappedData = this.unwrapSuccess<T>(responseData, responseStatus, requestId);
     if (includeResponseMeta) {
-      return { data, headers: responseHeaders, status: responseStatus, requestId } as T;
+      return { data: unwrappedData, headers: responseHeaders, status: responseStatus, requestId } as T;
     }
-    return data;
+    return unwrappedData;
   }
 
   private async executeTransport(
