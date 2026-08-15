@@ -92,7 +92,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       throw new ApiError('Authentication response is incomplete', 502, 'INVALID_AUTH_RESPONSE');
     }
     authManager.setAccessToken(response.accessToken);
-    authManager.setSessionId(response.session.id);    authManager.setSessionId(response.session.id);
+    if (!response.session?.id) {
+      throw new ApiError('Authentication response is incomplete', 502, 'INVALID_AUTH_RESPONSE');
+    }
+    authManager.setSessionId(response.session.id);
     if (response.csrfToken) authManager.setCsrfToken(response.csrfToken);
     setUser(toUserProfile(response.user));
     setState('AUTHENTICATED');
