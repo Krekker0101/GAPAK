@@ -1,6 +1,13 @@
 @import "tailwindcss";
 @import "./shared/design-system/tokens.css";
 
+/* ThemeContext toggles a `.dark` class on <html> for light/dark/system
+   switching, but Tailwind v4's `dark:` variant defaults to the
+   `prefers-color-scheme` media query unless told otherwise - so every
+   `dark:` utility class in the app was tracking OS preference only and
+   ignoring the in-app theme switch. This makes `dark:` follow the class. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
   body {
     font-family: var(--font-sans);
