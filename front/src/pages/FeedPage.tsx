@@ -29,11 +29,17 @@ export const FeedPage: React.FC = () => {
 
   const posts = useMemo(() => {
     const seen = new Set<string>();
-    return (feed.data?.pages.flatMap((p) => p.items) ?? []).filter((post) => {
-      if (seen.has(post.id)) return false;
-      seen.add(post.id);
-      return true;
-    });
+    // The backend can include a null/malformed entry in a feed page (e.g. a
+    // post whose author lookup failed server-side), which previously crashed
+    // this hook with "Cannot read properties of null (reading 'id')" as soon
+    // as it hit `post.id` below. Drop those before dedup.
+    return (feed.data?.pages.flatMap((p) => p.items) ?? [])
+      .filter((post): post is Post => Boolean(post && post.id))
+      .filter((post) => {
+        if (seen.has(post.id)) return false;
+        seen.add(post.id);
+        return true;
+      });
   }, [feed.data]);
 
   const stories = useQuery({ queryKey: ['stories', 'feed-preview'], queryFn: ({ signal }) => storiesApi.feed({ limit: 20 }, signal), staleTime: 20_000 });

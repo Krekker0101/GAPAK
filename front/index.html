@@ -4,26 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>GAPAK Frontend Platform</title>
-    <script>
-      (function() {
-        try {
-          var target = window;
-          var prop = 'fetch';
-          var origFetch = target[prop];
-          if (typeof origFetch === 'function') {
-            var currentFetch = origFetch;
-            Object.defineProperty(target, prop, {
-              get: function() { return currentFetch; },
-              set: function(v) { currentFetch = v; },
-              configurable: true,
-              enumerable: true
-            });
-          }
-        } catch (e) {
-          console.warn('[GAPAK Runtime] Fetch property descriptor patch:', e);
-        }
-      })();
-    </script>
+    <!-- Moved out of an inline <script> block: CSP (script-src 'self', no
+         'unsafe-inline'/nonce) blocks inline scripts on the deployed site.
+         A same-origin file passes 'self' and runs before the module script
+         below (plain scripts execute synchronously, before deferred
+         type="module" scripts, so ordering is unchanged). -->
+    <script src="/fetch-guard.js"></script>
   </head>
   <body>
     <div id="root"></div>
