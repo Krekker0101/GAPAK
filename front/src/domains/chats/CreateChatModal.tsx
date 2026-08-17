@@ -5,7 +5,8 @@
  * Creation UI for DIRECT, GROUP, CHANNEL, and BROADCAST capabilities.
  */
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   MessageSquare,
   Users,
@@ -13,8 +14,14 @@ import {
   Megaphone,
   Lock,
   Check,
+  Search,
+  Sparkles,
+  TrendingUp,
+  X,
 } from 'lucide-react';
 import { ChatType } from '../../shared/types';
+import type { BackendPublicProfile } from '../../shared/api/backendContracts';
+import { usersApi } from '../users/api/usersApi';
 import {
   Modal,
   ModalHeader,
@@ -22,7 +29,20 @@ import {
   ModalFooter,
   Button,
   Input,
+  Avatar,
 } from '../../shared/design-system/primitives';
+
+const isPublicProfile = (profile: BackendPublicProfile) =>
+  (profile.privacySettings?.profileVisibility ?? '').toUpperCase() === 'PUBLIC';
+
+const useDebouncedValue = (value: string, delayMs: number) => {
+  const [debounced, setDebounced] = useState(value);
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+};
 
 interface CreateChatModalProps {
   isOpen: boolean;
@@ -44,7 +64,41 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [participantInput, setParticipantInput] = useState('');
-  const selectedUserIds = participantInput.split(',').map((value) => value.trim()).filter(Boolean);
+  const [pickedUsers, setPickedUsers] = useState<BackendPublicProfile[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [discoverSort, setDiscoverSort] = useState<'new' | 'top'>('new');
+  const debouncedQuery = useDebouncedValue(searchQuery.trim(), 300);
+
+  const manualIds = participantInput.split(',').map((value) => value.trim()).filter(Boolean);
+  const pickedIds = pickedUsers.map((u) => u.id);
+  const selectedUserIds = useMemo(
+    () => Array.from(new Set([...pickedIds, ...manualIds])),
+    [pickedIds, manualIds],
+  );
+
+  const searchResultsQuery = useQuery({
+    queryKey: ['users', 'search', debouncedQuery],
+    queryFn: ({ signal }) => usersApi.search(debouncedQuery, 15, signal),
+    enabled: debouncedQuery.length >= 2,
+  });
+
+  const discoverQuery = useQuery({
+    queryKey: ['users', 'discover', discoverSort],
+    queryFn: ({ signal }) => usersApi.discover({ sort: discoverSort, limit: 12 }, signal),
+    enabled: debouncedQuery.length < 2,
+    staleTime: 60_000,
+  });
+
+  const isSearching = debouncedQuery.length >= 2;
+  const rawResults = isSearching ? (searchResultsQuery.data ?? []) : (discoverQuery.data ?? []);
+  // Only ever surface public accounts here — this picker is not the place to leak private profiles.
+  const suggestions = rawResults.filter((profile) => isPublicProfile(profile) && !pickedIds.includes(profile.id));
+  const suggestionsLoading = isSearching ? searchResultsQuery.isFetching : discoverQuery.isFetching;
+  const suggestionsError = isSearching ? searchResultsQuery.isError : discoverQuery.isError;
+
+  const togglePick = (profile: BackendPublicProfile) => {
+    setPickedUsers((prev) => (prev.some((u) => u.id === profile.id) ? prev.filter((u) => u.id !== profile.id) : [...prev, profile]));
+  };
 
   const handleCreate = () => {
     if (selectedUserIds.length === 0) return;
@@ -136,13 +190,96 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
 
         {/* Members Selection */}
         <div className="space-y-2 pt-2">
-          <label className="text-xs font-mono uppercase tracking-wider text-tertiary">Participant user IDs</label>
-          <Input
-            placeholder="Paste one or more backend user IDs, comma-separated"
-            value={participantInput}
-            onChange={(e) => setParticipantInput(e.target.value)}
-          />
-          <p className="text-[10px] text-muted">Participant discovery will use the server user-search contract when available. This screen never loads fixture users.</p>
+          <label className="text-xs font-mono uppercase tracking-wider text-tertiary">Find people</label>
+
+          <div className="p-2 bg-app border border-subtle rounded-[var(--radius-xl)] flex items-center gap-2 text-xs">
+            <Search className="w-4 h-4 text-muted shrink-0" />
+            <input
+              type="text"
+              placeholder="Search by username…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-transparent text-primary placeholder-slate-500 outline-none"
+            />
+          </div>
+
+          {/* Picked chips */}
+          {pickedUsers.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {pickedUsers.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => togglePick(u)}
+                  className="flex items-center gap-1 pl-1 pr-2 py-1 rounded-[var(--radius-pill)] bg-indigo-600/20 border border-indigo-500/40 text-[11px] text-indigo-200"
+                >
+                  <Avatar name={u.displayName || u.username} size="xs" />
+                  @{u.username}
+                  <X className="w-3 h-3" />
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Recommendations toggle (only shown while not actively searching) */}
+          {!isSearching && (
+            <div className="flex items-center gap-1 text-[11px] font-mono">
+              <button
+                type="button"
+                onClick={() => setDiscoverSort('new')}
+                className={`px-2.5 py-1 rounded-[var(--radius-lg)] flex items-center gap-1 transition-colors ${discoverSort === 'new' ? 'bg-indigo-600 text-white font-bold' : 'bg-surface-glass text-tertiary hover:text-primary'}`}
+              >
+                <Sparkles className="w-3 h-3" /> New accounts
+              </button>
+              <button
+                type="button"
+                onClick={() => setDiscoverSort('top')}
+                className={`px-2.5 py-1 rounded-[var(--radius-lg)] flex items-center gap-1 transition-colors ${discoverSort === 'top' ? 'bg-indigo-600 text-white font-bold' : 'bg-surface-glass text-tertiary hover:text-primary'}`}
+              >
+                <TrendingUp className="w-3 h-3" /> Top accounts
+              </button>
+            </div>
+          )}
+
+          {/* Results list */}
+          <div className="max-h-40 overflow-y-auto space-y-1 rounded-[var(--radius-xl)] border border-subtle p-1.5 bg-surface">
+            {suggestionsLoading && (
+              <p className="text-[11px] text-muted px-2 py-2">Loading…</p>
+            )}
+            {!suggestionsLoading && suggestionsError && (
+              <p className="text-[11px] text-rose-400 px-2 py-2">Couldn't load {isSearching ? 'search results' : 'recommendations'} right now.</p>
+            )}
+            {!suggestionsLoading && !suggestionsError && suggestions.length === 0 && (
+              <p className="text-[11px] text-muted px-2 py-2">
+                {isSearching ? 'No public accounts match that username.' : 'No public accounts to recommend right now.'}
+              </p>
+            )}
+            {!suggestionsLoading && !suggestionsError && suggestions.map((profile) => (
+              <button
+                key={profile.id}
+                type="button"
+                onClick={() => togglePick(profile)}
+                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-lg)] hover:bg-surface-glass text-left transition-colors"
+              >
+                <Avatar name={profile.displayName || profile.username} size="sm" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-semibold text-primary truncate">{profile.displayName || profile.username}</span>
+                  <span className="block text-[10px] text-muted truncate">@{profile.username}</span>
+                </span>
+                <Check className={`w-3.5 h-3.5 shrink-0 ${pickedIds.includes(profile.id) ? 'text-indigo-400' : 'text-transparent'}`} />
+              </button>
+            ))}
+          </div>
+
+          <details className="text-[10px] text-muted">
+            <summary className="cursor-pointer select-none">Add by raw user ID instead</summary>
+            <Input
+              className="mt-2"
+              placeholder="Paste one or more backend user IDs, comma-separated"
+              value={participantInput}
+              onChange={(e) => setParticipantInput(e.target.value)}
+            />
+          </details>
         </div>
       </ModalBody>
 

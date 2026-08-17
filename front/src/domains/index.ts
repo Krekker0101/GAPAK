@@ -56,7 +56,6 @@ export const DOMAINS_REGISTRY: Record<DomainKey, DomainMeta> = {
     title: 'Direct Chats & Groups',
     description: 'E2E encrypted direct messages, group chats, and media sharing',
     category: 'communication',
-    badgeCount: 3,
   },
   media: {
     key: 'media',

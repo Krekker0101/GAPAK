@@ -12,6 +12,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -56,6 +57,11 @@ import { PermissionGuard } from '../../shared/permissions/permissions';
 import { NotificationsController } from '../../domains/notifications/NotificationsController';
 import { isNotificationRead } from '../../domains/notifications/notificationsState';
 import { useToast } from '../../shared/ux/ToastContext';
+import { chatsApi } from '../../domains/chats/api/chatsApi';
+import { realtimeManager } from '../../shared/realtime/RealtimeManager';
+import type { Chat } from '../../shared/api/backendContracts';
+
+const normalizeChatsList = (data: { chats: Chat[] } | Chat[]): Chat[] => (Array.isArray(data) ? data : data.chats);
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -94,6 +100,28 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const toast = useToast();
   const { theme, resolvedTheme, setTheme } = useTheme();
   const network = useNetworkState();
+  const queryClient = useQueryClient();
+
+  // Real unread chat count (replaces the previous hardcoded placeholder badge).
+  // Shares the ['chats'] query cache with ChatsView so it stays in sync with the chat list.
+  const chatsBadgeQuery = useQuery({
+    queryKey: ['chats'],
+    queryFn: ({ signal }) => chatsApi.list({}, signal),
+    staleTime: 15_000,
+  });
+  const chatsUnreadCount = useMemo(() => {
+    const chats = chatsBadgeQuery.data ? normalizeChatsList(chatsBadgeQuery.data) : [];
+    return chats.reduce((sum, chat) => sum + (chat.unreadCount || 0), 0);
+  }, [chatsBadgeQuery.data]);
+
+  useEffect(() => {
+    return realtimeManager.subscribe('chat.message.created', () => {
+      void queryClient.invalidateQueries({ queryKey: ['chats'] });
+    });
+  }, [queryClient]);
+
+  const domainBadgeCounts: Partial<Record<DomainKey, number>> = { chats: chatsUnreadCount };
+
   const notificationsController = useRef(new NotificationsController()).current;
   const [notificationsState, setNotificationsState] = useState(notificationsController.getState());
   const [unreadCount, setUnreadCount] = useState(notificationsController.getUnreadCount());
@@ -301,9 +329,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                     )}
                     <div className={`relative z-10 ${isActive ? 'text-white' : 'text-tertiary'}`}>{getDomainIcon(key)}</div>
                     {!isSidebarCollapsed && <span className="relative z-10 flex-1 text-left truncate">{meta.title}</span>}
-                    {!isSidebarCollapsed && meta.badgeCount && (
+                    {!isSidebarCollapsed && !!domainBadgeCounts[key] && (
                       <span className={`relative z-10 px-1.5 py-0.5 text-[10px] font-mono rounded-[var(--radius-pill)] ${isActive ? 'bg-white/20 text-white' : 'bg-indigo-500/30 text-indigo-300'}`}>
-                        {meta.badgeCount}
+                        {domainBadgeCounts[key]! > 99 ? '99+' : domainBadgeCounts[key]}
                       </span>
                     )}
                   </motion.button>
@@ -538,7 +566,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           ].map((item) => {
             const isActive = currentDomain === item.key;
             const isRaised = item.key === 'live';
-            const badgeCount = DOMAINS_REGISTRY[item.key as DomainKey]?.badgeCount;
+            const badgeCount = domainBadgeCounts[item.key as DomainKey];
 
             return (
               <motion.button
@@ -564,7 +592,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 )}
                 <span className="relative z-10">{item.icon}</span>
                 {!!badgeCount && (
-                  <span className="absolute right-1.5 top-1 z-20 h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-[var(--color-surface)]" />
+                  <span className="absolute -right-1 -top-1 z-20 min-w-4 h-4 px-1 rounded-[var(--radius-pill)] bg-rose-500 ring-2 ring-[var(--color-surface)] text-[9px] font-bold text-white flex items-center justify-center">
+                    {badgeCount > 99 ? '99+' : badgeCount}
+                  </span>
                 )}
               </motion.button>
             );
