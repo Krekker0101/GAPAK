@@ -238,7 +238,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         {/* DESKTOP SIDEBAR - floating glass panel      */}
         {/* ========================================== */}
         <aside
-          className={`hidden md:flex flex-col overflow-hidden rounded-[var(--radius-2xl)] border border-white/10 bg-surface-glass-strong backdrop-blur-2xl backdrop-saturate-150 shadow-[0_20px_60px_-20px_rgb(0,0,0,0.45)] transition-all duration-300 ease-[cubic-bezier(.22,1,.36,1)] z-30 select-none ${
+          className={`liquid-glass-panel hidden md:flex flex-col overflow-hidden rounded-[var(--radius-2xl)] border border-white/10 shadow-[0_20px_60px_-20px_rgb(0,0,0,0.45)] transition-all duration-300 ease-[cubic-bezier(.22,1,.36,1)] z-30 select-none ${
             isSidebarCollapsed ? 'w-18' : 'w-64'
           }`}
         >
@@ -282,9 +282,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                   permission={meta.requiredPermission}
                   fallback={null}
                 >
-                  <button
+                  <motion.button
                     onClick={() => onNavigate(key)}
-                    className={`relative w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-xl)] text-xs font-semibold transition-colors overflow-hidden ${
+                    whileHover={{ scale: 1.015 }}
+                    whileTap={{ scale: 0.985 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 28, mass: 0.7 }}
+                    className={`nav-domain-btn relative w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-xl)] text-xs font-semibold transition-colors overflow-hidden ${
                       isActive ? 'text-white font-bold' : 'text-tertiary hover:text-primary hover:bg-surface-glass'
                     }`}
                     title={isSidebarCollapsed ? meta.title : undefined}
@@ -292,8 +295,8 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                     {isActive && (
                       <motion.span
                         layoutId="sidebar-active-pill"
-                        transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-                        className="absolute inset-0 rounded-[var(--radius-xl)] bg-gradient-to-r from-indigo-600 to-indigo-500 shadow-token-md shadow-indigo-600/25"
+                        transition={{ type: 'spring', stiffness: 380, damping: 32, mass: 0.8 }}
+                        className="liquid-active-pill absolute inset-0 rounded-[var(--radius-xl)]"
                       />
                     )}
                     <div className={`relative z-10 ${isActive ? 'text-white' : 'text-tertiary'}`}>{getDomainIcon(key)}</div>
@@ -303,7 +306,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                         {meta.badgeCount}
                       </span>
                     )}
-                  </button>
+                  </motion.button>
                 </PermissionGuard>
               );
             })}
@@ -523,8 +526,8 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         <motion.div
           initial={{ y: 48, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
-          transition={{ type: 'spring', stiffness: 300, damping: 26 }}
-          className="relative flex w-full max-w-sm items-center justify-between gap-1 rounded-[var(--radius-pill)] border border-white/10 bg-surface-glass-strong px-3 py-2 shadow-[0_20px_50px_-12px_rgb(0,0,0,0.45)] backdrop-blur-2xl backdrop-saturate-150"
+          transition={{ type: 'spring', stiffness: 300, damping: 26, mass: 0.8 }}
+          className="liquid-glass-panel relative flex w-full max-w-sm items-center justify-between gap-1 rounded-[var(--radius-pill)] border border-white/10 px-3 py-2 shadow-[0_20px_50px_-12px_rgb(0,0,0,0.45)]"
         >
           {[
             { key: 'posts', label: 'Posts', icon: <Rss className="w-5 h-5" /> },
@@ -543,9 +546,10 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 onClick={() => onNavigate(item.key as DomainKey)}
                 aria-current={isActive ? 'page' : undefined}
                 aria-label={item.label}
+                whileHover={!isRaised ? { scale: 1.05 } : undefined}
                 whileTap={{ scale: 0.88 }}
-                transition={{ type: 'spring', stiffness: 420, damping: 22 }}
-                className={`relative flex items-center justify-center rounded-full transition-colors ${
+                transition={{ type: 'spring', stiffness: 420, damping: 22, mass: 0.7 }}
+                className={`nav-domain-btn relative flex items-center justify-center rounded-full transition-colors ${
                   isRaised
                     ? '-mt-6 h-14 w-14 bg-gradient-to-br from-indigo-500 via-indigo-600 to-purple-600 text-white shadow-[0_10px_24px_-4px_rgb(99,102,241,0.55)]'
                     : `h-11 w-12 ${isActive ? 'text-white' : 'text-tertiary'}`
@@ -554,8 +558,8 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 {isActive && !isRaised && (
                   <motion.span
                     layoutId="mobile-nav-active-pill"
-                    transition={{ type: 'spring', stiffness: 420, damping: 30 }}
-                    className="absolute inset-0 rounded-full bg-indigo-600"
+                    transition={{ type: 'spring', stiffness: 380, damping: 30, mass: 0.8 }}
+                    className="liquid-active-pill-round absolute inset-0 rounded-full"
                   />
                 )}
                 <span className="relative z-10">{item.icon}</span>
