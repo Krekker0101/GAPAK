@@ -238,7 +238,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         {/* DESKTOP SIDEBAR                            */}
         {/* ========================================== */}
         <aside
-          className={`hidden md:flex flex-col app-glass border-r border-subtle transition-all duration-300 z-30 select-none ${
+          className={`hidden md:flex flex-col app-glass border-r border-subtle shadow-[8px_0_32px_-16px_rgb(0,0,0,0.25)] transition-all duration-300 ease-[cubic-bezier(.22,1,.36,1)] z-30 select-none ${
             isSidebarCollapsed ? 'w-18' : 'w-64'
           }`}
         >
@@ -284,17 +284,22 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 >
                   <button
                     onClick={() => onNavigate(key)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-xl)] text-xs font-semibold transition-all relative ${
-                      isActive
-                        ? 'bg-indigo-600 text-white shadow-token-md shadow-indigo-600/20 font-bold'
-                        : 'text-tertiary hover:text-primary hover:bg-surface-glass'
+                    className={`relative w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-xl)] text-xs font-semibold transition-colors overflow-hidden ${
+                      isActive ? 'text-white font-bold' : 'text-tertiary hover:text-primary hover:bg-surface-glass'
                     }`}
                     title={isSidebarCollapsed ? meta.title : undefined}
                   >
-                    <div className={isActive ? 'text-white' : 'text-tertiary'}>{getDomainIcon(key)}</div>
-                    {!isSidebarCollapsed && <span className="flex-1 text-left truncate">{meta.title}</span>}
+                    {isActive && (
+                      <motion.span
+                        layoutId="sidebar-active-pill"
+                        transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                        className="absolute inset-0 rounded-[var(--radius-xl)] bg-gradient-to-r from-indigo-600 to-indigo-500 shadow-token-md shadow-indigo-600/25"
+                      />
+                    )}
+                    <div className={`relative z-10 ${isActive ? 'text-white' : 'text-tertiary'}`}>{getDomainIcon(key)}</div>
+                    {!isSidebarCollapsed && <span className="relative z-10 flex-1 text-left truncate">{meta.title}</span>}
                     {!isSidebarCollapsed && meta.badgeCount && (
-                      <span className="px-1.5 py-0.5 text-[10px] font-mono bg-indigo-500/30 text-indigo-300 rounded-[var(--radius-pill)]">
+                      <span className={`relative z-10 px-1.5 py-0.5 text-[10px] font-mono rounded-[var(--radius-pill)] ${isActive ? 'bg-white/20 text-white' : 'bg-indigo-500/30 text-indigo-300'}`}>
                         {meta.badgeCount}
                       </span>
                     )}
@@ -502,7 +507,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           </header>
 
           {/* Main Workspace Area */}
-          <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 md:pb-6 bg-app">
+          <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto p-4 sm:p-6 pb-28 md:pb-6 bg-app">
             {children}
           </main>
         </div>
@@ -511,29 +516,56 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       {/* ========================================== */}
       {/* MOBILE BOTTOM NAVIGATION BAR               */}
       {/* ========================================== */}
-      <nav aria-label="Primary navigation" className="md:hidden bg-surface-glass-strong border-t border-subtle px-3 py-2 pb-[calc(.5rem+env(safe-area-inset-bottom))] flex items-center justify-around z-40 sticky bottom-0">
-        {[
-          { key: 'posts', label: 'Posts', icon: <Rss className="w-5 h-5" /> },
-          { key: 'chats', label: 'Chats', icon: <MessageSquare className="w-5 h-5" /> },
-          { key: 'live', label: 'Live', icon: <Radio className="w-5 h-5 text-rose-500" /> },
-          { key: 'trust-rooms', label: 'Rooms', icon: <Lock className="w-5 h-5" /> },
-          { key: 'users', label: 'Profile', icon: <User className="w-5 h-5" /> },
-        ].map((item) => {
-          const isActive = currentDomain === item.key;
-          return (
-            <button
-              key={item.key}
-              onClick={() => onNavigate(item.key as DomainKey)}
-              aria-current={isActive ? 'page' : undefined}
-              className={`flex min-h-11 min-w-14 flex-col items-center justify-center gap-1 text-[10px] font-semibold transition-colors ${
-                isActive ? 'text-indigo-400' : 'text-tertiary hover:text-primary'
-              }`}
-            >
-              {item.icon}
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
+      <nav
+        aria-label="Primary navigation"
+        className="md:hidden fixed inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-[calc(.9rem+env(safe-area-inset-bottom))]"
+      >
+        <motion.div
+          initial={{ y: 48, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ type: 'spring', stiffness: 300, damping: 26 }}
+          className="relative flex items-center gap-1 rounded-[var(--radius-pill)] border border-white/10 bg-surface-glass-strong px-2 py-2 shadow-[0_20px_50px_-12px_rgb(0,0,0,0.45)] backdrop-blur-2xl backdrop-saturate-150"
+        >
+          {[
+            { key: 'posts', label: 'Posts', icon: <Rss className="w-5 h-5" /> },
+            { key: 'chats', label: 'Chats', icon: <MessageSquare className="w-5 h-5" /> },
+            { key: 'live', label: 'Live', icon: <Radio className="w-5 h-5" /> },
+            { key: 'trust-rooms', label: 'Rooms', icon: <Lock className="w-5 h-5" /> },
+            { key: 'users', label: 'Profile', icon: <User className="w-5 h-5" /> },
+          ].map((item) => {
+            const isActive = currentDomain === item.key;
+            const isRaised = item.key === 'live';
+            const badgeCount = DOMAINS_REGISTRY[item.key as DomainKey]?.badgeCount;
+
+            return (
+              <motion.button
+                key={item.key}
+                onClick={() => onNavigate(item.key as DomainKey)}
+                aria-current={isActive ? 'page' : undefined}
+                aria-label={item.label}
+                whileTap={{ scale: 0.88 }}
+                transition={{ type: 'spring', stiffness: 420, damping: 22 }}
+                className={`relative flex items-center justify-center rounded-full transition-colors ${
+                  isRaised
+                    ? '-mt-6 h-14 w-14 bg-gradient-to-br from-indigo-500 via-indigo-600 to-purple-600 text-white shadow-[0_10px_24px_-4px_rgb(99,102,241,0.55)]'
+                    : `h-11 w-12 ${isActive ? 'text-white' : 'text-tertiary'}`
+                }`}
+              >
+                {isActive && !isRaised && (
+                  <motion.span
+                    layoutId="mobile-nav-active-pill"
+                    transition={{ type: 'spring', stiffness: 420, damping: 30 }}
+                    className="absolute inset-0 rounded-full bg-indigo-600"
+                  />
+                )}
+                <span className="relative z-10">{item.icon}</span>
+                {!!badgeCount && (
+                  <span className="absolute right-1.5 top-1 z-20 h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-[var(--color-surface)]" />
+                )}
+              </motion.button>
+            );
+          })}
+        </motion.div>
       </nav>
 
       {/* Command Palette Component */}
