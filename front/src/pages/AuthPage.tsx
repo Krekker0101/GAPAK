@@ -1,6 +1,21 @@
 import React, { FormEvent, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  Mail,
+  Lock,
+  User,
+  AtSign,
+  Eye,
+  EyeOff,
+  ShieldCheck,
+  Sparkles,
+  UserRound,
+  ArrowRight,
+} from 'lucide-react';
 import { useAuth } from '../domains/auth/AuthContext';
+import { Button, Input, SegmentedControl } from '../shared/design-system/primitives';
+import { AuthShowcaseFeed } from './auth/AuthShowcaseFeed';
 
 const AuthPage: React.FC = () => {
   const { state, user, error, login, register, anonymousRegister, clearError } = useAuth();
@@ -11,6 +26,7 @@ const AuthPage: React.FC = () => {
   const [loginValue, setLoginValue] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [totpCode, setTotpCode] = useState('');
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -67,70 +83,205 @@ const AuthPage: React.FC = () => {
   const message = submitError || error?.message;
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-950 flex items-center justify-center px-4 py-10">
-      <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl backdrop-blur-xl">
-        <div className="mb-8">
-          <p className="text-sm font-semibold tracking-[0.25em] text-slate-400">GAPAK</p>
-          <h1 className="mt-2 text-3xl font-semibold">{isRegister ? 'Create your account' : 'Welcome back'}</h1>
-          <p className="mt-2 text-sm text-slate-500">
-            {isRegister ? 'Create a real GAPAK session using the production authentication API.' : 'Sign in to your GAPAK account.'}
+    <main className="relative flex min-h-screen bg-app app-shell-surface text-primary">
+      {/* Left showcase panel - decorative only, hidden below lg */}
+      <div className="relative hidden w-[46%] max-w-2xl overflow-hidden border-r border-subtle lg:block">
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              'radial-gradient(circle at 20% 0%, rgb(99 102 241 / .16), transparent 42rem), radial-gradient(circle at 90% 100%, rgb(168 85 247 / .14), transparent 38rem)',
+          }}
+        />
+        <AuthShowcaseFeed columns={2} />
+
+        {/* Top brand + tagline, sits above the feed */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-col gap-3 bg-gradient-to-b from-[var(--color-bg)] via-[var(--color-bg)]/85 to-transparent px-10 pb-16 pt-10">
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] bg-indigo-600 text-white shadow-token-md">
+              <Sparkles className="h-4.5 w-4.5" />
+            </div>
+            <span className="text-lg font-bold tracking-tight text-primary">GAPAK</span>
+          </div>
+          <h2 className="max-w-sm text-2xl font-semibold leading-snug text-primary">
+            Лента, где происходит всё интересное
+          </h2>
+          <p className="max-w-sm text-sm text-secondary">
+            Посты, сторис и живые обсуждения твоих людей — в одном месте.
           </p>
         </div>
 
-        <form onSubmit={submit} className="space-y-4">
-          {isRegister && (
-            <>
-              <label className="block text-sm text-slate-600">
-                Email
-                <input required type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-white/30" />
-              </label>
-              <label className="block text-sm text-slate-600">
-                Username
-                <input required minLength={3} maxLength={32} pattern="[A-Za-z0-9]+" value={username} onChange={(e) => setUsername(e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-white/30" autoComplete="username" />
-              </label>
-              <label className="block text-sm text-slate-600">
-                Display name
-                <input required minLength={2} maxLength={80} value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-white/30" />
-              </label>
-            </>
-          )}
+        {/* Bottom fade so the feed doesn't feel cramped at the edge */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-[var(--color-bg)] to-transparent" />
+      </div>
 
-          {!isRegister && (
-            <label className="block text-sm text-slate-600">
-              Email or username
-              <input required value={loginValue} onChange={(e) => setLoginValue(e.target.value)} type="text" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-white/30" autoComplete="username" />
-            </label>
-          )}
+      {/* Right auth panel */}
+      <div className="flex flex-1 items-center justify-center px-4 py-10 sm:px-8">
+        <div className="w-full max-w-md">
+          {/* Mobile-only brand mark */}
+          <div className="mb-8 flex items-center gap-2 lg:hidden">
+            <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] bg-indigo-600 text-white shadow-token-md">
+              <Sparkles className="h-4.5 w-4.5" />
+            </div>
+            <span className="text-lg font-bold tracking-tight text-primary">GAPAK</span>
+          </div>
 
+          <div className="rounded-[var(--radius-3xl)] border border-subtle bg-surface p-7 shadow-token-lg sm:p-9">
+            <div className="mb-6 flex items-center justify-between gap-3">
+              <div>
+                <h1 className="text-2xl font-semibold text-primary">
+                  {isRegister ? 'Создать аккаунт' : 'С возвращением'}
+                </h1>
+                <p className="mt-1 text-sm text-secondary">
+                  {isRegister ? 'Пара шагов — и вы в ленте' : 'Войдите, чтобы продолжить'}
+                </p>
+              </div>
+            </div>
 
-          <label className="block text-sm text-slate-600">
-            Password
-            <input required minLength={12} maxLength={128} value={password} onChange={(e) => setPassword(e.target.value)} type="password" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-white/30" autoComplete={isRegister ? 'new-password' : 'current-password'} />
-          </label>
+            <SegmentedControl
+              value={isRegister ? 'register' : 'login'}
+              onChange={(val) => navigate(val === 'register' ? '/register' : '/login')}
+              options={[
+                { label: 'Вход', value: 'login' },
+                { label: 'Регистрация', value: 'register' },
+              ]}
+            />
 
-          {!isRegister && (
-            <label className="block text-sm text-slate-600">
-              Authenticator code (optional)
-              <input inputMode="numeric" autoComplete="one-time-code" maxLength={12} value={totpCode} onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-white/30" />
-            </label>
-          )}
+            <AnimatePresence mode="wait">
+              <motion.form
+                key={isRegister ? 'register' : 'login'}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.18 }}
+                onSubmit={submit}
+                className="mt-6 space-y-4"
+              >
+                {isRegister && (
+                  <>
+                    <Input
+                      label="E-mail"
+                      required
+                      type="email"
+                      autoComplete="email"
+                      placeholder="you@example.com"
+                      leftIcon={<Mail className="h-4 w-4" />}
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
+                    <Input
+                      label="Имя пользователя"
+                      required
+                      minLength={3}
+                      maxLength={32}
+                      pattern="[A-Za-z0-9]+"
+                      autoComplete="username"
+                      placeholder="username"
+                      leftIcon={<AtSign className="h-4 w-4" />}
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                    />
+                    <Input
+                      label="Отображаемое имя"
+                      required
+                      minLength={2}
+                      maxLength={80}
+                      placeholder="Как вас видят другие"
+                      leftIcon={<User className="h-4 w-4" />}
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                    />
+                  </>
+                )}
 
-          {message && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{message}</div>}
+                {!isRegister && (
+                  <Input
+                    label="E-mail или имя пользователя"
+                    required
+                    autoComplete="username"
+                    placeholder="you@example.com"
+                    leftIcon={<Mail className="h-4 w-4" />}
+                    value={loginValue}
+                    onChange={(e) => setLoginValue(e.target.value)}
+                  />
+                )}
 
-          <button disabled={busy} type="submit" className="w-full rounded-xl bg-slate-950 px-4 py-3 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
-            {busy ? 'Connecting…' : isRegister ? 'Create account' : 'Sign in'}
-          </button>
-        </form>
+                <Input
+                  label="Пароль"
+                  required
+                  minLength={12}
+                  maxLength={128}
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete={isRegister ? 'new-password' : 'current-password'}
+                  placeholder="Минимум 12 символов"
+                  leftIcon={<Lock className="h-4 w-4" />}
+                  rightIcon={
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      className="pointer-events-auto text-tertiary transition hover:text-secondary"
+                      aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
+                      tabIndex={-1}
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  }
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
 
-        <button type="button" onClick={() => void anonymous()} disabled={busy} className="mt-3 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">
-          Continue anonymously
-        </button>
+                {!isRegister && (
+                  <Input
+                    label="Код аутентификатора (опционально)"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={12}
+                    placeholder="6-значный код"
+                    leftIcon={<ShieldCheck className="h-4 w-4" />}
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
+                  />
+                )}
 
-        <div className="mt-6 flex items-center justify-between text-sm text-slate-500">
-          <button type="button" onClick={() => navigate(isRegister ? '/login' : '/register')} className="hover:text-slate-950">
-            {isRegister ? 'Already have an account?' : 'Create an account'}
-          </button>
-          <button type="button" onClick={() => navigate('/')} className="hover:text-slate-950">Home</button>
+                {message && (
+                  <div role="alert" className="rounded-[var(--radius-lg)] border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-500">
+                    {message}
+                  </div>
+                )}
+
+                <Button type="submit" isLoading={busy} fullWidth size="lg" rightIcon={!busy ? <ArrowRight className="h-4 w-4" /> : undefined}>
+                  {busy ? 'Подключение…' : isRegister ? 'Создать аккаунт' : 'Войти'}
+                </Button>
+              </motion.form>
+            </AnimatePresence>
+
+            <div className="my-6 flex items-center gap-3">
+              <div className="h-px flex-1 bg-[var(--color-border-subtle)]" />
+              <span className="text-xs font-medium text-muted">или</span>
+              <div className="h-px flex-1 bg-[var(--color-border-subtle)]" />
+            </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              fullWidth
+              size="lg"
+              leftIcon={<UserRound className="h-4 w-4" />}
+              onClick={() => void anonymous()}
+              disabled={busy}
+            >
+              Продолжить анонимно
+            </Button>
+
+            <div className="mt-7 flex items-center justify-between text-sm">
+              <button type="button" onClick={() => navigate(isRegister ? '/login' : '/register')} className="font-medium text-indigo-500 hover:text-indigo-400">
+                {isRegister ? 'Уже есть аккаунт?' : 'Создать аккаунт'}
+              </button>
+              <button type="button" onClick={() => navigate('/')} className="text-muted hover:text-secondary">
+                На главную
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </main>
