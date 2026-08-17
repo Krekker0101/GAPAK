@@ -21,7 +21,7 @@ func TestIdempotentResponsePreservesReplayHeaders(t *testing.T) {
 	response := idempotentResponse{
 		Status: 201,
 		Headers: map[string][]string{
-			"Set-Cookie":   {"gapak_at=abc; HttpOnly", "gapak_csrf=xyz"},
+			"Set-Cookie":   {"gapak_at=abc; HttpOnly"},
 			"X-Request-Id": {"req-1"},
 		},
 	}

@@ -42,7 +42,7 @@ HTTP `204 No Content` is used for successful operations whose frontend contract 
 
 `POST /auth/register`, `POST /auth/register-anonymous`, `POST /auth/login`, `POST /auth/refresh`, password-reset endpoints and logout retain their existing route semantics. Auth responses contain real server-generated user/session identifiers, access token material, CSRF token and persisted expiration timestamps. The refresh token is never serialized into a JavaScript-readable JSON response. It is stored only in the HttpOnly refresh cookie `gapak_rt`. The access cookie `gapak_at` is also HttpOnly; current frontend HTTP requests may continue using the in-memory access token while the browser WebSocket uses the access cookie.
 
-OAuth starts with `GET /auth/oauth/{provider}` and returns a provider URL. The provider callback is `GET /auth/callback/{provider}`. On success the backend establishes HttpOnly access (`gapak_at`), refresh (`gapak_rt`) and CSRF (`gapak_csrf`) cookies and redirects to `OAUTH_FRONTEND_REDIRECT_URL`, which must exactly match one configured CORS origin. Production requires `COOKIE_SECURE=true`, `COOKIE_SAME_SITE=none`, and an empty `COOKIE_DOMAIN` for the Vercel-to-Railway deployment. The current frontend does not expose `/auth/callback` as an application route.
+OAuth starts with `GET /auth/oauth/{provider}` and returns a provider URL. The provider callback is `GET /auth/callback/{provider}`. On success the backend establishes HttpOnly access (`gapak_at`) and refresh (`gapak_rt`) cookies and redirects to `OAUTH_FRONTEND_REDIRECT_URL`; the frontend should then call `GET /auth/csrf` and keep the returned CSRF token in memory. Browser mutations still require an exact configured CORS `Origin`. Production requires `COOKIE_SECURE=true`, `COOKIE_SAME_SITE=none`, and an empty `COOKIE_DOMAIN` for the Vercel-to-Railway deployment. CSRF is not a cookie. The current frontend does not expose `/auth/callback` as an application route.
 
 ## E2EE / trusted devices
 
@@ -86,7 +86,7 @@ A failed mutation does not remain permanently reserved by the idempotency layer;
 
 ## Authentication security
 
-Production cookies are `Secure`, `HttpOnly`, `SameSite=None`; `COOKIE_DOMAIN` remains empty so cookies are host-only on Railway and are never scoped to a Vercel frontend domain. `POST`, `PUT`, `PATCH`, `DELETE` and other unsafe browser mutations require `X-CSRF-Token`. When a browser sends `Origin`, it must exactly match a configured CORS origin. CORS uses explicit origins only, with credentials enabled and no wildcard origin.
+Production cookies are `Secure`, `HttpOnly`, `SameSite=None`; `COOKIE_DOMAIN` remains empty so cookies are host-only on Railway and are never scoped to a Vercel frontend domain. `POST`, `PUT`, `PATCH`, `DELETE` and other unsafe browser mutations require `X-CSRF-Token`. When a browser sends `Origin`, it must exactly match a configured CORS origin. CORS uses explicit origins only, with credentials enabled and no wildcard origin. The CSRF token is held only in application memory and sent as `X-CSRF-Token`.
 
 WebSocket authentication is cookie-first for browsers: `/ws` validates the HttpOnly `gapak_at` access cookie and the exact `Origin`. No access token is accepted in the WebSocket query string. A first-frame `auth` message remains supported for non-browser clients that do not send cookies; it must provide a valid access token. Invalid browser cookie authentication is rejected at the handshake.
 

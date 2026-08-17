@@ -493,7 +493,6 @@ func (s *Service) buildAuthResponse(user *model.User, session *model.DeviceSessi
 		AccessToken:  pair.AccessToken,
 		AccessTTL:    pair.AccessTokenTTL,
 		RefreshTTL:   pair.RefreshTokenTTL,
-		CSRFToken:    pair.CSRFToken,
 		RefreshUntil: pair.RefreshExpiresAt,
 	}
 }

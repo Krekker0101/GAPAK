@@ -179,7 +179,7 @@ Gapak follows an **octagonal architecture** with explicit boundaries:
 - **Token Management**: 
   - Access tokens in JSON responses (`Authorization: Bearer`)
   - Refresh tokens in HttpOnly cookies (`gapak_rt`)
-  - CSRF tokens in cookies + response body
+  - CSRF tokens are server-backed session secrets returned in the JSON response; the browser keeps the token in memory and sends it only via `X-CSRF-Token`
 - **Brute-Force Protection**: Rate limiting per IP/device
 - **CSRF/XSS/SQLi Prevention**: Helmet middleware, parameterized queries, input validation
 - **Strict Access Control**: Row-level authorization on all private data
@@ -436,8 +436,9 @@ open http://localhost:8080/api/docs
 
 1. **Register**: `POST /api/v1/auth/register`
 2. **Login**: `POST /api/v1/auth/login` → Get `access_token` + `gapak_rt` cookie
-3. **Use Access Token**: `Authorization: Bearer <token>` in headers
-4. **Refresh**: `POST /api/v1/auth/refresh` (requires `X-CSRF-Token` header and `gapak_csrf` cookie)
+3. **Get CSRF token**: `GET /api/v1/auth/csrf` → keep `csrfToken` only in browser memory
+4. **Use Access Token**: `Authorization: Bearer <token>` in headers
+5. **Refresh**: `POST /api/v1/auth/refresh` (requires `X-CSRF-Token`; the token is stored server-side and kept in browser memory)
 5. **Logout**: `POST /api/v1/auth/logout`
 
 ### Example: Create a Post

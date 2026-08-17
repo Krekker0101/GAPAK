@@ -19,8 +19,8 @@ No usable staging HTTP/WSS endpoint, credentials, PostgreSQL/Redis instances, or
 
 Confirmed backend fixes made during this audit:
 
-- CSRF cookie is now JavaScript-readable for the double-submit contract while access/refresh cookies remain HttpOnly.
-- CSRF mutation validation now requires both cookie and header token plus exact allowed Origin for browser requests.
+- CSRF no longer uses a double-submit cookie; access/refresh cookies remain HttpOnly and CSRF is server-backed.
+- CSRF mutation validation now requires a server-side session CSRF token in the `X-CSRF-Token` header plus the exact allowed Origin for browser requests.
 - Auth idempotency replay now preserves response headers, including `Set-Cookie`.
 - Auth session `created_at` is one server-generated UTC value persisted to PostgreSQL and returned to the client.
 - `/health/ready` no longer returns fake success when the PostgreSQL dependency is absent.
@@ -42,7 +42,7 @@ The current source review found no remaining backend-only critical authorization
 | REFRESH | `POST /api/v1/auth/refresh`, CSRF-protected browser mutation, rotation, cookie sync | PASS after fix | BLOCKED |
 | LOGOUT | `POST /api/v1/auth/logout`, authenticated, CSRF, cookie clear | PASS | BLOCKED |
 | Authenticated GET | `/api/v1/*` protected by `RequireAuth` where declared | PASS | BLOCKED |
-| CSRF protected POST/PUT/PATCH/DELETE | exact Origin + double-submit cookie/header for browser mutations | PASS after fix | BLOCKED |
+| CSRF protected POST/PUT/PATCH/DELETE | exact Origin + server-side session CSRF token for browser mutations | PASS after fix | BLOCKED |
 | CHAT CREATE | `POST /api/v1/chats`, 201 | PASS | BLOCKED |
 | CHAT LIST | `GET /api/v1/chats`, complete backend response | PASS | BLOCKED |
 | MESSAGE SEND | `POST /api/v1/chats/:chatId/messages`, E2EE-only | PASS | BLOCKED |
@@ -67,7 +67,7 @@ The authoritative contract requires `/api/v1`; the backend uses `/api/v1`. The a
 
 ## 3. Authentication
 
-REGISTER, LOGIN and anonymous registration create real server-side user/session IDs and set access, refresh and CSRF cookies. Access and refresh credentials are not treated as client-generated identifiers. Refresh tokens remain cookie-only.
+REGISTER, LOGIN and anonymous registration create real server-side user/session IDs and set only access/refresh cookies. A server-backed CSRF token is returned in JSON and kept in browser memory. Access and refresh credentials are not treated as client-generated identifiers. Refresh tokens remain cookie-only.
 
 Refresh rotation uses compare-and-swap on the stored refresh-token hash, preventing two concurrent refreshes from both succeeding with the same old token. Replay/conflict paths revoke the session.
 
@@ -79,11 +79,11 @@ Logout revokes either the current session or all other sessions plus current ses
 
 Production cookie configuration is enforced through config validation: Secure cookies, SameSite=None for cross-site production, and empty cookie domain for the Vercel-to-Railway architecture.
 
-`gapak_at` and `gapak_rt` remain HttpOnly. The CSRF cookie is deliberately non-HttpOnly because the frontend must read it for the double-submit header.
+`gapak_at` and `gapak_rt` remain HttpOnly. There is no CSRF cookie; the frontend reads the JSON token once and keeps it in memory.
 
-CSRF clearing was normalized to one cookie path so duplicate same-name/path clearing behavior is avoided.
+CSRF state is deleted from the server-side store on session logout; no CSRF cookie is cleared because none exists.
 
-The audit also fixed refresh CSRF synchronization: `REFRESH` now writes the newly issued CSRF token to `gapak_csrf`. Without this, the response token and browser cookie could diverge after refresh.
+Refresh now rotates the server-side CSRF secret for the existing session and returns the new token in JSON. No cookie synchronization is required.
 
 ## 5. CORS
 
@@ -95,7 +95,7 @@ No wildcard-with-credentials path was found in the production configuration logi
 
 ## 6. CSRF
 
-Unsafe browser mutations are globally covered by `BrowserMutationCSRF`. The backend requires a CSRF header and a matching CSRF cookie, using constant-time comparison.
+Unsafe browser mutations are globally covered by `BrowserMutationCSRF`. The backend requires a CSRF header whose digest matches the server-side session secret, using constant-time comparison.
 
 Origin validation is exact against configured CORS origins. Requests with an untrusted browser Origin are rejected.
 
@@ -107,7 +107,7 @@ The earlier header-only fallback was removed because it weakened the double-subm
 
 OAuth start endpoints generate state and PKCE verifier/challenge material. State and verifier are stored in HttpOnly cookies. Callback validates state and requires the authorization code before invoking the provider flow.
 
-On successful callback the backend establishes access, refresh and CSRF cookies and redirects to the configured frontend origin. Production configuration requires HTTPS and exact CORS-origin alignment.
+On successful callback the backend establishes access and refresh cookies and redirects to the configured frontend origin; the frontend then obtains a server-backed CSRF token from `GET /auth/csrf`. Production configuration requires HTTPS and exact CORS-origin alignment.
 
 No production-safe OAuth callback bypass was identified in source review. Actual provider redirect and browser cookie behavior remain live-verification tasks.
 

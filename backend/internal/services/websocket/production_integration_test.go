@@ -4,8 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -14,8 +13,15 @@ import (
 	"github.com/gofiber/fiber/v2"
 	fiberws "github.com/gofiber/websocket/v2"
 	"github.com/rs/zerolog"
-	"github.com/valyala/fasthttp/fasthttpadaptor"
 )
+
+// integrationServer is a minimal stand-in for httptest.Server, backed by a
+// real TCP listener serving the fiber/fasthttp app directly (fasthttpadaptor
+// only bridges net/http handlers onto fasthttp, not the other way around, so
+// it cannot be used to expose a fasthttp app through httptest.Server).
+type integrationServer struct {
+	URL string
+}
 
 func testLogger() zerolog.Logger {
 	return zerolog.New(io.Discard)
@@ -84,17 +90,24 @@ func (integrationAuthService) ValidateToken(_ context.Context, token string) (st
 	return "", errors.New("invalid token")
 }
 
-func newIntegrationServer(t *testing.T, service *Service) (*httptest.Server, *ConnectionRegistry) {
+func newIntegrationServer(t *testing.T, service *Service) (*integrationServer, *ConnectionRegistry) {
 	t.Helper()
 	app := fiber.New()
 	app.Get("/ws", fiberws.New(service.HandleConnection))
-	handler := fasthttpadaptor.NewFastHTTPHandler(app.Handler())
-	srv := httptest.NewServer(http.HandlerFunc(handler))
-	t.Cleanup(srv.Close)
-	return srv, service.connections
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() {
+		_ = app.Listener(ln)
+	}()
+	t.Cleanup(func() { _ = app.Shutdown() })
+
+	return &integrationServer{URL: "http://" + ln.Addr().String()}, service.connections
 }
 
-func dialIntegration(t *testing.T, srv *httptest.Server) *fastws.Conn {
+func dialIntegration(t *testing.T, srv *integrationServer) *fastws.Conn {
 	t.Helper()
 	url := "ws" + srv.URL[len("http"):] + "/ws"
 	conn, _, err := fastws.DefaultDialer.Dial(url, nil)

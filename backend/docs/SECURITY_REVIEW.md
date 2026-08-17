@@ -30,7 +30,7 @@ The review intentionally assumed previous hardening work could be incomplete or 
 - JWT parser pins HS256 and requires a known `kid`.
 - Refresh rotation uses a database compare-and-swap on the current refresh-token hash.
 - Production rejects default secrets, non-HTTPS base URLs, wildcard CORS and insecure cookies.
-- CSRF uses a double-submit cookie + header check.
+- CSRF uses a server-side session secret + header check; no CSRF cookie is used.
 - Critical auth/password rate limits fail closed if Redis is unavailable.
 - Uploads validate declared size, checksum, magic-byte MIME and allowlist membership.
 - FFmpeg has bounded concurrency, timeouts, cancellation and output-size monitoring.

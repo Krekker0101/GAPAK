@@ -37,19 +37,6 @@ func SetRefreshCookie(c *fiber.Ctx, cfg config.SecurityConfig, token string, exp
 	})
 }
 
-func SetCSRFCookie(c *fiber.Ctx, cfg config.SecurityConfig, csrf string, expiresAt time.Time) {
-	c.Cookie(&fiber.Cookie{
-		Name:     cfg.CSRFCookieName,
-		Value:    csrf,
-		Path:     "/",
-		HTTPOnly: false,
-		Secure:   cfg.CookieSecure,
-		SameSite: parseSameSite(cfg.CookieSameSite),
-		Domain:   cookieDomain(cfg.CookieDomain),
-		Expires:  expiresAt,
-	})
-}
-
 func ClearAuthCookies(c *fiber.Ctx, cfg config.SecurityConfig) {
 	expiredAt := time.Now().Add(-time.Hour)
 	c.Cookie(&fiber.Cookie{
@@ -57,16 +44,6 @@ func ClearAuthCookies(c *fiber.Ctx, cfg config.SecurityConfig) {
 		Value:    "",
 		Path:     "/api/v1/auth",
 		HTTPOnly: true,
-		Secure:   cfg.CookieSecure,
-		SameSite: parseSameSite(cfg.CookieSameSite),
-		Domain:   cookieDomain(cfg.CookieDomain),
-		Expires:  expiredAt,
-	})
-	c.Cookie(&fiber.Cookie{
-		Name:     cfg.CSRFCookieName,
-		Value:    "",
-		Path:     "/",
-		HTTPOnly: false,
 		Secure:   cfg.CookieSecure,
 		SameSite: parseSameSite(cfg.CookieSameSite),
 		Domain:   cookieDomain(cfg.CookieDomain),

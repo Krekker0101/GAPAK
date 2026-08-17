@@ -13,6 +13,7 @@ import (
 	"github.com/gapak/backend/internal/config"
 	"github.com/gapak/backend/internal/domain/common"
 	authplatform "github.com/gapak/backend/internal/platform/auth"
+	"github.com/gapak/backend/internal/platform/csrf"
 	apperrors "github.com/gapak/backend/internal/platform/errors"
 	"github.com/gapak/backend/internal/platform/httpx"
 	"github.com/gapak/backend/internal/platform/middleware"
@@ -21,47 +22,57 @@ import (
 
 type Controller struct {
 	service               *Service
+	jwt                   *authplatform.Manager
 	validate              *validator.Validate
 	config                config.SecurityConfig
 	privacy               *privacy.Service
+	csrf                  csrf.Store
 	allowedOrigins        []string
 	configuredFrontendURL string
 }
 
-func NewController(service *Service, validate *validator.Validate, cfg config.SecurityConfig, privacyService *privacy.Service, frontendRedirectURL string, allowedOrigins ...string) *Controller {
-	return &Controller{service: service, validate: validate, config: cfg, privacy: privacyService, allowedOrigins: allowedOrigins, configuredFrontendURL: strings.TrimRight(strings.TrimSpace(frontendRedirectURL), "/") + "/"}
+func NewController(service *Service, validate *validator.Validate, cfg config.SecurityConfig, privacyService *privacy.Service, csrfStore csrf.Store, jwtManager *authplatform.Manager, frontendRedirectURL string, allowedOrigins ...string) *Controller {
+	return &Controller{service: service, jwt: jwtManager, validate: validate, config: cfg, privacy: privacyService, csrf: csrfStore, allowedOrigins: allowedOrigins, configuredFrontendURL: strings.TrimRight(strings.TrimSpace(frontendRedirectURL), "/") + "/"}
 }
 
 func (ctl *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Handler, authLimiter fiber.Handler, passwordLimiter fiber.Handler) {
 	group := router.Group("/auth")
-	group.Get("/csrf", ctl.csrf)
-	group.Post("/register", authLimiter, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.register)
-	group.Post("/register-anonymous", authLimiter, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.registerAnonymous)
-	group.Post("/login", authLimiter, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.login)
+	group.Get("/csrf", ctl.issueCSRFToken)
+	group.Post("/register", authLimiter, middleware.ValidateCSRFForMutations(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...), ctl.register)
+	group.Post("/register-anonymous", authLimiter, middleware.ValidateCSRFForMutations(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...), ctl.registerAnonymous)
+	group.Post("/login", authLimiter, middleware.ValidateCSRFForMutations(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...), ctl.login)
 	// Refresh performs conditional CSRF validation itself when a refresh cookie is used.
 	// Do not wrap it in the unconditional mutation middleware: a first-load request
 	// without a refresh cookie must return 401 rather than an unrelated CSRF 403.
 	group.Post("/refresh", authLimiter, ctl.refresh)
-	group.Post("/forgot-password", passwordLimiter, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.forgotPassword)
-	group.Post("/reset-password", passwordLimiter, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.resetPassword)
-	group.Post("/logout", requireAuth, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.logout)
-	group.Post("/2fa/setup", requireAuth, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.setupTwoFactor)
-	group.Post("/2fa/verify", requireAuth, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.verifyTwoFactor)
-	group.Post("/2fa/disable", requireAuth, middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...), ctl.disableTwoFactor)
+	group.Post("/forgot-password", passwordLimiter, middleware.ValidateCSRFForMutations(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...), ctl.forgotPassword)
+	group.Post("/reset-password", passwordLimiter, middleware.ValidateCSRFForMutations(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...), ctl.resetPassword)
+	group.Post("/logout", requireAuth, middleware.ValidateCSRFForMutations(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...), ctl.logout)
+	group.Post("/2fa/setup", requireAuth, middleware.ValidateCSRFForMutations(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...), ctl.setupTwoFactor)
+	group.Post("/2fa/verify", requireAuth, middleware.ValidateCSRFForMutations(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...), ctl.verifyTwoFactor)
+	group.Post("/2fa/disable", requireAuth, middleware.ValidateCSRFForMutations(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...), ctl.disableTwoFactor)
 
 	group.Get("/oauth/:provider", ctl.oauthRedirect)
 	group.Post("/oauth/:provider", ctl.oauthLogin)
 	group.Get("/callback/:provider", ctl.oauthCallback)
 }
 
-func (ctl *Controller) csrf(c *fiber.Ctx) error {
-	csrfToken, err := authplatform.RandomToken(32)
+func (ctl *Controller) issueCSRFToken(c *fiber.Ctx) error {
+	sessionID := middleware.SessionIDForRequest(c, ctl.jwt, ctl.config)
+	ttl := 15 * time.Minute
+	if refresh := strings.TrimSpace(c.Cookies(ctl.config.RefreshCookieName)); refresh != "" {
+		if claims, err := ctl.jwt.ParseRefreshToken(refresh); err == nil && claims.ExpiresAt != nil {
+			remaining := time.Until(claims.ExpiresAt.Time)
+			if remaining > 0 && remaining < ttl {
+				ttl = remaining
+			}
+		}
+	}
+	token, err := ctl.csrf.Issue(c.UserContext(), sessionID, ttl)
 	if err != nil {
 		return err
 	}
-	expiresAt := time.Now().Add(15 * time.Minute)
-	authplatform.SetCSRFCookie(c, ctl.config, csrfToken, expiresAt)
-	return c.JSON(httpx.OK(map[string]any{"csrfToken": csrfToken, "hasSession": strings.TrimSpace(c.Cookies(ctl.config.RefreshCookieName)) != ""}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+	return c.JSON(httpx.OK(map[string]any{"csrfToken": token, "hasSession": sessionID != ""}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
 func (ctl *Controller) register(c *fiber.Ctx) error {
@@ -75,7 +86,9 @@ func (ctl *Controller) register(c *fiber.Ctx) error {
 	}
 	authplatform.SetAccessCookie(c, ctl.config, response.AccessToken, time.Now().UTC().Add(time.Duration(response.AccessTTL)*time.Second))
 	authplatform.SetRefreshCookie(c, ctl.config, refreshToken, response.RefreshUntil)
-	authplatform.SetCSRFCookie(c, ctl.config, response.CSRFToken, response.RefreshUntil)
+	if err := ctl.attachCSRF(c, &response); err != nil {
+		return err
+	}
 	return c.Status(fiber.StatusCreated).JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
@@ -90,7 +103,9 @@ func (ctl *Controller) login(c *fiber.Ctx) error {
 	}
 	authplatform.SetAccessCookie(c, ctl.config, response.AccessToken, time.Now().UTC().Add(time.Duration(response.AccessTTL)*time.Second))
 	authplatform.SetRefreshCookie(c, ctl.config, refreshToken, response.RefreshUntil)
-	authplatform.SetCSRFCookie(c, ctl.config, response.CSRFToken, response.RefreshUntil)
+	if err := ctl.attachCSRF(c, &response); err != nil {
+		return err
+	}
 	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
@@ -107,7 +122,9 @@ func (ctl *Controller) registerAnonymous(c *fiber.Ctx) error {
 	}
 	authplatform.SetAccessCookie(c, ctl.config, response.AccessToken, time.Now().UTC().Add(time.Duration(response.AccessTTL)*time.Second))
 	authplatform.SetRefreshCookie(c, ctl.config, refreshToken, response.RefreshUntil)
-	authplatform.SetCSRFCookie(c, ctl.config, response.CSRFToken, response.RefreshUntil)
+	if err := ctl.attachCSRF(c, &response); err != nil {
+		return err
+	}
 	return c.Status(fiber.StatusCreated).JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
@@ -116,7 +133,7 @@ func (ctl *Controller) refresh(c *fiber.Ctx) error {
 	if rawToken == "" {
 		return apperrors.ErrUnauthorized
 	}
-	if err := middleware.ValidateCSRFForMutations(ctl.config, ctl.allowedOrigins...)(c); err != nil {
+	if err := middleware.ValidateCSRFForMutations(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...)(c); err != nil {
 		return err
 	}
 
@@ -126,7 +143,9 @@ func (ctl *Controller) refresh(c *fiber.Ctx) error {
 	}
 	authplatform.SetAccessCookie(c, ctl.config, response.AccessToken, time.Now().UTC().Add(time.Duration(response.AccessTTL)*time.Second))
 	authplatform.SetRefreshCookie(c, ctl.config, refreshToken, response.RefreshUntil)
-	authplatform.SetCSRFCookie(c, ctl.config, response.CSRFToken, response.RefreshUntil)
+	if err := ctl.attachCSRF(c, &response); err != nil {
+		return err
+	}
 	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
@@ -140,7 +159,7 @@ func (ctl *Controller) logout(c *fiber.Ctx) error {
 		}
 	}
 	if strings.TrimSpace(c.Cookies(ctl.config.RefreshCookieName)) != "" {
-		if err := middleware.ValidateCSRF(ctl.config)(c); err != nil {
+		if err := middleware.ValidateCSRF(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...)(c); err != nil {
 			return err
 		}
 	}
@@ -154,6 +173,7 @@ func (ctl *Controller) logout(c *fiber.Ctx) error {
 		_ = ctl.service.RevokeAccessToken(c.UserContext(), claims.ID)
 	}
 	authplatform.ClearAuthCookies(c, ctl.config)
+	_ = ctl.csrf.Delete(c.UserContext(), claims.SessionID)
 	return c.JSON(httpx.OK(AcceptedResponse{Accepted: true}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
@@ -210,6 +230,25 @@ func (ctl *Controller) disableTwoFactor(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+}
+
+func (ctl *Controller) attachCSRF(c *fiber.Ctx, response *AuthResponse) error {
+	token, err := ctl.issueSessionCSRF(c, response.Session.ID, response.RefreshUntil)
+	if err != nil {
+		return err
+	}
+	response.CSRFToken = token
+	return nil
+}
+
+// issueSessionCSRF issues a CSRF token bound to sessionID, capping its TTL to
+// whichever is sooner: 15 minutes, or the remaining time until refreshUntil.
+func (ctl *Controller) issueSessionCSRF(c *fiber.Ctx, sessionID string, refreshUntil time.Time) (string, error) {
+	ttl := 15 * time.Minute
+	if remaining := time.Until(refreshUntil); remaining > 0 && remaining < ttl {
+		ttl = remaining
+	}
+	return ctl.csrf.Issue(c.UserContext(), sessionID, ttl)
 }
 
 func (ctl *Controller) requestMeta(c *fiber.Ctx, deviceName, deviceFingerprint string) common.RequestMeta {
@@ -289,7 +328,6 @@ func (ctl *Controller) oauthCallback(c *fiber.Ctx) error {
 	}
 	authplatform.SetAccessCookie(c, ctl.config, response.AccessToken, time.Now().UTC().Add(time.Duration(response.AccessTTL)*time.Second))
 	authplatform.SetRefreshCookie(c, ctl.config, refreshToken, response.RefreshUntil)
-	authplatform.SetCSRFCookie(c, ctl.config, response.CSRFToken, response.RefreshUntil)
 	return c.Redirect(strings.TrimRight(ctl.configuredFrontendRedirect(), "/")+"/", fiber.StatusTemporaryRedirect)
 }
 

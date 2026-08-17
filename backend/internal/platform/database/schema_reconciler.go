@@ -180,7 +180,7 @@ func createMissingTable(ctx context.Context, db querier, sourceSchema, table str
 		}
 		parts = append(parts, part)
 	}
-	q := fmt.Sprintf("CREATE TABLE public.%s (%s)", quoteIdent(table), strings.Join(parts, ", "))
+	q := fmt.Sprintf("CREATE TABLE IF NOT EXISTS public.%s (%s)", quoteIdent(table), strings.Join(parts, ", "))
 	if _, err := db.Exec(ctx, q); err != nil {
 		return fmt.Errorf("create missing table %s: %w", table, err)
 	}
@@ -189,7 +189,7 @@ func createMissingTable(ctx context.Context, db querier, sourceSchema, table str
 
 func addMissingColumn(ctx context.Context, db querier, sourceSchema, table string, col columnDef) error {
 	var b strings.Builder
-	fmt.Fprintf(&b, "ALTER TABLE public.%s ADD COLUMN %s %s", quoteIdent(table), quoteIdent(col.Name), sanitizePublicExpr(col.Type, sourceSchema))
+	fmt.Fprintf(&b, "ALTER TABLE public.%s ADD COLUMN IF NOT EXISTS %s %s", quoteIdent(table), quoteIdent(col.Name), sanitizePublicExpr(col.Type, sourceSchema))
 	if col.DefaultSQL != "" {
 		fmt.Fprintf(&b, " DEFAULT %s", sanitizePublicExpr(col.DefaultSQL, sourceSchema))
 	}
@@ -217,32 +217,82 @@ func alterColumnType(ctx context.Context, db querier, sourceSchema, table, colum
 }
 
 func reconcileConstraints(ctx context.Context, db querier, schema string) error {
-	want, err := listConstraints(ctx, db, schema)
+	want, err := listConstraintsTyped(ctx, db, schema)
 	if err != nil {
 		return fmt.Errorf("inspect expected constraints: %w", err)
 	}
-	got, err := listConstraints(ctx, db, "public")
+	got, err := listConstraintsTyped(ctx, db, "public")
 	if err != nil {
 		return fmt.Errorf("inspect live constraints: %w", err)
 	}
-	for key, expected := range want {
+
+	apply := func(key string, c constraintDef) error {
 		actual, ok := got[key]
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid constraint key %s", key)
+		}
 		if !ok {
-			parts := strings.SplitN(key, ":", 2)
-			if len(parts) != 2 {
-				return fmt.Errorf("invalid constraint key %s", key)
-			}
-			stmt := fmt.Sprintf("ALTER TABLE public.%s ADD CONSTRAINT %s %s", quoteIdent(parts[0]), quoteIdent(parts[1]), sanitizePublicExpr(expected, schema))
+			stmt := fmt.Sprintf("ALTER TABLE public.%s ADD CONSTRAINT %s %s", quoteIdent(parts[0]), quoteIdent(parts[1]), sanitizePublicExpr(c.Def, schema))
 			if _, err := db.Exec(ctx, stmt); err != nil {
 				return fmt.Errorf("add missing constraint %s: %w", key, err)
 			}
+			return nil
+		}
+		if normalizeSQL(actual.Def) != normalizeSQL(sanitizePublicExpr(c.Def, schema)) {
+			if _, err := db.Exec(ctx, fmt.Sprintf("ALTER TABLE public.%s DROP CONSTRAINT %s", quoteIdent(parts[0]), quoteIdent(parts[1]))); err != nil {
+				return fmt.Errorf("drop drifted constraint %s: %w", key, err)
+			}
+			stmt := fmt.Sprintf("ALTER TABLE public.%s ADD CONSTRAINT %s %s", quoteIdent(parts[0]), quoteIdent(parts[1]), sanitizePublicExpr(c.Def, schema))
+			if _, err := db.Exec(ctx, stmt); err != nil {
+				return fmt.Errorf("recreate drifted constraint %s: %w", key, err)
+			}
+		}
+		return nil
+	}
+
+	// Pass 1: primary keys, unique, check, and exclusion constraints — these
+	// are what foreign keys depend on, so they must exist before any FK pass.
+	for key, c := range want {
+		if c.Type == "f" {
 			continue
 		}
-		if normalizeSQL(actual) != normalizeSQL(sanitizePublicExpr(expected, schema)) {
-			return fmt.Errorf("constraint %s exists with incompatible definition; refusing destructive rewrite", key)
+		if err := apply(key, c); err != nil {
+			return err
+		}
+	}
+	// Pass 2: foreign keys, now safe to (re)create against reconciled targets.
+	for key, c := range want {
+		if c.Type != "f" {
+			continue
+		}
+		if err := apply(key, c); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+type constraintDef struct {
+	Type string
+	Def  string
+}
+
+func listConstraintsTyped(ctx context.Context, db querier, schema string) (map[string]constraintDef, error) {
+	rows, err := dbQuery(ctx, db, `SELECT r.relname, c.conname, c.contype::text, pg_get_constraintdef(c.oid, true) FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=$1 AND c.contype IN ('p','u','f','c','x') ORDER BY r.relname, c.conname`, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]constraintDef)
+	for rows.Next() {
+		var table, name, ctype, def string
+		if err := rows.Scan(&table, &name, &ctype, &def); err != nil {
+			return nil, err
+		}
+		result[table+":"+name] = constraintDef{Type: ctype, Def: def}
+	}
+	return result, rows.Err()
 }
 
 func listConstraints(ctx context.Context, db querier, schema string) (map[string]string, error) {
@@ -282,7 +332,9 @@ func reconcileFunctions(ctx context.Context, db querier, schema string) error {
 			continue
 		}
 		if normalizeSQL(actual) != normalizeSQL(sanitizePublicExpr(expected, schema)) {
-			return fmt.Errorf("function %s exists with incompatible definition; refusing destructive rewrite", key)
+			if _, err := db.Exec(ctx, sanitizePublicExpr(expected, schema)); err != nil {
+				return fmt.Errorf("replace drifted function %s: %w", key, err)
+			}
 		}
 	}
 	return nil
@@ -322,7 +374,16 @@ func reconcileTriggers(ctx context.Context, db querier, schema string) error {
 			continue
 		}
 		if normalizeSQL(actual) != normalizeSQL(sanitizePublicExpr(expected, schema)) {
-			return fmt.Errorf("trigger %s exists with incompatible definition; refusing destructive rewrite", key)
+			parts := strings.SplitN(key, ":", 2)
+			if len(parts) != 2 {
+				return fmt.Errorf("invalid trigger key %s", key)
+			}
+			if _, err := db.Exec(ctx, fmt.Sprintf("DROP TRIGGER %s ON public.%s", quoteIdent(parts[1]), quoteIdent(parts[0]))); err != nil {
+				return fmt.Errorf("drop drifted trigger %s: %w", key, err)
+			}
+			if _, err := db.Exec(ctx, sanitizePublicExpr(expected, schema)); err != nil {
+				return fmt.Errorf("recreate drifted trigger %s: %w", key, err)
+			}
 		}
 	}
 	return nil

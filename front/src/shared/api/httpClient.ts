@@ -127,6 +127,13 @@ class HttpClient {
       }
 
       tokenManager.setAccessToken(payload.accessToken);
+      // /auth/refresh rotates the session and issues a CSRF token bound to the
+      // new session ID. The old in-memory token is bound to the previous
+      // session and will be rejected by the backend, so it must be replaced
+      // here rather than left stale.
+      if (typeof payload.csrfToken === 'string' && payload.csrfToken.length >= 16) {
+        this.setCsrfToken(payload.csrfToken);
+      }
       this.notifyTokenRefresh(payload.accessToken);
       telemetry.record('auth', 'session_refresh_succeeded', 'info');
       return payload.accessToken;

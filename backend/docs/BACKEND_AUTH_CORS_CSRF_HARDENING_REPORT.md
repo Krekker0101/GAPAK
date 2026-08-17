@@ -15,11 +15,11 @@ OAUTH: **READY**
 
 | ENDPOINT / AREA | BEFORE | AFTER | WHY CHANGE WAS REQUIRED | TEST COVERAGE |
 |---|---|---|---|---|
-| `POST /api/v1/auth/register` | Refresh cookie existed; access token was not persisted as an HttpOnly cookie. | Sets HttpOnly `gapak_at`, `gapak_rt`, and `gapak_csrf`; refresh token stays server-side in cookie only. | Browser WebSocket needs a server-issued browser credential; production cookie architecture must be consistent across auth flows. | `cookies_test.go`, auth JSON contract test |
+| `POST /api/v1/auth/register` | Refresh cookie existed; access token was not persisted as an HttpOnly cookie. | Sets HttpOnly `gapak_at` and `gapak_rt`; CSRF token is returned in JSON and stored server-side against the session. | Browser WebSocket needs a server-issued browser credential; production cookie architecture must be consistent across auth flows. | `cookies_test.go`, CSRF/store contract tests |
 | `POST /api/v1/auth/register-anonymous` | Same access-cookie gap. | Same three cookie contract as register. | Same. | `cookies_test.go` |
 | `POST /api/v1/auth/login` | Same access-cookie gap. | Same three cookie contract as register. | Same. | `cookies_test.go`, auth middleware tests |
 | `POST /api/v1/auth/refresh` | Could accept a refresh token in request JSON and only conditionally CSRF-check based on cookie presence. | Refresh token is accepted only from HttpOnly `gapak_rt`; CSRF is always required for browser-originated unsafe refresh; rotated access/refresh cookies are issued. | Refresh tokens must never become JS-readable or be supplied by frontend JSON. | CSRF tests, DTO serialization test |
-| `POST /api/v1/auth/logout` | Route required auth, but CSRF was conditionally checked only when refresh cookie existed. | Requires auth and CSRF middleware for browser mutation; clears access, refresh and CSRF cookies using configured attributes. | Logout is a state-changing browser action and must not bypass CSRF. | CSRF + cookie tests |
+| `POST /api/v1/auth/logout` | Route required auth, but CSRF was conditionally checked only when refresh cookie existed. | Requires auth and server-side CSRF validation for browser mutation; clears only access and refresh cookies and deletes the session CSRF secret. | Logout is a state-changing browser action and must not bypass CSRF. | CSRF + cookie tests |
 | `POST /api/v1/auth/2fa/*` | Authenticated mutations were not individually wrapped in CSRF middleware. | Setup/verify/disable require CSRF for browser mutations. | Unsafe authenticated mutations must be CSRF-protected. | CSRF middleware tests |
 | Global browser mutations | No single global enforcement for browser-originated unsafe requests. | `BrowserMutationCSRF` enforces CSRF + exact Origin for unsafe browser requests while preserving server-to-server requests without `Origin`. | Protect all unsafe browser mutations consistently. | CSRF tests |
 | CORS | Explicit origins already used, but allowed methods/preflight contract was implicit. | Explicit origins, `AllowCredentials=true`, explicit methods, explicit headers, preflight max-age; wildcard remains rejected. | Production cross-site credentialed requests require deterministic preflight behavior. | `cors_security_test.go`, config tests |
@@ -36,7 +36,7 @@ Production Railway configuration: `COOKIE_SECURE=true`, `COOKIE_SAME_SITE=none`,
 
 `gapak_rt`: HttpOnly refresh cookie, `Path=/api/v1/auth`, expiry aligned to persisted refresh expiry.
 
-`gapak_csrf`: HttpOnly CSRF cookie, `Path=/`, expiry aligned to the CSRF/session lifetime. The frontend receives the CSRF token through `/auth/csrf` and auth responses and sends it in `X-CSRF-Token`; JavaScript never needs to read the cookie.
+CSRF is no longer cookie-backed. `/auth/csrf` and successful auth responses return a cryptographically random token in JSON. The backend stores only its SHA-256 digest, bound to the authenticated session ID (or a short-lived bootstrap slot before login), and the frontend keeps the plaintext token in memory and sends it as `X-CSRF-Token`.
 
 Logout clears all auth cookies with the same path/domain/SameSite/Secure attributes used for issuance.
 
@@ -44,7 +44,14 @@ Logout clears all auth cookies with the same path/domain/SameSite/Secure attribu
 
 `GET`, `HEAD`, and `OPTIONS` are safe and are not blocked by CSRF middleware.
 
-Unsafe browser mutations require `X-CSRF-Token`. If the CSRF cookie is present, header and cookie must match using constant-time comparison. If third-party cookie restrictions suppress the CSRF cookie, a matching configured `Origin` is required and the CSRF header must still be present. Unknown browser origins are rejected.
+Unsafe browser mutations require `X-CSRF-Token`. The header token is validated against the server-side CSRF store, using constant-time digest comparison. A matching configured `Origin`/`Referer` remains required for browser-originated mutations; unknown browser origins are rejected. No CSRF cookie exists.
+
+
+## Server-side CSRF implementation
+
+CSRF secrets are generated with 32 cryptographically random bytes. The browser receives the plaintext token only in JSON and is expected to keep it in application memory. The backend stores only a SHA-256 digest. For authenticated sessions the digest is keyed by the signed JWT session ID; before authentication, a short-lived bootstrap token is stored separately.
+
+Production uses the existing Redis dependency for shared CSRF state across API instances. Development and tests use a mutex-protected in-memory store. Session refresh rotates the stored CSRF secret. Logout removes the current session secret. No CSRF secret is stored in any cookie or JWT claim.
 
 ## CORS contract
 

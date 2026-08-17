@@ -73,6 +73,7 @@ type fakeMessageService struct{}
 func (fakeMessageService) GetMessage(_ context.Context, userID, id string) (interface{}, error) {
 	return map[string]string{"id": id, "viewer": userID}, nil
 }
+func (fakeMessageService) ValidateDevice(context.Context, string, string) error  { return nil }
 func (fakeMessageService) ValidateSession(context.Context, string, string) error { return nil }
 func (fakeMessageService) GetMessages(context.Context, string, string, int, *time.Time) ([]interface{}, error) {
 	return nil, nil

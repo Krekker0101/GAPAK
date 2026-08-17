@@ -140,9 +140,6 @@ func idempotencyIdentity(c *fiber.Ctx, jwtManager *authplatform.Manager) string 
 			}
 		}
 	}
-	if csrf := strings.TrimSpace(c.Cookies("gapak_csrf")); csrf != "" {
-		return "csrf:" + csrf
-	}
 	if refresh := strings.TrimSpace(c.Cookies("gapak_rt")); refresh != "" {
 		h := sha256.Sum256([]byte(refresh))
 		return "refresh:" + hex.EncodeToString(h[:])

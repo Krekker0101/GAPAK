@@ -108,7 +108,7 @@ OAuth state and PKCE cookies remain HTTPOnly and short-lived; callback state is 
 - `null` origin is not accepted unless explicitly configured.
 - Cookie security flags remain configuration-driven.
 - Refresh cookie remains HTTPOnly.
-- CSRF cookie remains readable by browser JavaScript by design.
+- CSRF is no longer cookie-backed; the browser keeps the token in memory and sends it only as `X-CSRF-Token`.
 - SameSite/Secure are controlled by production configuration.
 
 ## 5. Authorization

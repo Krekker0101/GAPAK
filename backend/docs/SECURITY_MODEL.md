@@ -10,7 +10,7 @@ GAPAK Backend follows a defense-in-depth / Zero Trust model:
 - bearer tokens are type-bound and algorithm-bound;
 - refresh tokens are rotated using an atomic compare-and-swap;
 - password reset tokens are consumed atomically with the password update;
-- sensitive mutations use CSRF double-submit protection when cookie authentication is involved;
+- sensitive mutations use server-side session CSRF protection when browser cookie authentication is involved;
 - critical authentication rate limits fail closed when the distributed limiter is unavailable;
 - production requires explicit secrets, HTTPS CORS origins, secure cookies and Redis;
 - uploaded media is signed, size-limited and MIME-validated before processing;

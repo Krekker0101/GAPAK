@@ -71,7 +71,6 @@ type SecurityConfig struct {
 	CookieSecure      bool
 	CookieSameSite    string
 	RefreshCookieName string
-	CSRFCookieName    string
 	TOTPWindow        int
 }
 
@@ -212,7 +211,7 @@ func Load() (Config, error) {
 			Name:        getEnv("APP_NAME", "Gapak API"),
 			Environment: getEnv("APP_ENV", "development"),
 			BaseURL:     getEnv("APP_BASE_URL", "http://localhost:8080"),
-			CORSOrigins: getEnvSlice("CORS_ORIGINS", []string{"http://localhost:3000", "http://localhost:3002", "https://gapak-backend.vercel.app"}),
+			CORSOrigins: getEnvSlice("CORS_ORIGINS", []string{"http://localhost:3000", "http://localhost:3002", "https://gapak.vercel.app"}),
 			AutoMigrate: getEnvBool("AUTO_MIGRATE", false),
 		},
 		HTTP: HTTPConfig{
@@ -242,11 +241,10 @@ func Load() (Config, error) {
 			RefreshTokenTTL:   getEnvDuration("JWT_REFRESH_TTL", 30*24*time.Hour),
 			PasswordPepper:    getEnv("PASSWORD_PEPPER", "default-password-pepper-change-in-production"),
 			EncryptionKey:     getEnv("ENCRYPTION_KEY_BASE64", "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODk="),
-			CookieDomain:      getEnv("COOKIE_DOMAIN", "localhost"),
+			CookieDomain:      getEnvAllowEmpty("COOKIE_DOMAIN", "localhost"),
 			CookieSecure:      getEnvBool("COOKIE_SECURE", false),
 			CookieSameSite:    getEnv("COOKIE_SAME_SITE", "lax"),
 			RefreshCookieName: getEnv("REFRESH_COOKIE_NAME", "gapak_rt"),
-			CSRFCookieName:    getEnv("CSRF_COOKIE_NAME", "gapak_csrf"),
 			TOTPWindow:        getEnvInt("TOTP_WINDOW", 1),
 		},
 		OAuth: OAuthConfig{
@@ -471,6 +469,16 @@ func getEnv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// getEnvAllowEmpty preserves an explicitly-empty value (e.g. COOKIE_DOMAIN="")
+// instead of collapsing it into fallback like getEnv does. Only a genuinely
+// unset variable uses the fallback.
+func getEnvAllowEmpty(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
 }
 
 func requireEnv(key string) string {

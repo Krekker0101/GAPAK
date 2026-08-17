@@ -232,13 +232,17 @@ func itoa(value int) string {
 }
 
 func (r *Repository) GetTheme(ctx context.Context, userID string) (string, error) {
-	const query = `SELECT theme FROM user_settings WHERE user_id = $1`
+	const query = `
+		INSERT INTO user_settings (user_id, theme, created_at, updated_at)
+		VALUES ($1, 'light', NOW(), NOW())
+		ON CONFLICT (user_id) DO UPDATE SET user_id = EXCLUDED.user_id
+		RETURNING theme`
 	var theme string
 	err := r.db.QueryRow(ctx, query, userID).Scan(&theme)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "light", nil // default
+	if err != nil {
+		return "light", err
 	}
-	return theme, err
+	return theme, nil
 }
 
 func (r *Repository) UpdateTheme(ctx context.Context, userID, theme string) error {

@@ -1,76 +1,53 @@
 package auth
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
-
 	"github.com/gapak/backend/internal/config"
+	"github.com/gofiber/fiber/v2"
 )
 
-func TestCookiesHonorCrossSiteProductionPolicy(t *testing.T) {
+func TestAuthCookiesNeverSetCSRF(t *testing.T) {
+	cfg := config.SecurityConfig{RefreshCookieName: "gapak_rt", CookieSecure: true, CookieSameSite: "none", CookieDomain: ""}
 	app := fiber.New()
-	cfg := config.SecurityConfig{RefreshCookieName: "gapak_rt", CSRFCookieName: "gapak_csrf", CookieSecure: true, CookieSameSite: "none", CookieDomain: ""}
-	app.Get("/", func(c *fiber.Ctx) error {
+	app.Get("/cookies", func(c *fiber.Ctx) error {
 		SetAccessCookie(c, cfg, "access", time.Now().Add(time.Hour))
-		SetRefreshCookie(c, cfg, "refresh", time.Now().Add(24*time.Hour))
-		SetCSRFCookie(c, cfg, "csrf", time.Now().Add(time.Hour))
-		return nil
+		SetRefreshCookie(c, cfg, "refresh", time.Now().Add(time.Hour))
+		return c.SendStatus(fiber.StatusNoContent)
 	})
-	resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/", nil), -1)
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/cookies", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
 	cookies := resp.Header.Values("Set-Cookie")
-	if len(cookies) != 3 {
-		t.Fatalf("expected 3 cookies, got %d", len(cookies))
+	if len(cookies) != 2 {
+		t.Fatalf("expected 2 auth cookies, got %d: %v", len(cookies), cookies)
 	}
 	for _, cookie := range cookies {
-		if !strings.Contains(strings.ToLower(cookie), "secure") {
-			t.Fatalf("cookie missing Secure: %s", cookie)
-		}
-		if !strings.Contains(strings.ToLower(cookie), "samesite=none") {
-			t.Fatalf("cookie missing SameSite=None: %s", cookie)
-		}
-		if strings.Contains(strings.ToLower(cookie), "domain=") {
-			t.Fatalf("production host-only cookie unexpectedly has Domain: %s", cookie)
+		if strings.Contains(cookie, "gapak_csrf") {
+			t.Fatalf("CSRF cookie must not be emitted: %s", cookie)
 		}
 	}
 }
 
-func TestCSRFCookieIsReadableByBrowser(t *testing.T) {
+func TestClearAuthCookiesDoesNotClearCSRF(t *testing.T) {
+	cfg := config.SecurityConfig{RefreshCookieName: "gapak_rt", CookieSecure: true, CookieSameSite: "none"}
 	app := fiber.New()
-	cfg := config.SecurityConfig{CSRFCookieName: "gapak_csrf", CookieSecure: true, CookieSameSite: "none"}
-	app.Get("/", func(c *fiber.Ctx) error {
-		SetCSRFCookie(c, cfg, "csrf-token", time.Now().Add(time.Hour))
-		return nil
+	app.Get("/logout", func(c *fiber.Ctx) error {
+		ClearAuthCookies(c, cfg)
+		return c.SendStatus(fiber.StatusNoContent)
 	})
-	resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/", nil), -1)
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/logout", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	joined := strings.Join(resp.Header.Values("Set-Cookie"), "\n")
-	if strings.Contains(strings.ToLower(joined), "httponly") {
-		t.Fatalf("CSRF cookie must be readable by browser JavaScript: %s", joined)
-	}
-}
-
-func TestClearAuthCookiesUsesConfiguredSameSiteForAccessCookie(t *testing.T) {
-	app := fiber.New()
-	cfg := config.SecurityConfig{RefreshCookieName: "gapak_rt", CSRFCookieName: "gapak_csrf", CookieSecure: true, CookieSameSite: "none"}
-	app.Get("/", func(c *fiber.Ctx) error { ClearAuthCookies(c, cfg); return nil })
-	resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/", nil), -1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	joined := strings.Join(resp.Header.Values("Set-Cookie"), "\n")
-	if !strings.Contains(strings.ToLower(joined), "gapak_at=") || !strings.Contains(strings.ToLower(joined), "samesite=none") {
-		t.Fatalf("access cookie was not cleared with configured attributes: %s", joined)
+	for _, cookie := range resp.Header.Values("Set-Cookie") {
+		if strings.Contains(cookie, "gapak_csrf") {
+			t.Fatalf("CSRF cookie must not be cleared/emitted: %s", cookie)
+		}
 	}
 }

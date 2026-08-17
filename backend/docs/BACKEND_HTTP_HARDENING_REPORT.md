@@ -34,7 +34,7 @@ The corrected blockers were:
 - Route paths and methods remain unchanged for login/register/refresh/logout/password reset/2FA.
 - Standard success/error envelopes remain unchanged.
 - OAuth callback now lands on an actual frontend origin instead of a backend-only client route.
-- Refresh/CSRF cookie behavior remains server-owned and credentialed.
+- Refresh authentication remains server-owned via the HttpOnly refresh cookie; CSRF is server-backed and transported only in the `X-CSRF-Token` header.
 
 ### CHAT / MESSAGES
 

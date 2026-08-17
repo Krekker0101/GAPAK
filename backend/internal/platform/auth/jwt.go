@@ -43,7 +43,6 @@ type Claims struct {
 	Role      string   `json:"role"`
 	Scopes    []string `json:"scopes,omitempty"`
 	TokenType string   `json:"tokenType"`
-	CSRFToken string   `json:"csrfToken,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -53,7 +52,6 @@ type TokenPair struct {
 	RefreshToken     string    `json:"refreshToken,omitempty"`
 	RefreshTokenTTL  int64     `json:"refreshTokenTtl"`
 	RefreshExpiresAt time.Time `json:"refreshExpiresAt"`
-	CSRFToken        string    `json:"csrfToken"`
 }
 
 type Manager struct {
@@ -113,11 +111,6 @@ func (m *Manager) Issue(userID, sessionID, role string, scopes []string) (TokenP
 	now := time.Now().UTC()
 	accessExpiry := now.Add(m.cfg.AccessTTL)
 	refreshExpiry := now.Add(m.cfg.RefreshTTL)
-	csrfToken, err := RandomToken(32)
-	if err != nil {
-		return TokenPair{}, err
-	}
-
 	accessClaims := Claims{
 		UserID:    userID,
 		SessionID: sessionID,
@@ -141,7 +134,6 @@ func (m *Manager) Issue(userID, sessionID, role string, scopes []string) (TokenP
 		Role:      role,
 		Scopes:    scopes,
 		TokenType: string(TokenTypeRefresh),
-		CSRFToken: csrfToken,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    m.cfg.Issuer,
 			Subject:   userID,
@@ -173,7 +165,6 @@ func (m *Manager) Issue(userID, sessionID, role string, scopes []string) (TokenP
 		RefreshToken:     refreshTokenStr,
 		RefreshTokenTTL:  int64(m.cfg.RefreshTTL.Seconds()),
 		RefreshExpiresAt: refreshExpiry,
-		CSRFToken:        csrfToken,
 	}, nil
 }
 

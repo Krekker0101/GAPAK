@@ -64,7 +64,7 @@
 
 **Impact:** unauthorized mutation.
 
-**Mitigation:** double-submit cookie + header with constant-time comparison.
+**Mitigation:** server-side session CSRF secret + `X-CSRF-Token` header with constant-time comparison; no CSRF cookie is used.
 
 **Regression test:** header-only requests fail.
 

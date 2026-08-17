@@ -370,11 +370,15 @@ func (s *Service) HandleConnection(c *fiberws.Conn) {
 		}
 	}()
 
-	if err := s.presenceService.SetOnline(ctx, userID, connection.ID); err != nil {
+	// presenceConnectionID must be a bare UUID: the presence schema's connection_id
+	// column is typed uuid, but connection.ID carries a "conn_" debug prefix
+	// (see generateConnectionID) that fails Postgres uuid parsing (SQLSTATE 22P02).
+	presenceConnectionID := strings.TrimPrefix(connection.ID, "conn_")
+	if err := s.presenceService.SetOnline(ctx, userID, presenceConnectionID); err != nil {
 		s.logger.Error().Err(err).Str("user_id", userID).Msg("failed to set online")
 	}
 	defer func() {
-		if err := s.presenceService.SetOffline(ctx, userID, connection.ID); err != nil {
+		if err := s.presenceService.SetOffline(ctx, userID, presenceConnectionID); err != nil {
 			s.logger.Error().Err(err).Str("user_id", userID).Msg("failed to set offline")
 		}
 	}()

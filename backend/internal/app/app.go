@@ -24,6 +24,7 @@ import (
 	authplatform "github.com/gapak/backend/internal/platform/auth"
 	"github.com/gapak/backend/internal/platform/cache"
 	appcrypto "github.com/gapak/backend/internal/platform/crypto"
+	"github.com/gapak/backend/internal/platform/csrf"
 	"github.com/gapak/backend/internal/platform/database"
 	"github.com/gapak/backend/internal/platform/httpx"
 	"github.com/gapak/backend/internal/platform/logger"
@@ -51,6 +52,7 @@ type App struct {
 	Storage       storage.Service
 	ObjectStore   storage.ObjectStore
 	Queue         *queue.RedisQueue
+	CSRF          csrf.Store
 	WebSocket     *websocket.Service
 }
 
@@ -70,6 +72,7 @@ type Dependencies struct {
 	ObjectStore     storage.ObjectStore
 	Queue           *queue.RedisQueue
 	RolePermissions map[string][]string
+	CSRF            csrf.Store
 }
 
 func New(ctx context.Context) (*App, error) {
@@ -146,6 +149,10 @@ func New(ctx context.Context) (*App, error) {
 	}
 	redisQueue := queue.NewRedisQueue(redisClient)
 	privacyService := privacy.NewService(cfg.Anonymity)
+	var csrfStore csrf.Store = csrf.NewMemoryStore()
+	if redisClient != nil {
+		csrfStore = csrf.NewRedisStore(redisClient)
+	}
 
 	fiberApp := fiber.New(fiber.Config{
 		AppName:               cfg.App.Name,
@@ -172,7 +179,7 @@ func New(ctx context.Context) (*App, error) {
 	}))
 	// Browser-originated unsafe mutations must carry the CSRF header. Server-to-server
 	// requests without an Origin remain possible; unknown browser origins are rejected.
-	fiberApp.Use(middleware.BrowserMutationCSRF(cfg.Security, cfg.App.CORSOrigins...))
+	fiberApp.Use(middleware.BrowserMutationCSRF(csrfStore, jwtManager, cfg.Security, cfg.App.CORSOrigins...))
 	fiberApp.Use(helmet.New(helmet.Config{
 		ContentSecurityPolicy: "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 	}))
@@ -206,6 +213,7 @@ func New(ctx context.Context) (*App, error) {
 		Storage:       storageProvider,
 		ObjectStore:   objectStore,
 		Queue:         redisQueue,
+		CSRF:          csrfStore,
 	}
 
 	deps := Dependencies{
@@ -223,6 +231,7 @@ func New(ctx context.Context) (*App, error) {
 		Storage:         storageProvider,
 		ObjectStore:     objectStore,
 		Queue:           redisQueue,
+		CSRF:            csrfStore,
 		RolePermissions: enums.RolePermissions,
 	}
 

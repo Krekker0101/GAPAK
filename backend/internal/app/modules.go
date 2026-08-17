@@ -79,6 +79,8 @@ func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 		deps.Validate,
 		deps.Config.Security,
 		deps.Privacy,
+		deps.CSRF,
+		deps.JWT,
 		deps.Config.OAuth.FrontendRedirectURL,
 		deps.Config.App.CORSOrigins...,
 	)

@@ -58,7 +58,6 @@ func validConfig() Config {
 			CookieSecure:      false,
 			CookieSameSite:    "lax",
 			RefreshCookieName: "gapak_rt",
-			CSRFCookieName:    "gapak_csrf",
 		},
 		Anonymity: AnonymityConfig{
 			HashSecret: "12345678901234567890123456789012",

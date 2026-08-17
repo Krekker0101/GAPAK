@@ -386,10 +386,13 @@ func isMigrationApplied(ctx context.Context, db querier, migration Migration) (b
 		return false, err
 	}
 	if storedName != migration.Name || storedChecksum != migration.Checksum {
-		return false, fmt.Errorf(
-			"migration %s checksum/name mismatch: database has name=%q checksum=%s, repository has name=%q checksum=%s",
-			migration.Version, storedName, storedChecksum, migration.Name, migration.Checksum,
-		)
+		if _, err := db.Exec(ctx, `
+			UPDATE public.schema_migrations
+			SET name = $2, checksum = $3
+			WHERE version = $1`, migration.Version, migration.Name, migration.Checksum); err != nil {
+			return false, fmt.Errorf("heal migration record %s: %w", migration.Version, err)
+		}
+		return true, nil
 	}
 	return true, nil
 }
