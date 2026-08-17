@@ -11,6 +11,7 @@ import { UserStoryGroup } from '../shared/types/social';
 import { useToast } from '../shared/ux/ToastContext';
 import type { Post } from '../shared/api/backendContracts';
 import { idempotencyKey } from '../shared/ux/idempotencyKey';
+import { RecommendationsPanel } from '../domains/connections/RecommendationsPanel';
 
 export const FeedPage: React.FC = () => {
   const { user } = useAuth();
@@ -107,25 +108,30 @@ export const FeedPage: React.FC = () => {
   if (feed.isError) return <PageError error={feed.error} onRetry={() => void feed.refetch()} />;
 
   return <div>
-    <FeedView
-      currentUser={user}
-      posts={posts}
-      storyGroups={storyGroups}
-      onLikeToggle={(postId) => {
-        const post = posts.find((p) => p.id === postId);
-        if (post) likeMutation.mutate({ postId, liked: !post.isLiked });
-      }}
-      onAddComment={(postId, text, parentId) => commentMutation.mutate({ postId, text, parentId })}
-      onCreatePost={(post) => createPost.mutateAsync(post)}
-      onCreateStory={() => setComposerOpen(true)}
-      onUserClick={(userId) => navigate(`/users/${encodeURIComponent(userId)}`)}
-      onStoryReact={(storyId, emoji) => void storiesApi.react(storyId, emoji, idempotencyKey()).then(() => stories.refetch()).catch((error) => toast.error(error instanceof Error ? error.message : 'Unable to react to story'))}
-      onDeletePost={(postId) => deletePost.mutate(postId)}
-      onRefresh={() => { void feed.refetch(); }}
-      isRefreshing={feed.isRefetching}
-    />
-    <div ref={loadMoreRef} className="h-12 grid place-items-center text-xs text-tertiary">
-      {feed.isFetchingNextPage ? 'Loading more…' : feed.hasNextPage ? 'Scroll for more' : 'You reached the end'}
+    <div className="flex items-start gap-6 max-w-6xl mx-auto">
+      <div className="flex-1 min-w-0">
+        <FeedView
+          currentUser={user}
+          posts={posts}
+          storyGroups={storyGroups}
+          onLikeToggle={(postId) => {
+            const post = posts.find((p) => p.id === postId);
+            if (post) likeMutation.mutate({ postId, liked: !post.isLiked });
+          }}
+          onAddComment={(postId, text, parentId) => commentMutation.mutate({ postId, text, parentId })}
+          onCreatePost={(post) => createPost.mutateAsync(post)}
+          onCreateStory={() => setComposerOpen(true)}
+          onUserClick={(userId) => navigate(`/users/${encodeURIComponent(userId)}`)}
+          onStoryReact={(storyId, emoji) => void storiesApi.react(storyId, emoji, idempotencyKey()).then(() => stories.refetch()).catch((error) => toast.error(error instanceof Error ? error.message : 'Unable to react to story'))}
+          onDeletePost={(postId) => deletePost.mutate(postId)}
+          onRefresh={() => { void feed.refetch(); }}
+          isRefreshing={feed.isRefetching}
+        />
+        <div ref={loadMoreRef} className="h-12 grid place-items-center text-xs text-tertiary">
+          {feed.isFetchingNextPage ? 'Loading more…' : feed.hasNextPage ? 'Scroll for more' : 'You reached the end'}
+        </div>
+      </div>
+      <RecommendationsPanel />
     </div>
     {composerOpen && <StoryComposerModal currentUser={user} onClose={() => setComposerOpen(false)} onStoryCreated={async input => { await storiesApi.create(input, idempotencyKey()); await stories.refetch(); }} />}
   </div>;

@@ -2,6 +2,7 @@ import { httpClient } from '../../../shared/api/httpClient';
 import type {
   AcceptedResponse,
   Connection,
+  ConnectionSuggestion,
   CreateConnectionRequest,
   ToggleTrustedCircleRequest,
 } from '../../../shared/api/backendContracts';
@@ -9,6 +10,14 @@ import type {
 export const connectionsApi = {
   list: (signal?: AbortSignal) =>
     httpClient.get<Connection[]>('/connections', { signal }),
+
+  /**
+   * "People you may know" — accounts connected to the current user via mutual
+   * followers/following (friend-of-a-friend). Server-computed and
+   * privacy-filtered; the frontend never derives this from raw graph data.
+   */
+  suggestions: (limit = 10, signal?: AbortSignal) =>
+    httpClient.get<ConnectionSuggestion[]>('/connections/suggestions', { params: { limit }, signal }),
 
   request: (targetUserId: string, idempotencyKey: string, signal?: AbortSignal) =>
     httpClient.post<AcceptedResponse>(

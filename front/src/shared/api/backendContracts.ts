@@ -205,6 +205,19 @@ export interface Connection {
   updatedAt: string;
 }
 
+export interface ConnectionSuggestion {
+  profile: BackendPublicProfile;
+  /**
+   * How many accounts this suggestion has in common with the current user
+   * (mutual followers/following). The backend is the source of truth for the
+   * graph traversal (followers-of-followers, followings-of-followers, etc.)
+   * and for privacy — it should only ever return private accounts here when
+   * the current user is allowed to see them because of that mutual overlap.
+   */
+  mutualConnectionsCount: number;
+  reason?: 'MUTUAL_FOLLOWERS' | 'MUTUAL_FOLLOWING' | 'OTHER';
+}
+
 export interface CreateConnectionRequest {
   targetUserId: string;
 }
