@@ -233,12 +233,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         </div>
       )}
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden md:p-3 md:gap-3">
         {/* ========================================== */}
-        {/* DESKTOP SIDEBAR                            */}
+        {/* DESKTOP SIDEBAR - floating glass panel      */}
         {/* ========================================== */}
         <aside
-          className={`hidden md:flex flex-col app-glass border-r border-subtle shadow-[8px_0_32px_-16px_rgb(0,0,0,0.25)] transition-all duration-300 ease-[cubic-bezier(.22,1,.36,1)] z-30 select-none ${
+          className={`hidden md:flex flex-col overflow-hidden rounded-[var(--radius-2xl)] border border-white/10 bg-surface-glass-strong backdrop-blur-2xl backdrop-saturate-150 shadow-[0_20px_60px_-20px_rgb(0,0,0,0.45)] transition-all duration-300 ease-[cubic-bezier(.22,1,.36,1)] z-30 select-none ${
             isSidebarCollapsed ? 'w-18' : 'w-64'
           }`}
         >
@@ -328,9 +328,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         {/* ========================================== */}
         {/* MAIN LAYOUT WRAPPER                        */}
         {/* ========================================== */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden md:rounded-[var(--radius-2xl)] md:border md:border-white/10 md:shadow-[0_20px_60px_-20px_rgb(0,0,0,0.35)]">
           {/* Contextual App Header */}
-          <header className="h-16 border-b border-subtle app-glass px-4 sm:px-6 flex items-center justify-between sticky top-0 z-20 shadow-[0_1px_0_rgb(255_255_255_/_.04)]">
+          <header className="h-16 border-b border-subtle app-glass backdrop-blur-2xl backdrop-saturate-150 px-4 sm:px-6 flex items-center justify-between sticky top-0 z-20 shadow-[0_1px_0_rgb(255_255_255_/_.04)]">
             {/* Header Title / Breadcrumb */}
             <div className="flex items-center gap-3">
               <button
@@ -518,13 +518,13 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       {/* ========================================== */}
       <nav
         aria-label="Primary navigation"
-        className="md:hidden fixed inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-[calc(.9rem+env(safe-area-inset-bottom))]"
+        className="md:hidden fixed inset-x-0 bottom-0 z-40 flex justify-center px-5 pb-[calc(.9rem+env(safe-area-inset-bottom))]"
       >
         <motion.div
           initial={{ y: 48, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ type: 'spring', stiffness: 300, damping: 26 }}
-          className="relative flex items-center gap-1 rounded-[var(--radius-pill)] border border-white/10 bg-surface-glass-strong px-2 py-2 shadow-[0_20px_50px_-12px_rgb(0,0,0,0.45)] backdrop-blur-2xl backdrop-saturate-150"
+          className="relative flex w-full max-w-sm items-center justify-between gap-1 rounded-[var(--radius-pill)] border border-white/10 bg-surface-glass-strong px-3 py-2 shadow-[0_20px_50px_-12px_rgb(0,0,0,0.45)] backdrop-blur-2xl backdrop-saturate-150"
         >
           {[
             { key: 'posts', label: 'Posts', icon: <Rss className="w-5 h-5" /> },
