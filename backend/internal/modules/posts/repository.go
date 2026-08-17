@@ -365,7 +365,7 @@ func (r *Repository) AudienceUserIDsBatch(ctx context.Context, postIDs []string)
 	rows, err := r.db.Query(ctx, `
 		SELECT post_id, subject_user_id
 		FROM post_audience_grants
-		WHERE post_id = ANY($1::text[])
+		WHERE post_id = ANY($1::uuid[])
 		ORDER BY post_id, created_at ASC
 	`, postIDs)
 	if err != nil {
@@ -390,7 +390,7 @@ func (r *Repository) MediaFileIDsBatch(ctx context.Context, postIDs []string) (m
 	rows, err := r.db.Query(ctx, `
 		SELECT post_id, media_file_id
 		FROM post_media_attachments
-		WHERE post_id = ANY($1::text[])
+		WHERE post_id = ANY($1::uuid[])
 		ORDER BY post_id, created_at ASC
 	`, postIDs)
 	if err != nil {
@@ -418,7 +418,7 @@ func (r *Repository) CommentCountsBatch(ctx context.Context, postIDs []string) (
 	rows, err := r.db.Query(ctx, `
 		SELECT post_id, COALESCE(COUNT(*), 0) AS cnt
 		FROM comments
-		WHERE post_id = ANY($1::text[]) AND deleted_at IS NULL
+		WHERE post_id = ANY($1::uuid[]) AND deleted_at IS NULL
 		GROUP BY post_id
 	`, postIDs)
 	if err != nil {
@@ -447,7 +447,7 @@ func (r *Repository) IsPostLikedBatch(ctx context.Context, userID string, postID
 	rows, err := r.db.Query(ctx, `
 		SELECT post_id
 		FROM post_likes
-		WHERE user_id = $1 AND post_id = ANY($2::text[])
+		WHERE user_id = $1 AND post_id = ANY($2::uuid[])
 	`, userID, postIDs)
 	if err != nil {
 		return nil, err
@@ -501,7 +501,7 @@ func (r *Repository) EnsureOwnedMedia(ctx context.Context, ownerID string, media
 	rows, err := r.db.Query(ctx, `
 		SELECT DISTINCT id
 		FROM media_files
-		WHERE id = ANY($1::text[]) AND owner_id = $2 AND deleted_at IS NULL
+		WHERE id = ANY($1::uuid[]) AND owner_id = $2 AND deleted_at IS NULL
 	`, mediaIDs, ownerID)
 	if err != nil {
 		return err

@@ -910,7 +910,7 @@ func (r *Repository) GetAttachmentsByMessageIDs(ctx context.Context, messageIDs 
 		SELECT id, message_id, media_file_id, kind, file_name, mime_type,
 		       size_bytes, width, height, duration_seconds, thumbnail_file_id, metadata, created_at
 		FROM attachments
-		WHERE message_id = ANY($1::text[])
+		WHERE message_id = ANY($1::uuid[])
 		ORDER BY message_id, created_at ASC
 	`
 	rows, err := r.db.Query(ctx, query, messageIDs)
@@ -1574,7 +1574,7 @@ func (r *Repository) GetMessageKeyEnvelopesForUsers(ctx context.Context, message
 		SELECT id, message_id, recipient_id, recipient_device_id, sender_device_id,
 		       key_id, algorithm, encrypted_key, nonce, key_version, created_at
 		FROM trusted_chat_message_key_envelopes
-		WHERE message_id = ANY($1::text[]) AND recipient_id = $2
+		WHERE message_id = ANY($1::uuid[]) AND recipient_id = $2
 		ORDER BY message_id, created_at ASC
 	`
 	rows, err := r.db.Query(ctx, query, messageIDs, userID)

@@ -27,7 +27,9 @@ const AuthPage: React.FC = () => {
   const [loginValue, setLoginValue] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [totpCode, setTotpCode] = useState('');
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -41,8 +43,13 @@ const AuthPage: React.FC = () => {
   // "escaping" button (and its disabled state) only ever reacts to what's
   // truly missing — not to fields the current mode doesn't use.
   const isPasswordValid = password.length >= 12;
+  const doPasswordsMatch = !isRegister || (confirmPassword.length > 0 && password === confirmPassword);
   const isFormValid = isRegister
-    ? email.trim().length > 0 && username.trim().length >= 3 && displayName.trim().length >= 2 && isPasswordValid
+    ? email.trim().length > 0 &&
+      username.trim().length >= 3 &&
+      displayName.trim().length >= 2 &&
+      isPasswordValid &&
+      doPasswordsMatch
     : loginValue.trim().length > 0 && isPasswordValid;
 
   const submit = async (event: FormEvent) => {
@@ -50,6 +57,10 @@ const AuthPage: React.FC = () => {
     clearError();
     setSubmitError(null);
     try {
+      if (isRegister && password !== confirmPassword) {
+        setSubmitError('Пароли не совпадают');
+        return;
+      }
       if (isRegister) {
         await register({
           email: email.trim(),
@@ -238,6 +249,36 @@ const AuthPage: React.FC = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
+
+                {isRegister && (
+                  <Input
+                    label="Подтверждение пароля"
+                    required
+                    minLength={12}
+                    maxLength={128}
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    placeholder="Повторите пароль"
+                    leftIcon={<Lock className="h-4 w-4" />}
+                    rightIcon={
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword((v) => !v)}
+                        className="pointer-events-auto text-tertiary transition hover:text-secondary"
+                        aria-label={showConfirmPassword ? 'Скрыть пароль' : 'Показать пароль'}
+                        tabIndex={-1}
+                      >
+                        {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    }
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                  />
+                )}
+
+                {isRegister && confirmPassword.length > 0 && password !== confirmPassword && (
+                  <p className="-mt-2 text-xs font-medium text-rose-500">Пароли не совпадают</p>
+                )}
 
                 {!isRegister && (
                   <Input
