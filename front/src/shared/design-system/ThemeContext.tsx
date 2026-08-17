@@ -6,10 +6,15 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { ThemeMode } from '../types';
 
+interface ThemeOrigin {
+  x: number;
+  y: number;
+}
+
 interface ThemeContextValue {
   theme: ThemeMode;
   resolvedTheme: 'light' | 'dark';
-  setTheme: (mode: ThemeMode) => void;
+  setTheme: (mode: ThemeMode, origin?: ThemeOrigin) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
@@ -52,7 +57,7 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   }, [theme]);
 
-  const setTheme = (mode: ThemeMode) => {
+  const setTheme = (mode: ThemeMode, origin?: ThemeOrigin) => {
     if (mode === theme) return;
 
     const root = document.documentElement;
@@ -60,26 +65,45 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const previousColor = getComputedStyle(root).getPropertyValue('--color-bg').trim() || '#ffffff';
     const apply = () => setThemeState(mode);
 
-    // Use the browser's View Transitions API when available. The fallback keeps
-    // the same visual rhythm with a lightweight cross-fade overlay.
-    const startViewTransition = (document as Document & {
-      startViewTransition?: (callback: () => void) => { finished: Promise<void> };
-    }).startViewTransition;
+    // Where the reveal circle should originate from - the toggle button by
+    // default, falling back to the viewport center if we weren't given a
+    // click position (e.g. triggered programmatically).
+    const x = origin?.x ?? window.innerWidth / 2;
+    const y = origin?.y ?? window.innerHeight / 2;
+    const maxRadius = Math.hypot(
+      Math.max(x, window.innerWidth - x),
+      Math.max(y, window.innerHeight - y)
+    );
+
+    root.style.setProperty('--vt-x', `${x}px`);
+    root.style.setProperty('--vt-y', `${y}px`);
+    root.style.setProperty('--vt-radius', `${Math.ceil(maxRadius)}px`);
+
+    // Read the *native* method off document.startViewTransition right before
+    // calling it, and always call it as document.startViewTransition(...) -
+    // it's a regular DOM method and throws "Illegal invocation" if invoked
+    // detached from its `this` (document).
+    const supportsViewTransitions =
+      typeof document !== 'undefined' &&
+      typeof (document as Document & { startViewTransition?: unknown }).startViewTransition === 'function' &&
+      !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     body.classList.add('theme-transitioning');
 
-    if (startViewTransition) {
-      startViewTransition(apply);
+    if (supportsViewTransitions) {
+      const transition = (document as Document & {
+        startViewTransition: (callback: () => void) => { finished: Promise<void> };
+      }).startViewTransition(apply);
+      transition.finished.finally(() => body.classList.remove('theme-transitioning'));
     } else {
       const overlay = document.createElement('div');
       overlay.className = 'theme-transition-overlay';
       overlay.style.setProperty('--theme-transition-color', previousColor);
       document.body.appendChild(overlay);
       apply();
-      window.setTimeout(() => overlay.remove(), 560);
+      window.setTimeout(() => overlay.remove(), 620);
+      window.setTimeout(() => body.classList.remove('theme-transitioning'), 620);
     }
-
-    window.setTimeout(() => body.classList.remove('theme-transitioning'), 460);
   };
 
   return (

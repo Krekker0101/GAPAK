@@ -391,9 +391,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               </div>
 
               {/* Theme Selector */}
-              <button
+              <motion.button
                 type="button"
-                onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+                whileTap={{ scale: 0.9 }}
+                whileHover={{ scale: 1.04 }}
+                transition={{ type: 'spring', stiffness: 420, damping: 22 }}
+                onClick={(e) => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark', { x: e.clientX, y: e.clientY })}
                 className="theme-toggle group inline-flex h-9 items-center gap-2 rounded-full px-2.5 text-tertiary hover:text-primary"
                 title={`Switch to ${resolvedTheme === 'dark' ? 'Light' : 'Dark'} Theme`}
                 aria-label={`Switch to ${resolvedTheme === 'dark' ? 'Light' : 'Dark'} Theme`}
@@ -414,7 +417,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 <span className="relative z-10 hidden lg:inline text-[10px] font-semibold uppercase tracking-[.12em]">
                   {resolvedTheme === 'dark' ? 'Light' : 'Dark'}
                 </span>
-              </button>
+              </motion.button>
 
               {/* User Profile Menu */}
               {user && (

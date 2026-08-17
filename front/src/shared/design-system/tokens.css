@@ -58,6 +58,9 @@
     --z-sidebar: 30;
     --z-overlay: 40;
     --z-popover: 50;
+    --vt-x: 50%;
+    --vt-y: 50%;
+    --vt-radius: 75vmax;
   }
 
   .dark {
@@ -141,32 +144,41 @@
     opacity: .75;
     pointer-events: none;
   }
+  /* Fallback (no View Transitions API): a solid disc of the *old* theme's
+     background shrinks away from the click point, revealing the new theme
+     that has already been applied underneath. */
   .theme-transition-overlay {
     position: fixed;
     inset: 0;
     z-index: 9999;
     pointer-events: none;
     background: var(--theme-transition-color, #fff);
-    opacity: 0;
-    animation: theme-transition-fade 520ms cubic-bezier(.22,1,.36,1) forwards;
+    clip-path: circle(var(--vt-radius) at var(--vt-x) var(--vt-y));
+    animation: theme-overlay-shrink 620ms cubic-bezier(.22,1,.36,1) forwards;
   }
-  ::view-transition-old(root),
-  ::view-transition-new(root) {
-    animation-duration: 460ms;
+  @keyframes theme-overlay-shrink {
+    from { clip-path: circle(var(--vt-radius) at var(--vt-x) var(--vt-y)); }
+    to { clip-path: circle(0px at var(--vt-x) var(--vt-y)); }
+  }
+
+  /* Native View Transitions: the old frame stays put, the new frame expands
+     out from the click point as a growing circle - the classic "reveal"
+     transition, driven by --vt-x/--vt-y/--vt-radius set in ThemeContext. */
+  ::view-transition-group(root) {
+    animation-duration: 620ms;
     animation-timing-function: cubic-bezier(.22,1,.36,1);
   }
-  ::view-transition-old(root) { animation-name: theme-old-root; }
-  ::view-transition-new(root) { animation-name: theme-new-root; }
-  @keyframes theme-old-root {
-    to { opacity: 0; filter: brightness(1.04); }
+  ::view-transition-old(root) {
+    animation: none;
+    mix-blend-mode: normal;
   }
-  @keyframes theme-new-root {
-    from { opacity: 0; filter: brightness(.96); }
-    to { opacity: 1; filter: brightness(1); }
+  ::view-transition-new(root) {
+    animation: theme-circle-reveal 620ms cubic-bezier(.22,1,.36,1);
+    mix-blend-mode: normal;
   }
-  @keyframes theme-transition-fade {
-    0% { opacity: .92; }
-    100% { opacity: 0; }
+  @keyframes theme-circle-reveal {
+    from { clip-path: circle(0px at var(--vt-x) var(--vt-y)); }
+    to { clip-path: circle(var(--vt-radius) at var(--vt-x) var(--vt-y)); }
   }
   .bg-surface { background-color: var(--color-surface); }
   .bg-surface-subtle { background-color: var(--color-surface-subtle); }
