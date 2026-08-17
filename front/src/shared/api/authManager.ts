@@ -34,6 +34,15 @@ export class AuthManager {
         tokenManager.clear();
         return '';
       }
+      // The backend currently does not expose POST /auth/refresh at all on
+      // some deployments (404 Not Found, not "refresh rejected"). That is a
+      // missing/misconfigured route on the server, not a real auth failure —
+      // treat it the same as "no session" instead of surfacing a hard error
+      // or letting callers retry a route that can never succeed.
+      if (error instanceof ApiError && error.status === 404) {
+        tokenManager.clear();
+        return '';
+      }
       throw error;
     }
   }
