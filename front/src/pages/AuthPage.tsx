@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../domains/auth/AuthContext';
 import { Button, Input, SegmentedControl } from '../shared/design-system/primitives';
+import { EscapingButton } from '../shared/ux/EscapingButton';
 import { AuthShowcaseFeed } from './auth/AuthShowcaseFeed';
 
 const AuthPage: React.FC = () => {
@@ -35,6 +36,14 @@ const AuthPage: React.FC = () => {
   if (user) return <Navigate to="/posts" replace />;
 
   const busy = state === 'AUTHENTICATING' || state === 'REFRESHING';
+
+  // Mirrors the required fields/validation each mode actually submits, so the
+  // "escaping" button (and its disabled state) only ever reacts to what's
+  // truly missing — not to fields the current mode doesn't use.
+  const isPasswordValid = password.length >= 12;
+  const isFormValid = isRegister
+    ? email.trim().length > 0 && username.trim().length >= 3 && displayName.trim().length >= 2 && isPasswordValid
+    : loginValue.trim().length > 0 && isPasswordValid;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -249,9 +258,18 @@ const AuthPage: React.FC = () => {
                   </div>
                 )}
 
-                <Button type="submit" isLoading={busy} fullWidth size="lg" rightIcon={!busy ? <ArrowRight className="h-4 w-4" /> : undefined}>
-                  {busy ? 'Подключение…' : isRegister ? 'Создать аккаунт' : 'Войти'}
-                </Button>
+                <EscapingButton evade={!busy && !isFormValid}>
+                  <Button
+                    type="submit"
+                    isLoading={busy}
+                    disabled={busy || !isFormValid}
+                    fullWidth
+                    size="lg"
+                    rightIcon={!busy ? <ArrowRight className="h-4 w-4" /> : undefined}
+                  >
+                    {busy ? 'Подключение…' : isRegister ? 'Создать аккаунт' : 'Войти'}
+                  </Button>
+                </EscapingButton>
               </motion.form>
             </AnimatePresence>
 
