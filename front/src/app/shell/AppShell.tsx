@@ -266,17 +266,28 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         {/* DESKTOP SIDEBAR - floating glass panel      */}
         {/* ========================================== */}
         <aside
-          className={`liquid-glass-panel hidden md:flex flex-col overflow-hidden rounded-[var(--radius-2xl)] border border-white/10 shadow-[0_20px_60px_-20px_rgb(0,0,0,0.45)] transition-all duration-300 ease-[cubic-bezier(.22,1,.36,1)] z-30 select-none ${
+          className={`liquid-glass-panel hidden md:flex relative flex-col rounded-[var(--radius-2xl)] border border-white/10 shadow-[0_20px_60px_-20px_rgb(0,0,0,0.45)] transition-all duration-300 ease-[cubic-bezier(.22,1,.36,1)] z-30 select-none ${
             isSidebarCollapsed ? 'w-18' : 'w-64'
           }`}
         >
+          {/* Floating collapse/expand handle — pinned to the sidebar edge so it never
+              competes with the logo for space at narrow (collapsed) widths. */}
+          <button
+            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className="absolute -right-3 top-6 z-40 flex h-6 w-6 items-center justify-center rounded-full liquid-glass-panel border border-white/15 text-tertiary shadow-[0_6px_16px_-4px_rgb(0,0,0,0.5)] hover:text-primary hover:border-white/30 transition-colors"
+          >
+            <ChevronRight className={`w-3.5 h-3.5 transition-transform ${isSidebarCollapsed ? '' : 'rotate-180'}`} />
+          </button>
+
+          <div className="flex flex-col flex-1 overflow-hidden rounded-[var(--radius-2xl)]">
           {/* Logo Header */}
-          <div className="h-16 px-4 border-b border-subtle flex items-center justify-between">
+          <div className={`h-16 border-b border-subtle flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'justify-start px-4'}`}>
             <div
-              className="flex items-center gap-3 cursor-pointer overflow-hidden"
+              className="flex items-center gap-3 cursor-pointer overflow-visible"
               onClick={() => onNavigate('posts')}
             >
-              <div className="w-9 h-9 rounded-[var(--radius-xl)] bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 flex items-center justify-center shadow-token-lg shadow-indigo-500/20 text-white font-black text-lg flex-shrink-0">
+              <div className="w-9 h-9 rounded-[var(--radius-xl)] bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 flex items-center justify-center shadow-token-lg shadow-indigo-500/20 text-white font-black text-lg shrink-0">
                 G
               </div>
               {!isSidebarCollapsed && (
@@ -286,12 +297,6 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 </div>
               )}
             </div>
-            <button
-              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-              className="p-1.5 text-tertiary hover:text-primary hover:bg-surface-muted rounded-[var(--radius-lg)] transition-colors"
-            >
-              <ChevronRight className={`w-4 h-4 transition-transform ${isSidebarCollapsed ? '' : 'rotate-180'}`} />
-            </button>
           </div>
 
           {/* Navigation Links */}
@@ -354,6 +359,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               </div>
             </div>
           )}
+          </div>
         </aside>
 
         {/* ========================================== */}
