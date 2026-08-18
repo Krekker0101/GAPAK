@@ -55,7 +55,10 @@ Set these explicitly in `gapak-api`, `gapak-worker`, and `gapak-migrate` where a
 - `STORAGE_SIGNING_SECRET`
 - `ANONYMITY_HASH_SECRET`
 - `COOKIE_SECURE=true`
-- `COOKIE_SAME_SITE=lax`
+- `COOKIE_SAME_SITE=none`
+- `COOKIE_DOMAIN=`
+- `JWT_ACCESS_TTL=15m`
+- `JWT_REFRESH_TTL=720h`
 
 Do not copy localhost values into production.
 
@@ -74,16 +77,14 @@ A healthy liveness response is HTTP 200. Readiness may return HTTP 503 when a cr
 
 ## Frontend variables
 
-In Vercel Production, point the frontend to the public Railway API domain. The value must not contain Markdown brackets or backticks.
+Vercel Production uses the tracked `/api/v1/*` external rewrite so browser auth cookies remain first-party. Keep the API base empty; the public Railway domain remains the direct WebSocket/media target.
 
 Typical values:
 
-- `VITE_API_BASE_URL=https://<your-public-api-domain>/api/v1`
+- `VITE_API_BASE_URL=`
 - `VITE_WS_BASE_URL=wss://<your-public-api-domain>`
 - `VITE_MEDIA_BASE_URL=https://<your-public-api-domain>`
 - `VITE_ENVIRONMENT=production`
-- `VITE_ENABLE_MOCK_API=false`
-- `VITE_ENABLE_PLATFORM_SANDBOX=false`
 
 After changing any `VITE_*` variable, trigger a new Vercel deployment because Vite embeds these values at build time.
 

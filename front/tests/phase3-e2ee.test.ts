@@ -60,8 +60,8 @@ test('multi-device recipient resolution requires every device to be trusted', ()
 test('realtime reconnect authenticates before opening a new socket and never queues stale mutations', () => {
   const transport = read('src/shared/realtime/WebSocketTransport.ts');
   const connection = read('src/shared/realtime/ConnectionManager.ts');
-  assert.match(transport, /await this\.options\.ensureAuthenticated\(\)/);
-  assert.match(connection, /ensureAuthenticated: \(\) => this\.auth\.ensureAuthenticated\(\)/);
+  assert.match(transport, /await this\.options\.createAuthenticationFrame\(\)/);
+  assert.match(connection, /createAuthenticationFrame: \(\) => this\.auth\.createAuthenticationFrame\(\)/);
   assert.match(transport, /event_not_sent_while_disconnected/);
   assert.doesNotMatch(transport, /outboundQueue|\.shift\(\)/);
 });

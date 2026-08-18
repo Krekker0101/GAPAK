@@ -127,7 +127,7 @@ class HttpClient {
   public async refreshSession(): Promise<string> {
     if (this.refreshPromise) return this.refreshPromise;
 
-    this.refreshPromise = this.executeRefreshRequest().finally(() => {
+    this.refreshPromise = this.executeCoordinatedRefreshRequest().finally(() => {
       this.refreshPromise = null;
     });
 
@@ -137,6 +137,17 @@ class HttpClient {
   /** Kept as a compatibility alias for existing development tooling. */
   public async performTokenRefresh(): Promise<string> {
     return this.refreshSession();
+  }
+
+  private async executeCoordinatedRefreshRequest(): Promise<string> {
+    // Refresh tokens rotate on every use. A per-tab Promise is insufficient:
+    // two tabs reloading together could submit the same cookie concurrently
+    // and trigger replay protection. Web Locks serialize the rotation across
+    // tabs while the HttpOnly cookie remains the only refresh credential.
+    if (typeof navigator !== 'undefined' && navigator.locks) {
+      return navigator.locks.request('gapak-session-refresh', { mode: 'exclusive' }, () => this.executeRefreshRequest());
+    }
+    return this.executeRefreshRequest();
   }
 
   private async executeRefreshRequest(): Promise<string> {
@@ -176,6 +187,7 @@ class HttpClient {
         this.setCsrfToken(payload.csrfToken);
       }
       this.notifyTokenRefresh(payload.accessToken);
+      window.dispatchEvent(new CustomEvent('gapak:session-refreshed'));
       telemetry.record('auth', 'session_refresh_succeeded', 'info');
       return payload.accessToken;
     } catch (error) {

@@ -34,7 +34,7 @@ Backend route:
 
 `wss://gapak-api-production.up.railway.app/ws`
 
-The supplied backend implementation protects `/ws` with `RequireAuth`. The current Go middleware accepts a Bearer access token, the backend-issued `gapak_at` HttpOnly cookie, and an `/ws`-scoped `access_token` query fallback. The production frontend deliberately uses **only the backend-issued `gapak_at` cookie** and never puts tokens into the WebSocket URL or a client frame.
+The backend protects `/ws` with exact Origin validation and cookie-first authentication. The production frontend never puts tokens into the WebSocket URL. It sends an idempotent TLS-protected first `auth` frame as a fallback when cross-site WSS cookies are unavailable; the backend derives the browser session from the signed token and validates that session server-side.
 
 The WebSocket service authenticates the connection before upgrade, does not require a second auth frame, and supports native WebSocket control-frame ping/pong. Application commands are `subscribe`, `unsubscribe`, `message`, `read_receipt`, `delivery_ack`, and `typing`. Server events include `history`, `chat.message.created`, `chat.message.edited`, `chat.message.deleted`, `chat.read_receipt`, `chat.typing`, `ack`, `read_receipt_ack`, `delivery_ack`, and `error`. Subscription replay uses `after_sequence`.
 

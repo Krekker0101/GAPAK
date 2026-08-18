@@ -7,7 +7,7 @@ GAPAK Front is a **Vite + React** application. It does not use Next.js, so `NEXT
 The production frontend uses public service endpoints and the public Web Push VAPID key:
 
 ```env
-VITE_API_BASE_URL=https://gapak-api-production.up.railway.app
+VITE_API_BASE_URL=
 VITE_WS_BASE_URL=wss://gapak-api-production.up.railway.app/ws
 VITE_MEDIA_BASE_URL=https://gapak-api-production.up.railway.app
 VITE_WEB_PUSH_PUBLIC_KEY=<public VAPID key matching the backend sender>
@@ -18,9 +18,9 @@ Do **not** place JWT signing secrets, refresh tokens, database credentials, Redi
 
 ## Authentication
 
-Browser HTTP requests use `credentials: include`. Session credentials are backend-issued HttpOnly cookies. CSRF protection uses the memory-only token sent as `X-CSRF-Token`.
+Browser HTTP requests use same-origin `/api/v1` URLs through the Vercel external rewrite and `credentials: include`. This keeps the backend-issued HttpOnly session cookies first-party on reload without exposing the refresh token to JavaScript. CSRF protection uses the memory-only token sent as `X-CSRF-Token`.
 
-The native WebSocket client does not put an access token in the URL. The backend `/ws` route authenticates using the HttpOnly `gapak_at` cookie.
+The native WebSocket client never puts an access token in the URL. The backend `/ws` route is cookie-first; the client also sends a TLS-protected first `auth` frame so browsers that block cross-site WSS cookies can authenticate without destroying the HTTP session.
 
 ## Production origins
 
@@ -34,7 +34,7 @@ Railway must allow the exact frontend origin through `CORS_ORIGINS`; credentials
 
 ## Cross-site cookies
 
-Because Vercel and Railway are different sites, the backend production environment must use:
+Direct Vercel-to-Railway requests are cross-site and can lose cookies under modern browser privacy policies. Production therefore uses a Vercel reverse-proxy rewrite for `/api/v1/*`; the browser URL remains on the frontend origin. The Railway backend must still use:
 
 ```env
 COOKIE_SECURE=true
@@ -43,6 +43,10 @@ COOKIE_DOMAIN=
 ```
 
 The frontend does not set these values. Do not set a Railway cookie Domain to the Vercel hostname.
+
+Production defaults to the same-origin rewrite even if an older `VITE_API_BASE_URL` remains configured. Remove that older Vercel project override for clarity, then redeploy. `VITE_USE_DIRECT_API=true` is an explicit escape hatch only for production hosts that do not use Vercel rewrites. External API rewrites are non-cacheable in `vercel.json` because authenticated responses must never enter the CDN cache.
+
+OAuth provider redirect URIs should target the proxied callback, for example `https://gapak.vercel.app/api/v1/auth/callback/google`, so OAuth state cookies remain on the same browser origin throughout the flow.
 
 The checked-in backend `.env.production.example` already expresses the required `SameSite=None` configuration. The separate Railway deployment guide contains an outdated `COOKIE_SAME_SITE=lax` example; the live Railway environment must follow the backend production validation rule (`none` for this cross-site deployment).
 

@@ -108,6 +108,7 @@ type PresenceService interface {
 // AuthService interface for authentication.
 type AuthService interface {
 	ValidateToken(ctx context.Context, token string) (string, error)
+	ValidateSessionToken(ctx context.Context, token string) (userID, sessionID string, err error)
 }
 
 // WebSocketMessage represents a WebSocket message.
@@ -425,6 +426,18 @@ func (s *Service) authenticateConnection(ctx context.Context, c *fiberws.Conn) (
 	if !ok || strings.TrimSpace(token) == "" {
 		_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.ClosePolicyViolation, "token required"), time.Now().Add(time.Second))
 		return "", ""
+	}
+	if browserSession, _ := authData["browser_session"].(bool); browserSession {
+		uid, sessionID, err := s.authService.ValidateSessionToken(ctx, token)
+		if err != nil || strings.TrimSpace(uid) == "" || strings.TrimSpace(sessionID) == "" {
+			_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.ClosePolicyViolation, "authentication failed"), time.Now().Add(time.Second))
+			return "", ""
+		}
+		if err := s.messageService.ValidateSession(ctx, uid, sessionID); err != nil {
+			_ = c.WriteControl(fastws.CloseMessage, fastws.FormatCloseMessage(fastws.ClosePolicyViolation, "session invalid"), time.Now().Add(time.Second))
+			return "", ""
+		}
+		return uid, "session:" + sessionID
 	}
 	did, ok := authData["device_id"].(string)
 	if !ok || strings.TrimSpace(did) == "" {

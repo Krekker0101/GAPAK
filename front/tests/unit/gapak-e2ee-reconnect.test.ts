@@ -7,7 +7,7 @@ const read = (file: string) => readFileSync(file, 'utf8');
 test('reconnect re-authenticates and re-subscribes chats', () => {
   const transport = read('src/shared/realtime/WebSocketTransport.ts');
   const manager = read('src/shared/realtime/RealtimeManager.ts');
-  assert.match(transport, /await this\.options\.ensureAuthenticated\(\)/);
+  assert.match(transport, /await this\.options\.createAuthenticationFrame\(\)/);
   assert.match(manager, /if \(state === 'CONNECTED'\) this\.resubscribeChats\(\)/);
   assert.match(manager, /this\.subscribedChats\.forEach/);
 });

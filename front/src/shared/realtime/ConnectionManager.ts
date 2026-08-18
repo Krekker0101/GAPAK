@@ -19,7 +19,7 @@ export class ConnectionManager {
         this.listeners.forEach((listener) => listener(state));
       },
       onAuthFailure,
-      ensureAuthenticated: () => this.auth.ensureAuthenticated(),
+      createAuthenticationFrame: () => this.auth.createAuthenticationFrame(),
     });
   }
 

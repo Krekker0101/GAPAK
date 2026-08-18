@@ -88,7 +88,7 @@ A failed mutation does not remain permanently reserved by the idempotency layer;
 
 Production cookies are `Secure`, `HttpOnly`, `SameSite=None`; `COOKIE_DOMAIN` remains empty so cookies are host-only on Railway and are never scoped to a Vercel frontend domain. `POST`, `PUT`, `PATCH`, `DELETE` and other unsafe browser mutations require `X-CSRF-Token`. When a browser sends `Origin`, it must exactly match a configured CORS origin. CORS uses explicit origins only, with credentials enabled and no wildcard origin. The CSRF token is held only in application memory and sent as `X-CSRF-Token`.
 
-WebSocket authentication is cookie-first for browsers: `/ws` validates the HttpOnly `gapak_at` access cookie and the exact `Origin`. No access token is accepted in the WebSocket query string. A first-frame `auth` message remains supported for non-browser clients that do not send cookies; it must provide a valid access token. Invalid browser cookie authentication is rejected at the handshake.
+WebSocket authentication is cookie-first for browsers: `/ws` validates the HttpOnly `gapak_at` access cookie and the exact `Origin`. No access token is accepted in the WebSocket query string. Browsers may also send a TLS-protected first-frame `auth` message with `browser_session=true`; the backend derives and validates the session ID from the signed access token instead of trusting a client device identifier. This fallback supports deployments where cross-site WSS cookies are blocked.
 
 ## Explicit non-goals
 

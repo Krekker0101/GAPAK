@@ -222,6 +222,18 @@ func (m *Manager) ValidateToken(ctx context.Context, raw string) (string, error)
 	return claims.UserID, nil
 }
 
+// ValidateSessionToken authenticates a browser WebSocket fallback frame and
+// returns only the identity needed to validate the backing device session.
+// The raw token is never placed in a URL, where proxies and access logs could
+// retain it.
+func (m *Manager) ValidateSessionToken(ctx context.Context, raw string) (string, string, error) {
+	claims, err := m.VerifyAccessToken(ctx, raw)
+	if err != nil {
+		return "", "", err
+	}
+	return claims.UserID, claims.SessionID, nil
+}
+
 func (m *Manager) parse(raw string, verificationKeys map[string]string, expected TokenType) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(raw, &Claims{}, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {

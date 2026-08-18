@@ -3,8 +3,14 @@
  * Production must never silently fall back to development mocks.
  */
 
+const configuredApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/$/, '');
+// Production HTTP is same-origin by default so HttpOnly refresh cookies remain
+// first-party behind the Vercel external rewrite. Direct cross-site API access
+// is an explicit escape hatch for non-Vercel deployments, never the default.
+const useDirectProductionApi = import.meta.env.PROD && import.meta.env.VITE_USE_DIRECT_API === 'true';
+
 export const env = Object.freeze({
-  apiBaseUrl: (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/$/, ''),
+  apiBaseUrl: import.meta.env.PROD && !useDirectProductionApi ? '' : configuredApiBaseUrl,
   wsBaseUrl: (import.meta.env.VITE_WS_BASE_URL ?? '').replace(/\/$/, ''),
   mediaBaseUrl: (import.meta.env.VITE_MEDIA_BASE_URL ?? '').replace(/\/$/, ''),
   webPushPublicKey: (import.meta.env.VITE_WEB_PUSH_PUBLIC_KEY ?? '').trim(),

@@ -23,7 +23,6 @@ export interface AuthContextValue {
   startOAuth: (provider: string) => Promise<void>;
   logout: () => Promise<void>;
   logoutAllDevices: () => Promise<void>;
-  expireSession: () => Promise<void>;
   setPresenceStatus: (presence: PresenceStatus) => void;
   clearError: () => void;
   restoreSession: () => Promise<void>;
@@ -85,12 +84,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       telemetry.record('auth', 'session_hydrated', 'info');
     } catch (err) {
       setUser(null);
-      if (err instanceof ApiError && err.status !== 401 && err.status !== 403) {
-        setError(err);
-        setState('AUTH_ERROR');
-      } else {
+      // Only 401 proves that the browser session is no longer valid. A 403 is
+      // an authorization decision for this request and must never destroy a
+      // still-refreshable session or redirect the user back to the login page.
+      if (err instanceof ApiError && err.status === 401) {
         authManager.clearSession();
         setState('UNAUTHENTICATED');
+      } else {
+        const apiError = err instanceof ApiError
+          ? err
+          : new ApiError(err instanceof Error ? err.message : 'Unable to restore the session', 0, 'SESSION_RESTORE_FAILED');
+        setError(apiError);
+        setState('AUTH_ERROR');
       }
     }
   }, []);
@@ -216,24 +221,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const setPresenceStatus = useCallback((presence: PresenceStatus) => { setUser((prev) => prev ? { ...prev, presence } : prev); }, []);
 
-  const expireSession = useCallback(async () => {
-    realtimeManager.disconnect('authentication_failed');
-    realtimeManager.clearChatSubscriptions();
-    realtimeManager.broadcastLogout();
-    authManager.clearSession();
-    queryClient.clear();
-    setUser(null);
-    setError(null);
-    setState('UNAUTHENTICATED');
-    try {
-      await deviceCryptoManager.destroyAll();
-    } catch (cleanupError) {
-      telemetry.trackError('Session cleanup failed', cleanupError);
-    }
-  }, [queryClient]);
-
   return (
-    <AuthContext.Provider value={{ state, user, error, login, register, anonymousRegister, verify2FA, forgotPassword, resetPassword, startOAuth, logout, logoutAllDevices, expireSession, setPresenceStatus, clearError: () => setError(null), restoreSession: hydrateSession }}>
+    <AuthContext.Provider value={{ state, user, error, login, register, anonymousRegister, verify2FA, forgotPassword, resetPassword, startOAuth, logout, logoutAllDevices, setPresenceStatus, clearError: () => setError(null), restoreSession: hydrateSession }}>
       {children}
     </AuthContext.Provider>
   );

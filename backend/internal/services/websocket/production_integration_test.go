@@ -90,6 +90,13 @@ func (integrationAuthService) ValidateToken(_ context.Context, token string) (st
 	return "", errors.New("invalid token")
 }
 
+func (integrationAuthService) ValidateSessionToken(_ context.Context, token string) (string, string, error) {
+	if token == "valid-token" {
+		return "user-1", "session-1", nil
+	}
+	return "", "", errors.New("invalid token")
+}
+
 func newIntegrationServer(t *testing.T, service *Service) (*integrationServer, *ConnectionRegistry) {
 	t.Helper()
 	app := fiber.New()
@@ -154,6 +161,29 @@ func TestWebSocketAuthFailureClosesWithPolicyViolation(t *testing.T) {
 	closeErr, ok := err.(*fastws.CloseError)
 	if !ok || closeErr.Code != fastws.ClosePolicyViolation {
 		t.Fatalf("close=%v, want 1008", err)
+	}
+}
+
+func TestBrowserWebSocketCanAuthenticateWithoutCrossSiteCookie(t *testing.T) {
+	msg := &integrationMessageService{deviceOK: true, access: true, history: map[int64][]interface{}{0: nil}}
+	service := NewService(nil, msg, integrationPresenceService{}, integrationAuthService{}, testLogger(), nil)
+	srv, _ := newIntegrationServer(t, service)
+	conn := dialIntegration(t, srv)
+	if err := conn.WriteJSON(WebSocketMessage{Type: "auth", Data: map[string]interface{}{
+		"token":           "valid-token",
+		"browser_session": true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteJSON(WebSocketMessage{Type: "subscribe", Data: map[string]interface{}{"chat_id": "chat-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	var frame WebSocketMessage
+	if err := conn.ReadJSON(&frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame.Type != "history" {
+		t.Fatalf("type=%q, want history", frame.Type)
 	}
 }
 

@@ -6,6 +6,7 @@ export type RealtimeConnectionState =
   | 'CLOSED';
 
 export type BackendRealtimeType =
+  | 'auth'
   | 'subscribe'
   | 'unsubscribe'
   | 'history'

@@ -74,5 +74,6 @@ test('refresh uses the real /auth/refresh route and HttpOnly cookie semantics', 
 test('concurrent refresh calls are single-flight', () => {
   const s = read('src/shared/api/httpClient.ts');
   assert.match(s, /if \(this\.refreshPromise\) return this\.refreshPromise/);
-  assert.match(s, /this\.refreshPromise = this\.executeRefreshRequest\(\)/);
+  assert.match(s, /this\.refreshPromise = this\.executeCoordinatedRefreshRequest\(\)/);
+  assert.match(s, /navigator\.locks\.request\('gapak-session-refresh'/);
 });

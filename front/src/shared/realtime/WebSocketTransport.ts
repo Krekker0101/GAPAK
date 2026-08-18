@@ -7,7 +7,7 @@ export interface WebSocketTransportOptions {
   onEvent: (event: RealtimeEvent) => void;
   onStateChange: (state: RealtimeConnectionState) => void;
   onAuthFailure: (error: Error) => void;
-  ensureAuthenticated: () => Promise<boolean>;
+  createAuthenticationFrame: () => Promise<BackendRealtimeMessage | null>;
 }
 
 export class WebSocketTransport {
@@ -56,8 +56,8 @@ export class WebSocketTransport {
     this.setState('AUTHENTICATING');
 
     try {
-      const authenticated = await this.options.ensureAuthenticated();
-      if (!authenticated) throw new Error('Realtime authentication unavailable');
+      const authenticationFrame = await this.options.createAuthenticationFrame();
+      if (!authenticationFrame) throw new Error('Realtime authentication unavailable');
       if (this.manuallyClosed || this.disposed) return;
 
       const generation = ++this.generation;
@@ -70,6 +70,11 @@ export class WebSocketTransport {
 
       socket.onopen = () => {
         if (!this.isCurrent(socket, generation)) return;
+        // Always send the TLS-protected fallback frame. When the HttpOnly
+        // access cookie authenticated the upgrade, the backend treats this as
+        // an idempotent duplicate. When a browser blocks cross-site cookies,
+        // the frame completes authentication without exposing a token in URLs.
+        socket.send(JSON.stringify(authenticationFrame));
         this.handleOpen();
       };
       socket.onmessage = (event) => {
