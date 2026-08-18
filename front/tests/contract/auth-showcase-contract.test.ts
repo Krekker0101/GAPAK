@@ -12,8 +12,8 @@ test('auth pages mount exactly one isolated visual showcase', () => {
   assert.match(authPage, /import \{ AuthShowcase \}/);
   assert.equal((authPage.match(/<AuthShowcase \/>/g) ?? []).length, 1);
   assert.match(showcase, /const lanes = \[/);
-  assert.match(showcase, /auth-showcase-track-down/);
-  assert.match(showcase, /auth-showcase-track-up/);
+  assert.match(showcase, /direction: 'up' \| 'down'/);
+  assert.match(showcase, /auth-showcase-track--\$\{direction\}/);
   assert.match(showcase, /aria-hidden="true"/);
   assert.doesNotMatch(showcase, /httpClient|postsApi|useQuery|https?:\/\//);
 });
@@ -40,10 +40,27 @@ test('showcase media is local, optimized and bounded', () => {
 });
 
 test('showcase animation is seamless, pausable and motion-safe', () => {
+  const showcase = read('src/pages/auth/AuthShowcase.tsx');
   const css = read('src/shared/design-system/tokens.css');
+  assert.match(showcase, /ResizeObserver/);
+  assert.match(showcase, /--auth-lane-offset/);
   assert.match(css, /@keyframes auth-marquee-up/);
   assert.match(css, /@keyframes auth-marquee-down/);
+  assert.match(css, /var\(--auth-lane-offset/);
+  assert.match(css, /min-height:\s*145vh/);
   assert.match(css, /animation-play-state:\s*paused/);
   assert.match(css, /@media \(prefers-reduced-motion:\s*reduce\)/);
 });
 
+test('brand artwork is optimized and used in primary application surfaces', () => {
+  const authPage = read('src/pages/AuthPage.tsx');
+  const showcase = read('src/pages/auth/AuthShowcase.tsx');
+  const shell = read('src/app/shell/AppShell.tsx');
+  const logo = join(root, 'src', 'assets', 'brand', 'gapak-logo.jpg');
+  const favicon = join(root, 'public', 'favicon.png');
+  assert.ok(statSync(logo).size < 25_000, 'application logo exceeds its delivery budget');
+  assert.ok(statSync(favicon).size < 10_000, 'favicon exceeds its delivery budget');
+  assert.match(authPage, /<BrandLogo/);
+  assert.match(showcase, /<BrandLogo/);
+  assert.match(shell, /<BrandLogo/);
+});

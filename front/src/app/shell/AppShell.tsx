@@ -62,6 +62,7 @@ import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import type { Chat } from '../../shared/api/backendContracts';
 import { PresenceHeartbeat } from '../../domains/platform/PresencePage';
 import { SyncBridge } from '../../shared/sync/SyncBridge';
+import { BrandLogo } from '../../shared/brand/BrandLogo';
 
 const normalizeChatsList = (data: { chats: Chat[] } | Chat[]): Chat[] => (Array.isArray(data) ? data : data.chats);
 
@@ -293,20 +294,20 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           <div className="flex flex-col flex-1 overflow-hidden rounded-[var(--radius-2xl)]">
           {/* Logo Header */}
           <div className={`h-16 border-b border-subtle flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'justify-start px-4'}`}>
-            <div
-              className="flex items-center gap-3 cursor-pointer overflow-visible"
+            <button
+              type="button"
+              aria-label="GAPAK — open feed"
+              className="flex items-center gap-3 overflow-visible text-left"
               onClick={() => onNavigate('posts')}
             >
-              <div className="w-9 h-9 rounded-[var(--radius-xl)] bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 flex items-center justify-center shadow-token-lg shadow-indigo-500/20 text-white font-black text-lg shrink-0">
-                G
-              </div>
+              <BrandLogo className="h-9 w-9" decorative priority />
               {!isSidebarCollapsed && (
                 <div className="flex flex-col">
                   <span className="font-extrabold text-base tracking-wider text-primary uppercase">GAPAK</span>
                   <span className="text-[10px] font-mono text-indigo-400 font-medium tracking-tight">FRONTEND PLATFORM</span>
                 </div>
               )}
-            </div>
+            </button>
           </div>
 
           {/* Navigation Links */}
@@ -382,10 +383,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setIsMobileMenuOpen(true)}
+                aria-label="Open navigation"
                 className="md:hidden p-2 text-tertiary hover:text-primary rounded-[var(--radius-lg)] hover:bg-surface-muted"
               >
                 <Menu className="w-5 h-5" />
               </button>
+              <BrandLogo className="h-8 w-8 md:hidden" decorative priority />
               <div>
                 <h1 className="text-sm font-bold text-primary flex items-center gap-2">
                   <span className="text-indigo-400">{getDomainIcon(currentDomain)}</span>

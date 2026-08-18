@@ -327,42 +327,58 @@
 }
 
 @keyframes auth-marquee-up {
-  from { transform: translateY(0); }
-  to { transform: translateY(-50%); }
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(0, var(--auth-lane-offset, -50%), 0); }
 }
 @keyframes auth-marquee-down {
-  from { transform: translateY(-50%); }
-  to { transform: translateY(0); }
+  from { transform: translate3d(0, var(--auth-lane-offset, -50%), 0); }
+  to { transform: translate3d(0, 0, 0); }
 }
 
-.auth-showcase-track-up,
-.auth-showcase-track-down {
+.auth-showcase-lanes {
+  position: absolute;
+  inset: -18vh -2.75rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .75rem;
+  opacity: .92;
+  transform: rotate(-1.15deg) scale(1.025);
+  transform-origin: center;
+}
+
+.auth-showcase-lane {
+  contain: layout paint;
+}
+
+.auth-showcase-lane-group {
+  display: flex;
+  min-height: 145vh;
+  flex-direction: column;
+  justify-content: space-around;
+  gap: .75rem;
+  padding-bottom: .75rem;
+}
+
+.auth-showcase-track {
   will-change: transform;
   backface-visibility: hidden;
+  transform-style: preserve-3d;
 }
 
-.auth-showcase-track-up {
-  animation: auth-marquee-up 34s linear infinite;
+.auth-showcase-track--up {
+  animation: auth-marquee-up var(--auth-lane-duration, 44s) linear infinite;
 }
 
-.auth-showcase-track-up-1 {
-  animation-duration: 38s;
+.auth-showcase-track--down {
+  animation: auth-marquee-down var(--auth-lane-duration, 48s) linear infinite;
 }
 
-.auth-showcase-track-up-3 {
-  animation-duration: 31s;
-}
-
-.auth-showcase-track-down {
-  animation: auth-marquee-down 36s linear infinite;
-}
-
-.auth-showcase:hover .auth-showcase-track-up,
-.auth-showcase:hover .auth-showcase-track-down {
+.auth-showcase:hover .auth-showcase-track {
   animation-play-state: paused;
 }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+  .auth-showcase-track { animation: none !important; transform: translate3d(0, -8%, 0) !important; }
 }

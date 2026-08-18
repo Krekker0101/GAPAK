@@ -9,13 +9,13 @@ import {
   Eye,
   EyeOff,
   ShieldCheck,
-  Sparkles,
   UserRound,
   ArrowRight,
 } from 'lucide-react';
 import { useAuth } from '../domains/auth/AuthContext';
 import { Button, Input, SegmentedControl } from '../shared/design-system/primitives';
 import { EscapingButton } from '../shared/ux/EscapingButton';
+import { BrandLogo } from '../shared/brand/BrandLogo';
 import { AuthShowcase } from './auth/AuthShowcase';
 
 const AuthPage: React.FC = () => {
@@ -113,9 +113,7 @@ const AuthPage: React.FC = () => {
         <div className="w-full max-w-md">
           {/* Mobile-only brand mark */}
           <div className="mb-8 flex items-center gap-2 lg:hidden">
-            <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] bg-indigo-600 text-white shadow-token-md">
-              <Sparkles className="h-4.5 w-4.5" />
-            </div>
+            <BrandLogo className="h-10 w-10" decorative priority />
             <span className="text-lg font-bold tracking-tight text-primary">GAPAK</span>
           </div>
 

@@ -1,5 +1,6 @@
-import React from 'react';
-import { Heart, MessageCircle, Sparkles } from 'lucide-react';
+import React, { useLayoutEffect, useRef } from 'react';
+import { Heart, MessageCircle } from 'lucide-react';
+import { BrandLogo } from '../../shared/brand/BrandLogo';
 
 interface ShowcasePost {
   image: string;
@@ -62,9 +63,9 @@ const posts: ShowcasePost[] = [
 ];
 
 const lanes = [
-  [posts[0], posts[3], posts[4]],
-  [posts[1], posts[5], posts[2]],
-  [posts[4], posts[0], posts[3]],
+  [posts[0], posts[3], posts[4], posts[1], posts[5], posts[2]],
+  [posts[1], posts[5], posts[2], posts[4], posts[0], posts[3]],
+  [posts[4], posts[0], posts[3], posts[5], posts[2], posts[1]],
 ];
 
 const ShowcaseCard: React.FC<{ post: ShowcasePost; eager?: boolean }> = ({ post, eager = false }) => (
@@ -94,26 +95,76 @@ const ShowcaseCard: React.FC<{ post: ShowcasePost; eager?: boolean }> = ({ post,
   </article>
 );
 
-const LaneGroup: React.FC<{ posts: ShowcasePost[]; eager?: boolean }> = ({ posts: lanePosts, eager }) => (
-  <div className="flex flex-col gap-3 pb-3">
+const LaneContent: React.FC<{ posts: ShowcasePost[]; eager?: boolean }> = ({ posts: lanePosts, eager }) => (
+  <>
     {lanePosts.map((post, index) => (
-      <ShowcaseCard key={`${post.image}-${index}`} post={post} eager={Boolean(eager && index === 0)} />
+      <ShowcaseCard key={`${post.image}-${index}`} post={post} eager={Boolean(eager)} />
     ))}
-  </div>
+  </>
 );
+
+interface ShowcaseLaneProps {
+  posts: ShowcasePost[];
+  direction: 'up' | 'down';
+  duration: number;
+}
+
+type LaneStyle = React.CSSProperties & { '--auth-lane-duration': string };
+
+const ShowcaseLane: React.FC<ShowcaseLaneProps> = ({ posts: lanePosts, direction, duration }) => {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const groupRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const track = trackRef.current;
+    const group = groupRef.current;
+    if (!track || !group) return;
+
+    const measure = () => {
+      track.style.setProperty('--auth-lane-offset', `${-group.getBoundingClientRect().height}px`);
+    };
+
+    measure();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(group);
+    window.addEventListener('resize', measure, { passive: true });
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
+
+  return (
+    <div className="auth-showcase-lane min-w-0 overflow-hidden">
+      <div
+        ref={trackRef}
+        className={`auth-showcase-track auth-showcase-track--${direction}`}
+        style={{ '--auth-lane-duration': `${duration}s` } as LaneStyle}
+      >
+        <div ref={groupRef} className="auth-showcase-lane-group">
+          <LaneContent posts={lanePosts} eager />
+        </div>
+        <div className="auth-showcase-lane-group">
+          <LaneContent posts={lanePosts} />
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const AuthShowcase: React.FC = () => (
   <section aria-label="Демонстрационная лента GAPAK" className="auth-showcase relative hidden w-[52%] max-w-[780px] overflow-hidden border-r border-white/10 bg-[#060816] lg:block">
     <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_10%,rgb(99_102_241/.28),transparent_34rem),radial-gradient(circle_at_85%_90%,rgb(217_70_239/.18),transparent_30rem)]" />
 
-    <div aria-hidden="true" className="absolute -inset-x-12 -inset-y-32 grid rotate-[-4deg] grid-cols-3 gap-3 opacity-90">
+    <div aria-hidden="true" className="auth-showcase-lanes">
       {lanes.map((lane, index) => (
-        <div key={index} className="min-w-0 overflow-hidden">
-          <div className={index === 1 ? 'auth-showcase-track-down' : `auth-showcase-track-up auth-showcase-track-up-${index + 1}`}>
-            <LaneGroup posts={lane} eager />
-            <LaneGroup posts={lane} />
-          </div>
-        </div>
+        <ShowcaseLane
+          key={index}
+          posts={lane}
+          direction={index === 1 ? 'down' : 'up'}
+          duration={[44, 48, 40][index]}
+        />
       ))}
     </div>
 
@@ -122,9 +173,7 @@ export const AuthShowcase: React.FC = () => (
 
     <div className="relative z-10 flex h-full flex-col justify-between p-10 xl:p-12">
       <div className="flex items-center gap-2 text-white">
-        <div className="grid h-10 w-10 place-items-center rounded-2xl border border-white/15 bg-white/10 shadow-xl backdrop-blur-xl">
-          <Sparkles className="h-4.5 w-4.5" />
-        </div>
+        <BrandLogo className="h-11 w-11" decorative priority />
         <span className="text-lg font-black tracking-[-0.03em]">GAPAK</span>
       </div>
 
@@ -143,4 +192,3 @@ export const AuthShowcase: React.FC = () => (
     </div>
   </section>
 );
-
