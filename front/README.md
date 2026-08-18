@@ -1,6 +1,6 @@
 # GAPAK Front
 
-Production React/Vite client for the GAPAK Go API. Routed business domains use typed HTTP services and server-owned state; the application contains no mock backend or production fixture data.
+Production React/Vite client for the GAPAK Go API. Routed business domains use typed HTTP services and server-owned state; the application contains no mock backend. The only deliberate fixture content is the non-interactive visual showcase on login/register, which never enters application state or represents backend posts.
 
 ## Development
 

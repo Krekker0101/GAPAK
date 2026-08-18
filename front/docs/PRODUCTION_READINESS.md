@@ -6,7 +6,7 @@ Updated: 2026-08-18
 
 | Area | Status | Evidence |
 |---|---|---|
-| Architecture | READY | Routed domains use typed API services and server-owned identifiers/state. Runtime fixtures and template domain screens are absent. |
+| Architecture | READY | Routed domains use typed API services and server-owned identifiers/state. The only template content is the isolated, non-interactive login/register showcase requested for presentation; no business domain consumes it. |
 | Authentication | READY | HttpOnly refresh-cookie restoration, memory-only access/CSRF material, single-flight refresh and explicit logout are implemented. |
 | Security | READY | CSP/security headers, fail-closed transport/E2EE validation, backend sessions/devices/2FA/audit/panic controls and regression tests are present. |
 | Business domains | READY | Feed, profiles, connections, stories, media, chats, live, trust rooms, battles, presence, moderation, subscriptions and administration use backend routes. |

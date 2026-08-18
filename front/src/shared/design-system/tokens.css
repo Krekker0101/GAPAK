@@ -335,6 +335,33 @@
   to { transform: translateY(0); }
 }
 
+.auth-showcase-track-up,
+.auth-showcase-track-down {
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.auth-showcase-track-up {
+  animation: auth-marquee-up 34s linear infinite;
+}
+
+.auth-showcase-track-up-1 {
+  animation-duration: 38s;
+}
+
+.auth-showcase-track-up-3 {
+  animation-duration: 31s;
+}
+
+.auth-showcase-track-down {
+  animation: auth-marquee-down 36s linear infinite;
+}
+
+.auth-showcase:hover .auth-showcase-track-up,
+.auth-showcase:hover .auth-showcase-track-down {
+  animation-play-state: paused;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }

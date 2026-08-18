@@ -16,6 +16,7 @@ import {
 import { useAuth } from '../domains/auth/AuthContext';
 import { Button, Input, SegmentedControl } from '../shared/design-system/primitives';
 import { EscapingButton } from '../shared/ux/EscapingButton';
+import { AuthShowcase } from './auth/AuthShowcase';
 
 const AuthPage: React.FC = () => {
   const { state, user, error, login, register, anonymousRegister, clearError } = useAuth();
@@ -105,30 +106,7 @@ const AuthPage: React.FC = () => {
 
   return (
     <main className="relative flex min-h-screen bg-app app-shell-surface text-primary">
-      {/* Brand panel: no fabricated users, counters, posts, or media. */}
-      <div className="relative hidden w-[46%] max-w-2xl overflow-hidden border-r border-subtle lg:block">
-        <div
-          className="absolute inset-0"
-          style={{
-            background:
-              'radial-gradient(circle at 20% 0%, rgb(99 102 241 / .16), transparent 42rem), radial-gradient(circle at 90% 100%, rgb(168 85 247 / .14), transparent 38rem)',
-          }}
-        />
-        <div className="relative z-10 flex h-full flex-col justify-center gap-6 px-12">
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] bg-indigo-600 text-white shadow-token-md">
-              <Sparkles className="h-4.5 w-4.5" />
-            </div>
-            <span className="text-lg font-bold tracking-tight text-primary">GAPAK</span>
-          </div>
-          <h2 className="max-w-md text-4xl font-semibold leading-tight text-primary">
-            Лента, где происходит всё интересное
-          </h2>
-          <p className="max-w-md text-base leading-relaxed text-secondary">
-            После входа профиль, публикации, истории, сообщения и настройки загружаются из GAPAK API.
-          </p>
-        </div>
-      </div>
+      <AuthShowcase />
 
       {/* Right auth panel */}
       <div className="flex flex-1 items-center justify-center px-4 py-10 sm:px-8">
