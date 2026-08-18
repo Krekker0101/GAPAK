@@ -33,6 +33,7 @@ type TokenRefreshCallback = (token: string | null, error?: ApiError) => void;
 
 class HttpClient {
   private csrfToken: string | null = null;
+  private csrfBootstrapPromise: Promise<{ csrfToken: string; hasSession: boolean }> | null = null;
   private refreshPromise: Promise<string> | null = null;
   private refreshSubscribers: TokenRefreshCallback[] = [];
   private requestInterceptors: Array<(config: HttpRequestConfig) => HttpRequestConfig | Promise<HttpRequestConfig>> = [];
@@ -50,6 +51,46 @@ class HttpClient {
   public setCsrfToken(token: string | null): void {
     this.csrfToken = token;
     // Never persist CSRF material in browser storage. Keep it only in memory.
+  }
+
+  /**
+   * Issues a fresh memory-only CSRF token. All callers share one in-flight
+   * request so concurrent mutation failures cannot race their recovery.
+   */
+  public async bootstrapCsrf(): Promise<{ csrfToken: string; hasSession: boolean }> {
+    if (this.csrfBootstrapPromise) return this.csrfBootstrapPromise;
+
+    this.csrfBootstrapPromise = (async () => {
+      const requestId = this.generateRequestId();
+      const headers: Record<string, string> = { Accept: 'application/json', 'X-Request-ID': requestId };
+      const accessToken = tokenManager.getAccessToken();
+      // The backend binds CSRF tokens to the first valid credential it sees.
+      // Supplying the current bearer token prevents a stale/rotated refresh
+      // cookie from binding recovery to a different session.
+      if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+      const { responseStatus, responseData } = await this.fetchOnce(
+        resolveApiUrl('/auth/csrf'),
+        'GET',
+        headers,
+        undefined,
+        undefined,
+        15_000,
+      );
+      if (responseStatus < 200 || responseStatus >= 300) {
+        throw this.toApiError(responseData, responseStatus, requestId, 'CSRF_BOOTSTRAP_FAILED');
+      }
+
+      const payload = this.unwrapSuccess<{ csrfToken?: unknown; hasSession?: unknown }>(responseData, responseStatus, requestId);
+      if (typeof payload.csrfToken !== 'string' || payload.csrfToken.length < 16) {
+        throw new ApiError('CSRF bootstrap failed', 502, 'CSRF_BOOTSTRAP_FAILED', requestId);
+      }
+      this.setCsrfToken(payload.csrfToken);
+      return { csrfToken: payload.csrfToken, hasSession: payload.hasSession === true };
+    })().finally(() => {
+      this.csrfBootstrapPromise = null;
+    });
+
+    return this.csrfBootstrapPromise;
   }
 
   public getAccessToken(): string | null { return tokenManager.getAccessToken(); }
@@ -164,6 +205,7 @@ class HttpClient {
       signal,
       timeoutMs = 15_000,
       authRetry = false,
+      csrfRetry = false,
       includeResponseMeta = false,
     } = reqConfig;
 
@@ -194,6 +236,17 @@ class HttpClient {
       fullUrl, method, headers, data, signal, timeoutMs, retryCount, idempotencyKey, requestId,
     );
     const latencyMs = Math.max(0, (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt);
+
+    // A rejected CSRF check happens before the domain handler, so repeating the
+    // mutation after a fresh token is safe. Retry only this explicit backend
+    // error, and only once; an arbitrary 403 must never be replayed.
+    if (responseStatus === 403 && !skipAuth && !csrfRetry && method !== 'GET') {
+      const csrfError = this.toApiError(responseData, responseStatus, requestId);
+      if (/csrf/i.test(csrfError.code)) {
+        await this.bootstrapCsrf();
+        return this.request<T>({ ...config, csrfRetry: true });
+      }
+    }
 
     if (responseStatus === 401 && !skipAuth && !authRetry && !url.endsWith('/auth/refresh') && !url.includes('/auth/login') && !url.includes('/auth/register')) {
       try {

@@ -47,17 +47,20 @@ test('OAuth redirect URL is validated before navigation', () => {
 
 test('CSRF is bootstrapped before auth mutations and recovered once on CSRF rejection', () => {
   const context = read('src/domains/auth/AuthContext.tsx');
-  const api = read('src/domains/auth/api/authApi.ts');
+  const client = read('src/shared/api/httpClient.ts');
   assert.match(context, /await authManager\.ensureCsrf\(\)/);
-  assert.match(api, /status === 403/);
-  assert.match(api, /ensureCsrf\(true\)/);
+  assert.match(client, /responseStatus === 403/);
+  assert.match(client, /\/csrf\/i\.test\(csrfError\.code\)/);
+  assert.match(client, /bootstrapCsrf\(\)/);
+  assert.match(client, /csrfRetry: true/);
+  assert.match(client, /headers\.Authorization = `Bearer \$\{accessToken\}`/);
 });
 
 test('2FA management endpoints are CSRF protected', () => {
   const s = read('src/domains/auth/api/authApi.ts');
-  assert.match(s, /twoFactorSetup[\s\S]*withCsrfRecovery/);
-  assert.match(s, /twoFactorVerify[\s\S]*withCsrfRecovery/);
-  assert.match(s, /twoFactorDisable[\s\S]*withCsrfRecovery/);
+  assert.match(s, /twoFactorSetup[\s\S]*httpClient\.post/);
+  assert.match(s, /twoFactorVerify[\s\S]*httpClient\.post/);
+  assert.match(s, /twoFactorDisable[\s\S]*httpClient\.post/);
 });
 
 test('refresh uses the real /auth/refresh route and HttpOnly cookie semantics', () => {

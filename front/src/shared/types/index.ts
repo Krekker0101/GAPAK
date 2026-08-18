@@ -92,6 +92,8 @@ export interface HttpRequestConfig extends Omit<RequestInit, 'body'> {
   timeoutMs?: number;
   /** Internal guard preventing an infinite 401 -> refresh -> retry loop. */
   authRetry?: boolean;
+  /** Internal guard preventing an infinite 403 -> CSRF bootstrap -> retry loop. */
+  csrfRetry?: boolean;
   /** Return response metadata/headers to callers that need transport-level pagination such as X-Next-Cursor. */
   includeResponseMeta?: boolean;
 }

@@ -5,7 +5,7 @@ import { realtimeManager } from './RealtimeManager';
 
 export const RealtimeProvider: React.FC<PropsWithChildren> = ({ children }) => {
   const queryClient = useQueryClient();
-  const { state, logout, user } = useAuth();
+  const { state, expireSession, user } = useAuth();
 
   useEffect(() => {
     realtimeManager.initialize(queryClient);
@@ -20,7 +20,7 @@ export const RealtimeProvider: React.FC<PropsWithChildren> = ({ children }) => {
     }
   }, [state, user]);
 
-  useEffect(() => realtimeManager.onAuthFailure(() => { void logout(); }), [logout]);
+  useEffect(() => realtimeManager.onAuthFailure(() => { void expireSession(); }), [expireSession]);
 
   return <>{children}</>;
 };

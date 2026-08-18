@@ -59,3 +59,42 @@ func TestMemoryStoreBootstrapToken(t *testing.T) {
 		t.Fatalf("expected bootstrap token to validate, ok=%v err=%v", ok, err)
 	}
 }
+
+func TestMemoryStoreKeepsConcurrentSessionTokensValid(t *testing.T) {
+	store := NewMemoryStore()
+	first, err := store.Issue(context.Background(), "session-1", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Issue(context.Background(), "session-1", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("independent CSRF issues must produce different tokens")
+	}
+	for _, token := range []string{first, second} {
+		ok, validateErr := store.Validate(context.Background(), "session-1", token)
+		if validateErr != nil || !ok {
+			t.Fatalf("concurrent token was invalidated, ok=%v err=%v", ok, validateErr)
+		}
+	}
+}
+
+func TestMemoryStoreDeleteRevokesEverySessionToken(t *testing.T) {
+	store := NewMemoryStore()
+	first, _ := store.Issue(context.Background(), "session-1", time.Minute)
+	second, _ := store.Issue(context.Background(), "session-1", time.Minute)
+	other, _ := store.Issue(context.Background(), "session-2", time.Minute)
+	if err := store.Delete(context.Background(), "session-1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, token := range []string{first, second} {
+		if ok, _ := store.Validate(context.Background(), "session-1", token); ok {
+			t.Fatal("deleted session token still validates")
+		}
+	}
+	if ok, err := store.Validate(context.Background(), "session-2", other); err != nil || !ok {
+		t.Fatalf("deleting one session affected another, ok=%v err=%v", ok, err)
+	}
+}

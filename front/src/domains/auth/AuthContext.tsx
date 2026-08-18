@@ -23,6 +23,7 @@ export interface AuthContextValue {
   startOAuth: (provider: string) => Promise<void>;
   logout: () => Promise<void>;
   logoutAllDevices: () => Promise<void>;
+  expireSession: () => Promise<void>;
   setPresenceStatus: (presence: PresenceStatus) => void;
   clearError: () => void;
   restoreSession: () => Promise<void>;
@@ -215,8 +216,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const setPresenceStatus = useCallback((presence: PresenceStatus) => { setUser((prev) => prev ? { ...prev, presence } : prev); }, []);
 
+  const expireSession = useCallback(async () => {
+    realtimeManager.disconnect('authentication_failed');
+    realtimeManager.clearChatSubscriptions();
+    realtimeManager.broadcastLogout();
+    authManager.clearSession();
+    queryClient.clear();
+    setUser(null);
+    setError(null);
+    setState('UNAUTHENTICATED');
+    try {
+      await deviceCryptoManager.destroyAll();
+    } catch (cleanupError) {
+      telemetry.trackError('Session cleanup failed', cleanupError);
+    }
+  }, [queryClient]);
+
   return (
-    <AuthContext.Provider value={{ state, user, error, login, register, anonymousRegister, verify2FA, forgotPassword, resetPassword, startOAuth, logout, logoutAllDevices, setPresenceStatus, clearError: () => setError(null), restoreSession: hydrateSession }}>
+    <AuthContext.Provider value={{ state, user, error, login, register, anonymousRegister, verify2FA, forgotPassword, resetPassword, startOAuth, logout, logoutAllDevices, expireSession, setPresenceStatus, clearError: () => setError(null), restoreSession: hydrateSession }}>
       {children}
     </AuthContext.Provider>
   );

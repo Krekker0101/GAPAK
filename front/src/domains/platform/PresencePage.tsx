@@ -5,6 +5,7 @@ import { Activity, Search } from 'lucide-react';
 import { PageError, PageLoading } from '../../pages/common';
 import { presenceApi } from './api/platformApi';
 import { useAuth } from '../auth/AuthContext';
+import { authManager } from '../../shared/api/authManager';
 
 export const PresenceHeartbeat: React.FC = () => {
   const location = useLocation();
@@ -27,7 +28,11 @@ export const PresenceHeartbeat: React.FC = () => {
       active = false;
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', heartbeat);
-      void presenceApi.disconnect(connectionId.current, 'app_shell_unmounted').catch(() => undefined);
+      // An auth-failure unmount has already cleared the in-memory credential.
+      // Avoid a guaranteed CSRF/auth failure from a best-effort disconnect POST.
+      if (authManager.getAccessToken()) {
+        void presenceApi.disconnect(connectionId.current, 'app_shell_unmounted').catch(() => undefined);
+      }
     };
   }, [setPresenceStatus]);
   return null;

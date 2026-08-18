@@ -19,6 +19,7 @@ class RealtimeManager {
   private state: RealtimeConnectionState = 'CLOSED';
   private stateListeners = new Set<(state: RealtimeConnectionState) => void>();
   private authFailureListeners = new Set<(error: Error) => void>();
+  private authFailureNotified = false;
   private tabChannel: BroadcastChannel | null = null;
 
   private readonly subscribedChats = new Set<string>();
@@ -65,6 +66,7 @@ class RealtimeManager {
   }
 
   connect(): void {
+    this.authFailureNotified = false;
     this.connection?.connect();
   }
 
@@ -200,6 +202,9 @@ class RealtimeManager {
   }
 
   private handleAuthFailure(error: Error): void {
+    if (this.authFailureNotified) return;
+    this.authFailureNotified = true;
+    this.disconnect('authentication_failed');
     telemetry.record('websocket', 'ws_auth_failure', 'warn');
     this.authFailureListeners.forEach((listener) => listener(error));
   }

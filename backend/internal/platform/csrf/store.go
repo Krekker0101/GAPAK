@@ -78,7 +78,12 @@ func (s *MemoryStore) Delete(_ context.Context, sessionID string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.entries, storageKey(sessionID, ""))
+	prefix := sessionKeyPrefix(sessionID)
+	for key := range s.entries {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.entries, key)
+		}
+	}
 	return nil
 }
 
@@ -133,14 +138,42 @@ func (s *RedisStore) Delete(ctx context.Context, sessionID string) error {
 	if s == nil || s.redis == nil || sessionID == "" {
 		return nil
 	}
-	return s.redis.Del(ctx, storageKey(sessionID, "")).Err()
+	pattern := sessionKeyPrefix(sessionID) + "*"
+	var cursor uint64
+	keysToDelete := make([]string, 0, 8)
+	for {
+		keys, next, err := s.redis.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return err
+		}
+		keysToDelete = append(keysToDelete, keys...)
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	// Do not mutate the scanned keyspace until iteration is complete; deleting
+	// during SCAN can make later cursor pages unstable. Session revocation still
+	// protects against a token issued concurrently with this cleanup.
+	for len(keysToDelete) > 0 {
+		batchSize := min(100, len(keysToDelete))
+		if err := s.redis.Unlink(ctx, keysToDelete[:batchSize]...).Err(); err != nil {
+			return err
+		}
+		keysToDelete = keysToDelete[batchSize:]
+	}
+	return nil
 }
 
 func storageKey(sessionID, token string) string {
 	if sessionID == "" {
 		return redisKeyPrefix + "bootstrap:" + digest(token)
 	}
-	return redisKeyPrefix + "session:" + sessionID
+	return sessionKeyPrefix(sessionID) + digest(token)
+}
+
+func sessionKeyPrefix(sessionID string) string {
+	return redisKeyPrefix + "session:" + sessionID + ":"
 }
 
 func digest(token string) string {

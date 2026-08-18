@@ -54,14 +54,14 @@ export class AuthManager {
   }
 
   async ensureCsrf(force = false): Promise<string> {
-    if (!force && this.csrfPromise) return this.csrfPromise;
-    this.csrfPromise = httpClient.get<{ csrfToken: string; hasSession?: boolean }>('/auth/csrf', { skipAuth: true })
+    // A forced recovery still joins an already-running bootstrap. Starting a
+    // second request would create an avoidable race between its response and the
+    // mutation retry (and historically invalidated the first token server-side).
+    if (this.csrfPromise) return this.csrfPromise;
+    void force;
+    this.csrfPromise = httpClient.bootstrapCsrf()
       .then((response) => {
-        if (!response || typeof response.csrfToken !== 'string' || response.csrfToken.length < 16) {
-          throw new ApiError('CSRF bootstrap failed', 502, 'CSRF_BOOTSTRAP_FAILED');
-        }
-        httpClient.setCsrfToken(response.csrfToken);
-        this.hasServerSession = response.hasSession === true;
+        this.hasServerSession = response.hasSession;
         return response.csrfToken;
       })
       .finally(() => { this.csrfPromise = null; });
