@@ -2,6 +2,7 @@ package friends
 
 import (
 	"context"
+	"strings"
 
 	apperrors "github.com/gapak/backend/internal/platform/errors"
 )
@@ -61,6 +62,27 @@ func (s *Service) List(ctx context.Context, currentUserID string) ([]ConnectionR
 			TrustedByCurrent: item.TrustedByCurrent,
 			CreatedAt:        item.CreatedAt,
 			UpdatedAt:        item.UpdatedAt,
+		})
+	}
+	return response, nil
+}
+
+func (s *Service) Suggestions(ctx context.Context, currentUserID string, limit int) ([]ConnectionSuggestionResponse, error) {
+	items, err := s.repo.Suggestions(ctx, currentUserID, limit)
+	if err != nil {
+		return nil, err
+	}
+	response := make([]ConnectionSuggestionResponse, 0, len(items))
+	for _, item := range items {
+		response = append(response, ConnectionSuggestionResponse{
+			Profile: SuggestionProfileResponse{
+				ID: item.ID, Username: item.Username, DisplayName: item.DisplayName,
+				Bio: item.Bio, AvatarFileID: item.AvatarFileID,
+				Role: strings.ToLower(item.Role), IsAnonymous: item.IsAnonymous,
+				PrivacySettings: SuggestionPrivacyResponse{ProfileVisibility: item.ProfileVisibility},
+			},
+			MutualConnectionsCount: item.MutualConnectionsCount,
+			Reason:                 "MUTUAL_FOLLOWING",
 		})
 	}
 	return response, nil

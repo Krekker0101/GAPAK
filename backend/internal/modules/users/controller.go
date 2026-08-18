@@ -21,6 +21,8 @@ func NewController(service *Service, validate *validator.Validate) *Controller {
 func (ctl *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Handler) {
 	group := router.Group("/users", requireAuth)
 	group.Get("/me", ctl.getMe)
+	group.Get("/search", ctl.search)
+	group.Get("/discover", ctl.discover)
 	group.Get("/:userId", ctl.getPublic)
 	group.Patch("/me", ctl.updateMe)
 	group.Patch("/me/privacy", ctl.updatePrivacy)
@@ -32,11 +34,47 @@ func (ctl *Controller) getPublic(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	response, err := ctl.service.GetPublicProfile(c.UserContext(), userID)
+	claims := middleware.ClaimsFromContext(c)
+	response, err := ctl.service.GetPublicProfile(c.UserContext(), claims.UserID, userID)
 	if err != nil {
 		return err
 	}
 	return concurrency.WriteVersionedJSON(c, "user_profile", userID, response, nil)
+}
+
+func (ctl *Controller) search(c *fiber.Ctx) error {
+	query, err := httpx.BindQuery[SearchUsersQuery](c, ctl.validate)
+	if err != nil {
+		return err
+	}
+	if query.Limit == 0 {
+		query.Limit = 20
+	}
+	claims := middleware.ClaimsFromContext(c)
+	response, err := ctl.service.Search(c.UserContext(), claims.UserID, query.Query, query.Limit)
+	if err != nil {
+		return err
+	}
+	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
+}
+
+func (ctl *Controller) discover(c *fiber.Ctx) error {
+	query, err := httpx.BindQuery[DiscoverUsersQuery](c, ctl.validate)
+	if err != nil {
+		return err
+	}
+	if query.Sort == "" {
+		query.Sort = "top"
+	}
+	if query.Limit == 0 {
+		query.Limit = 20
+	}
+	claims := middleware.ClaimsFromContext(c)
+	response, err := ctl.service.Discover(c.UserContext(), claims.UserID, query.Sort, query.Limit)
+	if err != nil {
+		return err
+	}
+	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
 func (ctl *Controller) getMe(c *fiber.Ctx) error {

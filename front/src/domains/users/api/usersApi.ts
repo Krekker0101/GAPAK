@@ -2,7 +2,9 @@ import { httpClient } from '../../../shared/api/httpClient';
 import type { BackendPrivacy, BackendProfile, BackendPublicProfile } from '../../../shared/api/backendContracts';
 
 export type UpdateProfileRequest = Partial<Pick<BackendProfile, 'displayName' | 'bio' | 'avatarFileId' | 'statusMessage'>>;
-export type UpdatePrivacyRequest = Partial<BackendPrivacy>;
+// The backend validates privacy as one atomic settings document. Sending the
+// full object prevents an omitted boolean from being mistaken for `false`.
+export type UpdatePrivacyRequest = BackendPrivacy;
 
 export interface UserDiscoveryParams {
   /** 'new' surfaces recently-joined public accounts, 'top' surfaces the most-followed/most-active public accounts. */

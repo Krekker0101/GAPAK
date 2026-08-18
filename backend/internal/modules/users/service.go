@@ -6,6 +6,7 @@ import (
 
 	"github.com/gapak/backend/internal/domain/model"
 	"github.com/gapak/backend/internal/modules/media"
+	apperrors "github.com/gapak/backend/internal/platform/errors"
 	"github.com/gapak/backend/internal/platform/privacy"
 )
 
@@ -35,7 +36,14 @@ func (s *Service) GetMe(ctx context.Context, userID string) (ProfileResponse, er
 	return s.toProfileResponse(user, privacy, theme), nil
 }
 
-func (s *Service) GetPublicProfile(ctx context.Context, userID string) (PublicProfileResponse, error) {
+func (s *Service) GetPublicProfile(ctx context.Context, viewerID, userID string) (PublicProfileResponse, error) {
+	allowed, err := s.repo.CanViewProfile(ctx, viewerID, userID)
+	if err != nil {
+		return PublicProfileResponse{}, err
+	}
+	if !allowed {
+		return PublicProfileResponse{}, apperrors.ErrForbidden
+	}
 	user, err := s.repo.FindProfile(ctx, userID)
 	if err != nil {
 		return PublicProfileResponse{}, err
@@ -44,7 +52,23 @@ func (s *Service) GetPublicProfile(ctx context.Context, userID string) (PublicPr
 	if err != nil {
 		return PublicProfileResponse{}, err
 	}
-	return PublicProfileResponse{ID: user.ID, Username: user.Username, DisplayName: user.DisplayName, Bio: deref(user.Bio), AvatarFileID: deref(user.AvatarFileID), Role: string(user.Role), IsAnonymous: user.IsAnonymous, Privacy: PrivacyResponse{ProfileVisibility: string(privacy.ProfileVisibility), SearchableByUsername: privacy.SearchableByUsername}}, nil
+	return toPublicProfileResponse(user, privacy), nil
+}
+
+func (s *Service) Search(ctx context.Context, viewerID, query string, limit int) ([]PublicProfileResponse, error) {
+	items, err := s.repo.SearchPublicProfiles(ctx, viewerID, strings.TrimSpace(query), limit)
+	if err != nil {
+		return nil, err
+	}
+	return publicProfileResponses(items), nil
+}
+
+func (s *Service) Discover(ctx context.Context, viewerID, sort string, limit int) ([]PublicProfileResponse, error) {
+	items, err := s.repo.DiscoverPublicProfiles(ctx, viewerID, sort, limit)
+	if err != nil {
+		return nil, err
+	}
+	return publicProfileResponses(items), nil
 }
 
 func (s *Service) UpdateMe(ctx context.Context, userID string, req UpdateProfileRequest) (ProfileResponse, error) {
@@ -67,6 +91,13 @@ func (s *Service) UpdateTheme(ctx context.Context, userID string, req UpdateThem
 }
 
 func (s *Service) UpdatePrivacy(ctx context.Context, userID string, req UpdatePrivacyRequest) (ProfileResponse, error) {
+	user, err := s.repo.FindProfile(ctx, userID)
+	if err != nil {
+		return ProfileResponse{}, err
+	}
+	if user.IsAnonymous && req.ProfileVisibility != "PRIVATE" {
+		return ProfileResponse{}, apperrors.New(400, "users.anonymous_visibility_invalid", "Anonymous accounts must remain private")
+	}
 	if err := s.repo.UpdatePrivacy(ctx, userID, req); err != nil {
 		return ProfileResponse{}, err
 	}
@@ -109,4 +140,28 @@ func deref(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func toPublicProfileResponse(user *model.User, settings *model.UserPrivacySettings) PublicProfileResponse {
+	return PublicProfileResponse{
+		ID:           user.ID,
+		Username:     user.Username,
+		DisplayName:  user.DisplayName,
+		Bio:          deref(user.Bio),
+		AvatarFileID: deref(user.AvatarFileID),
+		Role:         strings.ToLower(string(user.Role)),
+		IsAnonymous:  user.IsAnonymous,
+		Privacy: PrivacyResponse{
+			ProfileVisibility:    string(settings.ProfileVisibility),
+			SearchableByUsername: settings.SearchableByUsername,
+		},
+	}
+}
+
+func publicProfileResponses(items []PublicProfileRecord) []PublicProfileResponse {
+	response := make([]PublicProfileResponse, 0, len(items))
+	for i := range items {
+		response = append(response, toPublicProfileResponse(&items[i].User, &items[i].Privacy))
+	}
+	return response
 }

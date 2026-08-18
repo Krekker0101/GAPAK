@@ -5,6 +5,7 @@ import { AppShell } from '../shell/AppShell';
 import { LoginPage, RegisterPage } from '../../pages/AuthPage';
 const FeedPage = lazy(() => import('../../pages/FeedPage').then(m => ({ default: m.FeedPage })));
 const ProfilePage = lazy(() => import('../../pages/ProfilePage').then(m => ({ default: m.ProfilePage })));
+const AccountSettingsPage = lazy(() => import('../../pages/AccountSettingsPage').then(m => ({ default: m.AccountSettingsPage })));
 const ConnectionsPage = lazy(() => import('../../pages/ConnectionsPage').then(m => ({ default: m.ConnectionsPage })));
 import { PageLoading, PageError, NotFoundPage } from '../../pages/common';
 const AdminPage = lazy(() => import('../../pages/DomainPages').then(m => ({ default: m.AdminPage })));
@@ -69,6 +70,7 @@ export const AppRouter: React.FC = () => <Suspense fallback={<PageLoading label=
     <Route path="/@:username" element={<ProfilePage />} />
     <Route path="/users/me" element={<ProfilePage />} />
     <Route path="/users/:userId" element={<ProfilePage />} />
+    <Route path="/settings" element={<AccountSettingsPage />} />
     <Route path="/chats" element={<ChatsPage />} />
     <Route path="/chats/:conversationId" element={<ChatsPage />} />
     <Route path="/stories" element={<StoriesPage />} />

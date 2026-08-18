@@ -2,6 +2,7 @@ package friends
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -32,6 +33,18 @@ type ConnectionRecord struct {
 	UpdatedAt        time.Time
 }
 
+type SuggestionRecord struct {
+	ID                     string
+	Username               string
+	DisplayName            string
+	Bio                    string
+	AvatarFileID           string
+	Role                   string
+	IsAnonymous            bool
+	ProfileVisibility      string
+	MutualConnectionsCount int
+}
+
 func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
@@ -42,6 +55,21 @@ func (r *Repository) CreateRequest(ctx context.Context, requesterID, addresseeID
 		return err
 	}
 	defer tx.Rollback(ctx)
+	var allowFriendRequests bool
+	if err := tx.QueryRow(ctx, `
+		SELECT ups.allow_friend_requests
+		FROM users u
+		JOIN user_privacy_settings ups ON ups.user_id = u.id
+		WHERE u.id = $1 AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL
+	`, addresseeID).Scan(&allowFriendRequests); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return apperrors.ErrNotFound
+		}
+		return err
+	}
+	if !allowFriendRequests {
+		return apperrors.New(403, "connections.requests_disabled", "This account does not accept connection requests")
+	}
 	const existingQuery = `
 		SELECT 1 FROM friend_connections
 		WHERE deleted_at IS NULL AND ((requester_id = $1 AND addressee_id = $2) OR (requester_id = $2 AND addressee_id = $1)) LIMIT 1`
@@ -225,6 +253,63 @@ func (r *Repository) List(ctx context.Context, currentUserID string) ([]Connecti
 			&item.UpdatedAt,
 		); err != nil {
 			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *Repository) Suggestions(ctx context.Context, currentUserID string, limit int) ([]SuggestionRecord, error) {
+	const query = `
+		WITH my_connections AS (
+			SELECT CASE WHEN fc.requester_id = $1 THEN fc.addressee_id ELSE fc.requester_id END AS user_id
+			FROM friend_connections fc
+			WHERE fc.status = 'ACCEPTED' AND fc.deleted_at IS NULL
+			  AND (fc.requester_id = $1 OR fc.addressee_id = $1)
+		), candidate_scores AS (
+			SELECT CASE WHEN fc.requester_id = mc.user_id THEN fc.addressee_id ELSE fc.requester_id END AS candidate_id,
+			       COUNT(DISTINCT mc.user_id)::int AS mutual_count
+			FROM my_connections mc
+			JOIN friend_connections fc
+			  ON fc.status = 'ACCEPTED' AND fc.deleted_at IS NULL
+			 AND (fc.requester_id = mc.user_id OR fc.addressee_id = mc.user_id)
+			WHERE CASE WHEN fc.requester_id = mc.user_id THEN fc.addressee_id ELSE fc.requester_id END <> $1
+			GROUP BY candidate_id
+		)
+		SELECT u.id, u.username, u.display_name, u.bio, u.avatar_file_id, u.role,
+		       u.is_anonymous, ups.profile_visibility, cs.mutual_count
+		FROM candidate_scores cs
+		JOIN users u ON u.id = cs.candidate_id
+		JOIN user_privacy_settings ups ON ups.user_id = u.id
+		WHERE u.account_status = 'ACTIVE' AND u.deleted_at IS NULL
+		  AND u.is_anonymous = false
+		  AND ups.profile_visibility = 'PUBLIC'
+		  AND ups.allow_friend_requests = true
+		  AND NOT EXISTS (
+			SELECT 1 FROM friend_connections existing
+			WHERE existing.deleted_at IS NULL
+			  AND ((existing.requester_id = $1 AND existing.addressee_id = u.id)
+			    OR (existing.requester_id = u.id AND existing.addressee_id = $1))
+		  )
+		ORDER BY cs.mutual_count DESC, u.created_at DESC, u.id DESC
+		LIMIT $2`
+	rows, err := r.db.Query(ctx, query, currentUserID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]SuggestionRecord, 0)
+	for rows.Next() {
+		var item SuggestionRecord
+		var bio, avatarFileID sql.NullString
+		if err := rows.Scan(&item.ID, &item.Username, &item.DisplayName, &bio, &avatarFileID, &item.Role, &item.IsAnonymous, &item.ProfileVisibility, &item.MutualConnectionsCount); err != nil {
+			return nil, err
+		}
+		if bio.Valid {
+			item.Bio = bio.String
+		}
+		if avatarFileID.Valid {
+			item.AvatarFileID = avatarFileID.String
 		}
 		items = append(items, item)
 	}

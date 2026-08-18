@@ -32,6 +32,16 @@ type PublicProfileResponse struct {
 	Privacy      PrivacyResponse `json:"privacySettings"`
 }
 
+type SearchUsersQuery struct {
+	Query string `query:"q" validate:"required,min=2,max=80"`
+	Limit int    `query:"limit" validate:"omitempty,min=1,max=50"`
+}
+
+type DiscoverUsersQuery struct {
+	Sort  string `query:"sort" validate:"omitempty,oneof=new top"`
+	Limit int    `query:"limit" validate:"omitempty,min=1,max=50"`
+}
+
 type UpdateProfileRequest struct {
 	DisplayName   *string `json:"displayName" validate:"omitempty,min=2,max=80"`
 	Bio           *string `json:"bio" validate:"omitempty,max=600"`

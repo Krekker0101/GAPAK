@@ -4,11 +4,9 @@
  *
  * Two sections:
  *  1. Discover — public accounts only, sorted "New" or "Top" (usersApi.discover).
- *  2. People you may know — private-account-friendly suggestions sourced from
- *     the backend's mutual-connections graph (connectionsApi.suggestions),
- *     i.e. followers of your followers / accounts your follows or followers
- *     also follow. The backend is responsible for the graph traversal and for
- *     only surfacing private profiles the current user is privacy-eligible to see.
+ *  2. People you may know — public profiles sourced from the backend's
+ *     mutual-connections graph (connectionsApi.suggestions). Private accounts
+ *     are deliberately excluded by the server.
  */
 
 import React, { useState } from 'react';
@@ -134,7 +132,7 @@ export const RecommendationsPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* People you may know (mutual connections, incl. eligible private accounts) */}
+      {/* People you may know — server-ranked mutual public connections. */}
       <div className="rounded-[var(--radius-3xl)] border border-subtle bg-surface p-4 shadow-token-sm">
         <h3 className="text-xs font-bold text-primary flex items-center gap-1.5 mb-2">
           <Users className="w-3.5 h-3.5 text-emerald-400" /> People you may know

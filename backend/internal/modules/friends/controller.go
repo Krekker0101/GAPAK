@@ -21,10 +21,27 @@ func NewController(service *Service, validate *validator.Validate) *Controller {
 func (ctl *Controller) RegisterRoutes(router fiber.Router, requireAuth fiber.Handler) {
 	group := router.Group("/connections", requireAuth)
 	group.Get("/", ctl.list)
+	group.Get("/suggestions", ctl.suggestions)
 	group.Post("/requests", ctl.create)
 	group.Post("/:connectionId/accept", ctl.accept)
 	group.Put("/:connectionId/trusted-circle", ctl.setTrusted)
 	group.Delete("/:connectionId", ctl.remove)
+}
+
+func (ctl *Controller) suggestions(c *fiber.Ctx) error {
+	query, err := httpx.BindQuery[SuggestionsQuery](c, ctl.validate)
+	if err != nil {
+		return err
+	}
+	if query.Limit == 0 {
+		query.Limit = 10
+	}
+	claims := middleware.ClaimsFromContext(c)
+	response, err := ctl.service.Suggestions(c.UserContext(), claims.UserID, query.Limit)
+	if err != nil {
+		return err
+	}
+	return c.JSON(httpx.OK(response, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 }
 
 func (ctl *Controller) list(c *fiber.Ctx) error {

@@ -14,6 +14,7 @@ func TestHTTPContractRoutes(t *testing.T) {
 	NewController(nil, validator.New()).RegisterRoutes(api, func(c *fiber.Ctx) error { return c.Next() })
 	want := map[string]struct{}{
 		"GET /api/v1/connections":                              {},
+		"GET /api/v1/connections/suggestions":                  {},
 		"POST /api/v1/connections/requests":                    {},
 		"POST /api/v1/connections/:connectionId/accept":        {},
 		"PUT /api/v1/connections/:connectionId/trusted-circle": {},

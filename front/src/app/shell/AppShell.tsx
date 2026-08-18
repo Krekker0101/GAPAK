@@ -78,7 +78,7 @@ const DOMAIN_PATHS: Record<DomainKey, string> = {
 
 const domainFromPath = (pathname: string): DomainKey => {
   if (pathname === '/' || pathname === '/posts' || pathname.startsWith('/posts/')) return 'posts';
-  if (pathname.startsWith('/@') || pathname.startsWith('/users')) return 'users';
+  if (pathname.startsWith('/@') || pathname.startsWith('/users') || pathname.startsWith('/settings')) return 'users';
   if (pathname.startsWith('/chats')) return 'chats';
   if (pathname.startsWith('/stories')) return 'stories';
   if (pathname.startsWith('/live')) return 'live';

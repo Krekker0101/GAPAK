@@ -24,6 +24,11 @@ type Repository struct {
 	db *pgxpool.Pool
 }
 
+type PublicProfileRecord struct {
+	User    model.User
+	Privacy model.UserPrivacySettings
+}
+
 func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
@@ -77,6 +82,143 @@ func (r *Repository) FindProfile(ctx context.Context, userID string) (*model.Use
 		user.StatusMessage = &statusMessage.String
 	}
 	return &user, nil
+}
+
+func (r *Repository) CanViewProfile(ctx context.Context, viewerID, targetUserID string) (bool, error) {
+	if viewerID == targetUserID {
+		return true, nil
+	}
+	const query = `
+		SELECT ups.profile_visibility,
+		       EXISTS (
+		         SELECT 1 FROM friend_connections fc
+		         WHERE fc.status = 'ACCEPTED' AND fc.deleted_at IS NULL
+		           AND ((fc.requester_id = $1 AND fc.addressee_id = $2)
+		             OR (fc.requester_id = $2 AND fc.addressee_id = $1))
+		       ),
+		       EXISTS (
+		         SELECT 1 FROM trusted_circle_memberships tcm
+		         WHERE tcm.owner_id = $2 AND tcm.member_id = $1
+		       )
+		FROM users u
+		JOIN user_privacy_settings ups ON ups.user_id = u.id
+		WHERE u.id = $2 AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL`
+	var visibility string
+	var connected, trusted bool
+	if err := r.db.QueryRow(ctx, query, viewerID, targetUserID).Scan(&visibility, &connected, &trusted); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, apperrors.ErrNotFound
+		}
+		return false, err
+	}
+	switch enums.ProfileVisibility(visibility) {
+	case enums.ProfileVisibilityPublic:
+		return true, nil
+	case enums.ProfileVisibilityConnections:
+		return connected, nil
+	case enums.ProfileVisibilityTrustedOnly:
+		return trusted, nil
+	default:
+		return false, nil
+	}
+}
+
+func (r *Repository) SearchPublicProfiles(ctx context.Context, viewerID, queryText string, limit int) ([]PublicProfileRecord, error) {
+	const query = `
+		SELECT u.id, u.username, u.display_name, u.bio, u.avatar_file_id, u.role, u.is_anonymous,
+		       ups.profile_visibility, ups.searchable_by_username
+		FROM users u
+		JOIN user_privacy_settings ups ON ups.user_id = u.id
+		WHERE u.id <> $1 AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL
+		  AND u.is_anonymous = false
+		  AND ups.profile_visibility = 'PUBLIC'
+		  AND ups.searchable_by_username = true
+		  AND (u.username ILIKE '%' || $2 || '%' OR u.display_name ILIKE '%' || $2 || '%')
+		ORDER BY CASE WHEN LOWER(u.username) = LOWER($2) THEN 0 ELSE 1 END,
+		         u.display_name ASC, u.id ASC
+		LIMIT $3`
+	return scanPublicProfiles(r.db.Query(ctx, query, viewerID, queryText, limit))
+}
+
+func (r *Repository) DiscoverPublicProfiles(ctx context.Context, viewerID, sort string, limit int) ([]PublicProfileRecord, error) {
+	orderBy := "u.created_at DESC, u.id DESC"
+	if sort == "top" {
+		orderBy = "connection_count DESC, u.created_at DESC, u.id DESC"
+	}
+	query := `
+		SELECT u.id, u.username, u.display_name, u.bio, u.avatar_file_id, u.role, u.is_anonymous,
+		       ups.profile_visibility, ups.searchable_by_username,
+		       (SELECT COUNT(*) FROM friend_connections fc
+		        WHERE fc.status = 'ACCEPTED' AND fc.deleted_at IS NULL
+		          AND (fc.requester_id = u.id OR fc.addressee_id = u.id)) AS connection_count
+		FROM users u
+		JOIN user_privacy_settings ups ON ups.user_id = u.id
+		WHERE u.id <> $1 AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL
+		  AND u.is_anonymous = false
+		  AND ups.profile_visibility = 'PUBLIC'
+		  AND ups.allow_friend_requests = true
+		  AND NOT EXISTS (
+		    SELECT 1 FROM friend_connections existing
+		    WHERE existing.deleted_at IS NULL
+		      AND ((existing.requester_id = $1 AND existing.addressee_id = u.id)
+		        OR (existing.requester_id = u.id AND existing.addressee_id = $1))
+		  )
+		ORDER BY ` + orderBy + `
+		LIMIT $2`
+	rows, err := r.db.Query(ctx, query, viewerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]PublicProfileRecord, 0)
+	for rows.Next() {
+		item, err := scanPublicProfile(rows, true)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func scanPublicProfiles(rows pgx.Rows, err error) ([]PublicProfileRecord, error) {
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]PublicProfileRecord, 0)
+	for rows.Next() {
+		item, err := scanPublicProfile(rows, false)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func scanPublicProfile(row pgx.Row, withScore bool) (PublicProfileRecord, error) {
+	var item PublicProfileRecord
+	var bio, avatarFileID sql.NullString
+	var role, visibility string
+	values := []any{&item.User.ID, &item.User.Username, &item.User.DisplayName, &bio, &avatarFileID, &role, &item.User.IsAnonymous, &visibility, &item.Privacy.SearchableByUsername}
+	var score int
+	if withScore {
+		values = append(values, &score)
+	}
+	if err := row.Scan(values...); err != nil {
+		return PublicProfileRecord{}, err
+	}
+	item.User.Role = enums.UserRole(role)
+	item.Privacy.UserID = item.User.ID
+	item.Privacy.ProfileVisibility = enums.ProfileVisibility(visibility)
+	if bio.Valid {
+		item.User.Bio = &bio.String
+	}
+	if avatarFileID.Valid {
+		item.User.AvatarFileID = &avatarFileID.String
+	}
+	return item, nil
 }
 
 func (r *Repository) FindPrivacy(ctx context.Context, userID string) (*model.UserPrivacySettings, error) {
@@ -210,18 +352,30 @@ func (r *Repository) UpdatePrivacy(ctx context.Context, userID string, req Updat
 		return err
 	}
 	const query = `
-		UPDATE user_privacy_settings
-		SET profile_visibility = $2,
-		    last_seen_visibility = $3,
-		    allow_friend_requests = $4,
-		    allow_trusted_invites = $5,
-		    searchable_by_email = $6,
-		    searchable_by_username = $7,
-		    post_default_privacy = $8,
-		    show_online_status = $9,
-		    updated_at = NOW()
-		WHERE user_id = $1`
+		INSERT INTO user_privacy_settings (
+			user_id, profile_visibility, last_seen_visibility, allow_friend_requests,
+			allow_trusted_invites, searchable_by_email, searchable_by_username,
+			post_default_privacy, show_online_status, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+		ON CONFLICT (user_id) DO UPDATE SET
+			profile_visibility = EXCLUDED.profile_visibility,
+			last_seen_visibility = EXCLUDED.last_seen_visibility,
+			allow_friend_requests = EXCLUDED.allow_friend_requests,
+			allow_trusted_invites = EXCLUDED.allow_trusted_invites,
+			searchable_by_email = EXCLUDED.searchable_by_email,
+			searchable_by_username = EXCLUDED.searchable_by_username,
+			post_default_privacy = EXCLUDED.post_default_privacy,
+			show_online_status = EXCLUDED.show_online_status,
+			updated_at = NOW()`
 	if _, err := tx.Exec(ctx, query, userID, req.ProfileVisibility, req.LastSeenVisibility, req.AllowFriendRequests, req.AllowTrustedInvites, req.SearchableByEmail, req.SearchableByUsername, req.PostDefaultPrivacy, req.ShowOnlineStatus); err != nil {
+		return err
+	}
+	if err := events.NewNotifier().EmitTx(ctx, tx, events.DomainEvent{
+		Type: events.UserUpdated, AggregateType: "user", AggregateID: userID,
+		ActorID: strPtrUser(userID), RecipientUserIDs: []string{userID},
+		Payload:        map[string]any{"userId": userID, "profileVisibility": req.ProfileVisibility},
+		IdempotencyKey: "user-privacy-updated:" + userID + ":" + uuid.NewString(), CorrelationID: observability.CorrelationID(ctx),
+	}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

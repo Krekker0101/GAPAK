@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { usersApi } from '../domains/users/api/usersApi';
 import { useAuth } from '../domains/auth/AuthContext';
 import { PageError, PageLoading } from './common';
-import { Avatar, Badge, Button, Dialog, Input, Textarea } from '../shared/design-system/primitives';
+import { Settings, UserRoundPen } from 'lucide-react';
+import { Avatar, Badge, Button, Dialog, IconButton, Input, Textarea } from '../shared/design-system/primitives';
 import type { BackendProfile, BackendPublicProfile } from '../shared/api/backendContracts';
 import type { UpdateProfileRequest } from '../domains/users/api/usersApi';
 
@@ -13,6 +14,7 @@ export const ProfilePage: React.FC = () => {
   const { userId } = useParams<{ userId?: string }>();
   const isMe = userId === 'me' || !userId || userId === currentUser?.id;
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
 
   const profile = useQuery<BackendProfile | BackendPublicProfile>({
@@ -25,10 +27,10 @@ export const ProfilePage: React.FC = () => {
   if (profile.isError) return <PageError error={profile.error} onRetry={() => void profile.refetch()} />;
   if (!profile.data) return <PageError error={new Error('Profile not found')} />;
 
-  return <ProfileContent profile={profile.data} isOwner={isMe} editing={editing} onEdit={() => setEditing(true)} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); void queryClient.invalidateQueries({ queryKey: ['users'] }); }} />;
+  return <ProfileContent profile={profile.data} isOwner={isMe} editing={editing} onEdit={() => setEditing(true)} onSettings={() => navigate('/settings')} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); void queryClient.invalidateQueries({ queryKey: ['users'] }); }} />;
 };
 
-const ProfileContent: React.FC<{ profile: BackendProfile | BackendPublicProfile; isOwner: boolean; editing: boolean; onEdit: () => void; onClose: () => void; onSaved: () => void }> = ({ profile, isOwner, editing, onEdit, onClose, onSaved }) => {
+const ProfileContent: React.FC<{ profile: BackendProfile | BackendPublicProfile; isOwner: boolean; editing: boolean; onEdit: () => void; onSettings: () => void; onClose: () => void; onSaved: () => void }> = ({ profile, isOwner, editing, onEdit, onSettings, onClose, onSaved }) => {
   const backendProfile = profile as BackendProfile;
   const update = useMutation({
     mutationFn: async (input: UpdateProfileRequest) => usersApi.updateProfile(input, crypto.randomUUID()),
@@ -37,7 +39,7 @@ const ProfileContent: React.FC<{ profile: BackendProfile | BackendPublicProfile;
   const privacy = 'privacy' in profile ? profile.privacy : profile.privacySettings;
 
   return <div className="mx-auto max-w-3xl space-y-5">
-    <section className="rounded-3xl border border-subtle bg-surface p-6"><div className="flex flex-wrap items-start justify-between gap-5"><div className="flex items-center gap-4"><Avatar name={profile.displayName} size="lg" /><div><h1 className="text-2xl font-extrabold text-primary">{profile.displayName}</h1><p className="text-sm text-muted">@{profile.username}</p><div className="flex gap-2 mt-2"><Badge variant="neutral">{profile.role}</Badge>{profile.isAnonymous && <Badge variant="warning">ANONYMOUS</Badge>}</div></div></div>{isOwner && <Button onClick={onEdit} variant="outline">Edit profile</Button>}</div><div className="mt-6 space-y-3"><p className="text-sm text-secondary">{profile.bio || 'No biography provided.'}</p>{'statusMessage' in profile && profile.statusMessage && <p className="text-xs text-tertiary">{profile.statusMessage}</p>}{'email' in profile && profile.email && <p className="text-xs text-tertiary">Email: {profile.email}</p>}</div></section>
+    <section className="rounded-3xl border border-subtle bg-surface p-6"><div className="flex flex-wrap items-start justify-between gap-5"><div className="flex items-center gap-4"><Avatar name={profile.displayName} size="lg" /><div><h1 className="text-2xl font-extrabold text-primary">{profile.displayName}</h1><p className="text-sm text-muted">@{profile.username}</p><div className="flex gap-2 mt-2"><Badge variant="neutral">{profile.role}</Badge>{profile.isAnonymous && <Badge variant="warning">ANONYMOUS</Badge>}<Badge variant={privacy.profileVisibility === 'PUBLIC' ? 'success' : 'neutral'}>{privacy.profileVisibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE'}</Badge></div></div></div>{isOwner && <div className="flex items-center gap-2"><Button onClick={onEdit} variant="outline" leftIcon={<UserRoundPen className="h-4 w-4" />}>Edit profile</Button><IconButton icon={<Settings className="h-4.5 w-4.5" />} ariaLabel="Account settings" title="Account settings" variant="outline" onClick={onSettings} /></div>}</div><div className="mt-6 space-y-3"><p className="text-sm text-secondary">{profile.bio || 'No biography provided.'}</p>{'statusMessage' in profile && profile.statusMessage && <p className="text-xs text-tertiary">{profile.statusMessage}</p>}{'email' in profile && profile.email && <p className="text-xs text-tertiary">Email: {profile.email}</p>}</div></section>
     <section className="rounded-2xl border border-subtle bg-surface p-5"><h2 className="text-sm font-bold text-primary">Privacy</h2><div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3 text-xs text-secondary"><p>Profile visibility: {privacy.profileVisibility}</p><p>Last seen: {privacy.lastSeenVisibility}</p><p>Friend requests: {privacy.allowFriendRequests ? 'Allowed' : 'Restricted'}</p><p>Trusted invites: {privacy.allowTrustedInvites ? 'Allowed' : 'Restricted'}</p><p>Search by email: {privacy.searchableByEmail ? 'Enabled' : 'Disabled'}</p><p>Search by username: {privacy.searchableByUsername ? 'Enabled' : 'Disabled'}</p></div></section>
     {isOwner && <EditProfileDialog profile={backendProfile} open={editing} onClose={onClose} mutation={update} />}
   </div>;
