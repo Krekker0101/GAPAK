@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestValidateRejectsWildcardCORS(t *testing.T) {
 	cfg := validConfig()
@@ -45,6 +49,9 @@ func validConfig() Config {
 		Redis: RedisConfig{
 			URL: "redis://127.0.0.1:6379/0",
 		},
+		OAuth: OAuthConfig{
+			FrontendRedirectURL: "http://localhost:3000",
+		},
 		Security: SecurityConfig{
 			JWTIssuer:         "gapak.api",
 			JWTAudience:       "gapak.clients",
@@ -72,12 +79,19 @@ func validConfig() Config {
 			UploadIntentTTL:        1,
 			PlaybackGrantTTL:       1,
 		},
+		Push: PushConfig{
+			BatchSize:   20,
+			MaxAttempts: 8,
+			BaseRetry:   5 * time.Second,
+			MaxRetry:    30 * time.Minute,
+		},
 	}
 }
 
 func TestValidateRejectsProductionFallbackSecrets(t *testing.T) {
 	cfg := validConfig()
 	cfg.App.Environment = "production"
+	cfg.App.BaseURL = "https://api.gapak.example"
 	cfg.Security.JWTAccessSecret = "default-jwt-access-secret-change-in-production-min-32-chars"
 	if err := validate(cfg); err == nil {
 		t.Fatal("expected production fallback secret to be rejected")
@@ -90,6 +104,7 @@ func TestValidateAcceptsSecureProductionConfig(t *testing.T) {
 	cfg.App.Environment = "production"
 	cfg.App.BaseURL = "https://api.gapak.example"
 	cfg.App.CORSOrigins = []string{"https://app.gapak.example"}
+	cfg.OAuth.FrontendRedirectURL = "https://app.gapak.example"
 	cfg.Redis.Enabled = true
 	cfg.Redis.URL = "redis://127.0.0.1:6379/0"
 	cfg.Security.JWTAccessSecret = "production-access-secret-12345678901234567890"
@@ -100,6 +115,7 @@ func TestValidateAcceptsSecureProductionConfig(t *testing.T) {
 	cfg.Security.EncryptionKey = "cHJvZHVjdGlvbi1hZXMta2V5LTEyMzQ1Njc4OTAxMjM="
 	cfg.Security.CookieSecure = true
 	cfg.Security.CookieSameSite = "none"
+	cfg.Security.CookieDomain = ""
 	if err := validate(cfg); err != nil {
 		t.Fatalf("expected secure production config to validate: %v", err)
 	}
@@ -123,5 +139,42 @@ func TestValidateRejectsCrossSiteProductionCookiesWithoutSameSiteNone(t *testing
 	cfg.Security.CookieSameSite = "lax"
 	if err := validate(cfg); err == nil {
 		t.Fatal("expected cross-site production cookies without SameSite=None to be rejected")
+	}
+}
+
+func TestValidateRejectsIncompleteOAuthProvider(t *testing.T) {
+	cfg := validConfig()
+	cfg.OAuth.Google.ClientID = "client-id"
+	if err := validate(cfg); err == nil {
+		t.Fatal("expected OAuth provider without client secret to be rejected")
+	}
+}
+
+func TestValidateRejectsInsecureProductionOAuthEndpoint(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.gapak.example")
+	cfg := validConfig()
+	cfg.App.Environment = "production"
+	cfg.App.BaseURL = "https://api.gapak.example"
+	cfg.App.CORSOrigins = []string{"https://app.gapak.example"}
+	cfg.OAuth.FrontendRedirectURL = "https://app.gapak.example"
+	cfg.Redis.Enabled = true
+	cfg.Security.CookieDomain = ""
+	cfg.Security.CookieSecure = true
+	cfg.Security.CookieSameSite = "none"
+	cfg.Security.JWTAccessSecret = "production-access-secret-12345678901234567890"
+	cfg.Security.JWTRefreshSecret = "production-refresh-secret-12345678901234567890"
+	cfg.Security.PasswordPepper = "production-password-pepper-1234567890"
+	cfg.Storage.SigningSecret = "production-storage-signing-secret-1234567890"
+	cfg.Anonymity.HashSecret = "production-anonymity-hash-secret-1234567890"
+	cfg.OAuth.Google = OAuthProviderConfig{
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		AuthURL:      "https://accounts.example/authorize",
+		TokenURL:     "http://accounts.example/token",
+		UserInfoURL:  "https://accounts.example/userinfo",
+		RedirectURI:  "https://api.gapak.example/api/v1/auth/callback/google",
+	}
+	if err := validate(cfg); err == nil || !strings.Contains(err.Error(), "TOKEN_URL") {
+		t.Fatalf("expected insecure OAuth token endpoint to be rejected, got %v", err)
 	}
 }

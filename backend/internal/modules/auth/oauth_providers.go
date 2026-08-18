@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +13,10 @@ import (
 	"github.com/gapak/backend/internal/config"
 )
 
-const oauthHTTPTimeout = 10 * time.Second
+const (
+	oauthHTTPTimeout       = 10 * time.Second
+	oauthResponseBodyLimit = 1 << 20
+)
 
 type oauthUserInfo struct {
 	ProviderUserID string
@@ -54,7 +58,7 @@ func getOAuthHTTPClient() *http.Client {
 	return &http.Client{Timeout: oauthHTTPTimeout}
 }
 
-func exchangeCodeForToken(providerCfg config.OAuthProviderConfig, code, codeVerifier string) (string, error) {
+func exchangeCodeForToken(ctx context.Context, providerCfg config.OAuthProviderConfig, code, codeVerifier string) (string, error) {
 	data := url.Values{
 		"grant_type":    {"authorization_code"},
 		"client_id":     {providerCfg.ClientID},
@@ -66,7 +70,7 @@ func exchangeCodeForToken(providerCfg config.OAuthProviderConfig, code, codeVeri
 		data.Set("code_verifier", codeVerifier)
 	}
 
-	req, err := http.NewRequest("POST", providerCfg.TokenURL, strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, providerCfg.TokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("create token request: %w", err)
 	}
@@ -79,7 +83,7 @@ func exchangeCodeForToken(providerCfg config.OAuthProviderConfig, code, codeVeri
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readOAuthResponseBody(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read token response: %w", err)
 	}
@@ -100,12 +104,15 @@ func exchangeCodeForToken(providerCfg config.OAuthProviderConfig, code, codeVeri
 	if tokenResp.Error != "" {
 		return "", fmt.Errorf("token error: %s - %s", tokenResp.Error, tokenResp.ErrorDesc)
 	}
+	if strings.TrimSpace(tokenResp.AccessToken) == "" {
+		return "", fmt.Errorf("token response did not contain an access token")
+	}
 
 	return tokenResp.AccessToken, nil
 }
 
-func fetchGoogleUserInfo(accessToken string) (*oauthUserInfo, error) {
-	req, err := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
+func fetchGoogleUserInfo(ctx context.Context, accessToken string) (*oauthUserInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/oauth2/v2/userinfo", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +124,7 @@ func fetchGoogleUserInfo(accessToken string) (*oauthUserInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readOAuthResponseBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -139,8 +146,8 @@ func fetchGoogleUserInfo(accessToken string) (*oauthUserInfo, error) {
 	}, nil
 }
 
-func fetchGitHubUserInfo(accessToken string) (*oauthUserInfo, error) {
-	req, err := http.NewRequest("GET", "https://api.github.com/user", nil)
+func fetchGitHubUserInfo(ctx context.Context, accessToken string) (*oauthUserInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +160,7 @@ func fetchGitHubUserInfo(accessToken string) (*oauthUserInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readOAuthResponseBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -169,11 +176,11 @@ func fetchGitHubUserInfo(accessToken string) (*oauthUserInfo, error) {
 	email := ""
 	verifiedEmail := false
 	if info.Email != "" {
-		if verified, ok := fetchGitHubVerifiedEmail(accessToken, info.Email); ok {
+		if verified, ok := fetchGitHubVerifiedEmail(ctx, accessToken, info.Email); ok {
 			email = verified
 			verifiedEmail = true
 		}
-	} else if verified, ok := fetchGitHubPrimaryEmail(accessToken); ok {
+	} else if verified, ok := fetchGitHubPrimaryEmail(ctx, accessToken); ok {
 		email = verified
 		verifiedEmail = true
 	}
@@ -192,8 +199,8 @@ func fetchGitHubUserInfo(accessToken string) (*oauthUserInfo, error) {
 	}, nil
 }
 
-func fetchGitHubPrimaryEmail(accessToken string) (string, bool) {
-	emails, err := fetchGitHubEmails(accessToken)
+func fetchGitHubPrimaryEmail(ctx context.Context, accessToken string) (string, bool) {
+	emails, err := fetchGitHubEmails(ctx, accessToken)
 	if err != nil {
 		return "", false
 	}
@@ -210,8 +217,8 @@ func fetchGitHubPrimaryEmail(accessToken string) (string, bool) {
 	return "", false
 }
 
-func fetchGitHubVerifiedEmail(accessToken, candidate string) (string, bool) {
-	emails, err := fetchGitHubEmails(accessToken)
+func fetchGitHubVerifiedEmail(ctx context.Context, accessToken, candidate string) (string, bool) {
+	emails, err := fetchGitHubEmails(ctx, accessToken)
 	if err != nil {
 		return "", false
 	}
@@ -224,8 +231,8 @@ func fetchGitHubVerifiedEmail(accessToken, candidate string) (string, bool) {
 	return "", false
 }
 
-func fetchGitHubEmails(accessToken string) ([]githubEmail, error) {
-	req, err := http.NewRequest("GET", "https://api.github.com/user/emails", nil)
+func fetchGitHubEmails(ctx context.Context, accessToken string) ([]githubEmail, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user/emails", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +244,7 @@ func fetchGitHubEmails(accessToken string) ([]githubEmail, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readOAuthResponseBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -251,8 +258,8 @@ func fetchGitHubEmails(accessToken string) ([]githubEmail, error) {
 	return emails, nil
 }
 
-func fetchFacebookUserInfo(accessToken string) (*oauthUserInfo, error) {
-	req, err := http.NewRequest("GET", "https://graph.facebook.com/v19.0/me?fields=id,name,email", nil)
+func fetchFacebookUserInfo(ctx context.Context, accessToken string) (*oauthUserInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://graph.facebook.com/v19.0/me?fields=id,name,email", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +273,7 @@ func fetchFacebookUserInfo(accessToken string) (*oauthUserInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readOAuthResponseBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -284,6 +291,17 @@ func fetchFacebookUserInfo(accessToken string) (*oauthUserInfo, error) {
 		Email:          info.Email,
 		DisplayName:    info.Name,
 	}, nil
+}
+
+func readOAuthResponseBody(body io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, oauthResponseBodyLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > oauthResponseBodyLimit {
+		return nil, fmt.Errorf("OAuth provider response exceeds %d bytes", oauthResponseBodyLimit)
+	}
+	return raw, nil
 }
 
 func buildAuthorizeURL(providerCfg config.OAuthProviderConfig, state, codeChallenge string) string {

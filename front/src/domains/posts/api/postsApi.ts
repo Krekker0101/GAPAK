@@ -26,7 +26,7 @@ export type CreateCommentRequest = BackendCreateCommentRequest;
 export const postsApi = {
   feed: async (params: PostFeedParams = {}, signal?: AbortSignal): Promise<PostFeedPage> => {
     const result = await httpClient.get<Post[]>('/posts/feed', {
-      params,
+      params: { ...params },
       signal,
       includeResponseMeta: true,
     });
@@ -41,7 +41,7 @@ export const postsApi = {
 
   clips: async (params: PostFeedParams = {}, signal?: AbortSignal): Promise<PostFeedPage> => {
     const result = await httpClient.get<Post[]>('/posts/clips', {
-      params,
+      params: { ...params },
       signal,
       includeResponseMeta: true,
     });

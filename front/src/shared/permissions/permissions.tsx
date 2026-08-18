@@ -24,6 +24,7 @@ export class PermissionEvaluator {
     guest: 0,
     user: 10,
     creator: 20,
+    security_analyst: 40,
     moderator: 50,
     admin: 80,
     super_admin: 100,
@@ -39,7 +40,7 @@ export class PermissionEvaluator {
   public static hasPermission(user: UserProfile | null, permission: string): boolean {
     if (!user) return false;
     if (user.role === 'admin' || user.role === 'super_admin') return true;
-    return user.permissions?.includes(permission) || user.permissions?.includes('*');
+    return Boolean(user.permissions?.includes(permission) || user.permissions?.includes('*'));
   }
 
   public static hasAllPermissions(user: UserProfile | null, permissions: string[]): boolean {

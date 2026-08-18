@@ -7,7 +7,7 @@ import { MediaUploadSubsystem } from '../media/MediaUploadSubsystem';
 import { useToast } from '../../shared/ux/ToastContext';
 
 type StoryComposerModalProps = {
-  currentUser: BackendProfile;
+  currentUser: Pick<BackendProfile, 'id' | 'displayName'>;
   onClose: () => void;
   onStoryCreated: (story: CreateStoryRequest) => Promise<void>;
 };

@@ -10,13 +10,7 @@ import React from 'react';
 import {
   Shield,
   Lock,
-  Pin,
   Users,
-  Search,
-  FlaskConical,
-  Radio,
-  Megaphone,
-  MessageSquare,
 } from 'lucide-react';
 import { Chat, UserPresenceData } from '../../shared/types';
 import { Avatar, Badge, IconButton } from '../../shared/design-system/primitives';
@@ -26,8 +20,6 @@ interface ChatHeaderProps {
   presence?: UserPresenceData;
   typingText?: string;
   onOpenDevicesModal: () => void;
-  onOpenTestModal: () => void;
-  onTogglePinnedList: () => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -35,8 +27,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   presence,
   typingText,
   onOpenDevicesModal,
-  onOpenTestModal,
-  onTogglePinnedList,
 }) => {
   const getChatTypeBadge = () => {
     switch (chat.type) {
@@ -84,19 +74,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       {/* Action Buttons */}
       <div className="flex items-center gap-1 shrink-0">
         <IconButton
-          icon={<Pin className="w-4 h-4 text-amber-400" />}
-          ariaLabel="Pinned messages"
-          onClick={onTogglePinnedList}
-        />
-        <IconButton
           icon={<Shield className="w-4 h-4 text-indigo-400" />}
           ariaLabel="Trusted devices"
           onClick={onOpenDevicesModal}
-        />
-        <IconButton
-          icon={<FlaskConical className="w-4 h-4 text-purple-400" />}
-          ariaLabel="E2EE Test Suite"
-          onClick={onOpenTestModal}
         />
       </div>
     </div>

@@ -66,7 +66,7 @@ export const BackendPostCard: React.FC<Props> = ({ post, currentUserId, onLikeTo
         <button onClick={() => void openComments()} aria-label="Show comments">
           <MessageSquare className="w-5 h-5 inline mr-1" />{post.commentCount}
         </button>
-        <button onClick={() => { void navigator.clipboard?.writeText(`${window.location.origin}/post/${post.id}`); addToast('Post link copied', 'info'); }} aria-label="Share post">
+        <button onClick={() => { void navigator.clipboard?.writeText(`${window.location.origin}/posts/${post.id}`); addToast('Post link copied', 'info'); }} aria-label="Share post">
           <Share2 className="w-5 h-5 inline" />
         </button>
         {post.authorId === currentUserId && onDeletePost ? (

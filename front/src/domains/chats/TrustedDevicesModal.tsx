@@ -12,7 +12,6 @@ import {
   Smartphone,
   Laptop,
   Monitor,
-  CheckCircle2,
   AlertTriangle,
   Key,
   X,
@@ -40,7 +39,6 @@ interface TrustedDevicesModalProps {
   onRegisterDevice: () => void;
   isRegistering?: boolean;
   onRevokeDevice: (deviceId: string) => void;
-  onVerifyDevice: (deviceId: string) => void;
 }
 
 export const TrustedDevicesModal: React.FC<TrustedDevicesModalProps> = ({
@@ -50,7 +48,6 @@ export const TrustedDevicesModal: React.FC<TrustedDevicesModalProps> = ({
   onRegisterDevice,
   isRegistering = false,
   onRevokeDevice,
-  onVerifyDevice,
 }) => {
   const toast = useToast();
   const [selectedDevice, setSelectedDevice] = useState<TrustedDevice | null>(null);
@@ -178,7 +175,7 @@ export const TrustedDevicesModal: React.FC<TrustedDevicesModalProps> = ({
                             setShowVerifyModal(true);
                           }}
                         >
-                          Verify
+                          Compare fingerprint
                         </Button>
                       )}
                       <IconButton
@@ -224,18 +221,7 @@ export const TrustedDevicesModal: React.FC<TrustedDevicesModalProps> = ({
               {selectedDevice.identityKeyFingerprint}
             </div>
 
-            <Button
-              variant="primary"
-              fullWidth
-              leftIcon={<CheckCircle2 className="w-4 h-4" />}
-              onClick={() => {
-                onVerifyDevice(selectedDevice.id);
-                toast.success('Verification requested', 'The server will record the device verification state.');
-                setShowVerifyModal(false);
-              }}
-            >
-              Mark Safety Numbers as Verified
-            </Button>
+            <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-left text-xs text-amber-200">This screen only compares the server-issued fingerprint. Trust status can change only through an authenticated backend verification workflow.</p>
           </ModalBody>
         </Modal>
       )}

@@ -691,6 +691,15 @@ func validate(cfg Config) error {
 	if !containsOrigin(cfg.App.CORSOrigins, strings.TrimRight(cfg.OAuth.FrontendRedirectURL, "/")) {
 		return fmt.Errorf("OAUTH_FRONTEND_REDIRECT_URL must match an allowed CORS origin")
 	}
+	for name, provider := range map[string]OAuthProviderConfig{
+		"google":   cfg.OAuth.Google,
+		"github":   cfg.OAuth.GitHub,
+		"facebook": cfg.OAuth.Facebook,
+	} {
+		if err := validateOAuthProvider(name, provider, strings.EqualFold(cfg.App.Environment, "production")); err != nil {
+			return err
+		}
+	}
 	if strings.EqualFold(cfg.App.Environment, "production") && strings.TrimSpace(cfg.Security.CookieDomain) != "" {
 		return fmt.Errorf("COOKIE_DOMAIN must be empty in production for the Vercel-to-Railway cross-site deployment")
 	}
@@ -756,6 +765,35 @@ func validate(cfg Config) error {
 			default:
 				return fmt.Errorf("unsupported PUSH_PROVIDERS value: %s", provider)
 			}
+		}
+	}
+	return nil
+}
+
+func validateOAuthProvider(name string, provider OAuthProviderConfig, production bool) error {
+	clientID := strings.TrimSpace(provider.ClientID)
+	clientSecret := strings.TrimSpace(provider.ClientSecret)
+	if clientID == "" {
+		if clientSecret != "" {
+			return fmt.Errorf("OAUTH_%s_CLIENT_ID is required when its client secret is configured", strings.ToUpper(name))
+		}
+		return nil
+	}
+	if clientSecret == "" {
+		return fmt.Errorf("OAUTH_%s_CLIENT_SECRET is required when the provider is enabled", strings.ToUpper(name))
+	}
+	for field, raw := range map[string]string{
+		"AUTH_URL":      provider.AuthURL,
+		"TOKEN_URL":     provider.TokenURL,
+		"USER_INFO_URL": provider.UserInfoURL,
+		"REDIRECT_URI":  provider.RedirectURI,
+	} {
+		parsed, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+			return fmt.Errorf("OAUTH_%s_%s must be a valid absolute URL without credentials or fragments", strings.ToUpper(name), field)
+		}
+		if production && !strings.EqualFold(parsed.Scheme, "https") {
+			return fmt.Errorf("OAUTH_%s_%s must use HTTPS in production", strings.ToUpper(name), field)
 		}
 	}
 	return nil

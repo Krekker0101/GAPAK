@@ -15,13 +15,13 @@ export default defineConfig(({mode}) => {
     },
     build: {
       target: 'es2022',
+      chunkSizeWarningLimit: 600,
       minify: 'esbuild',
       cssCodeSplit: true,
       sourcemap: false,
       rollupOptions: {
         output: {
           manualChunks: {
-            react: ['react', 'react-dom'],
             router: ['react-router-dom'],
             query: ['@tanstack/react-query'],
             motion: ['motion'],

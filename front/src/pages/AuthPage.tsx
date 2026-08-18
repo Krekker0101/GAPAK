@@ -16,7 +16,6 @@ import {
 import { useAuth } from '../domains/auth/AuthContext';
 import { Button, Input, SegmentedControl } from '../shared/design-system/primitives';
 import { EscapingButton } from '../shared/ux/EscapingButton';
-import { AuthShowcaseFeed } from './auth/AuthShowcaseFeed';
 
 const AuthPage: React.FC = () => {
   const { state, user, error, login, register, anonymousRegister, clearError } = useAuth();
@@ -84,9 +83,11 @@ const AuthPage: React.FC = () => {
       // Anonymous accounts still require a server-valid username/password in the
       // current backend contract. Generate them locally so the guest action never
       // sends an empty JSON body (which previously produced request.invalid_json).
-      const random = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-        ? crypto.randomUUID().replaceAll('-', '')
-        : `${Date.now()}${Math.random().toString(36).slice(2)}`;
+      if (typeof crypto === 'undefined' || typeof crypto.getRandomValues !== 'function') {
+        throw new Error('Secure random generation is unavailable in this browser.');
+      }
+      const randomBytes = crypto.getRandomValues(new Uint8Array(24));
+      const random = Array.from(randomBytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
       const generatedUsername = `guest${random.slice(0, 20)}`;
       const generatedPassword = `${random}${random.slice(0, 12)}!A1`;
       await anonymousRegister({
@@ -104,7 +105,7 @@ const AuthPage: React.FC = () => {
 
   return (
     <main className="relative flex min-h-screen bg-app app-shell-surface text-primary">
-      {/* Left showcase panel - decorative only, hidden below lg */}
+      {/* Brand panel: no fabricated users, counters, posts, or media. */}
       <div className="relative hidden w-[46%] max-w-2xl overflow-hidden border-r border-subtle lg:block">
         <div
           className="absolute inset-0"
@@ -113,26 +114,20 @@ const AuthPage: React.FC = () => {
               'radial-gradient(circle at 20% 0%, rgb(99 102 241 / .16), transparent 42rem), radial-gradient(circle at 90% 100%, rgb(168 85 247 / .14), transparent 38rem)',
           }}
         />
-        <AuthShowcaseFeed columns={2} />
-
-        {/* Top brand + tagline, sits above the feed */}
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-col gap-3 bg-gradient-to-b from-[var(--color-bg)] via-[var(--color-bg)]/85 to-transparent px-10 pb-16 pt-10">
+        <div className="relative z-10 flex h-full flex-col justify-center gap-6 px-12">
           <div className="flex items-center gap-2">
             <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] bg-indigo-600 text-white shadow-token-md">
               <Sparkles className="h-4.5 w-4.5" />
             </div>
             <span className="text-lg font-bold tracking-tight text-primary">GAPAK</span>
           </div>
-          <h2 className="max-w-sm text-2xl font-semibold leading-snug text-primary">
+          <h2 className="max-w-md text-4xl font-semibold leading-tight text-primary">
             Лента, где происходит всё интересное
           </h2>
-          <p className="max-w-sm text-sm text-secondary">
-            Посты, сторис и живые обсуждения твоих людей — в одном месте.
+          <p className="max-w-md text-base leading-relaxed text-secondary">
+            После входа профиль, публикации, истории, сообщения и настройки загружаются из GAPAK API.
           </p>
         </div>
-
-        {/* Bottom fade so the feed doesn't feel cramped at the edge */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-[var(--color-bg)] to-transparent" />
       </div>
 
       {/* Right auth panel */}

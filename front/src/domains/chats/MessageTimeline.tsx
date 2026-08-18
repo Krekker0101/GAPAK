@@ -28,7 +28,6 @@ interface MessageTimelineProps {
   onReact: (messageId: string, emoji: string) => void;
   onPin: (messageId: string) => void;
   onDelete: (messageId: string) => void;
-  onForward: (message: ChatMessage) => void;
   onRetry: (messageId: string) => void;
 }
 
@@ -42,7 +41,6 @@ export const MessageTimeline: React.FC<MessageTimelineProps> = ({
   onReact,
   onPin,
   onDelete,
-  onForward,
   onRetry,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -156,7 +154,6 @@ export const MessageTimeline: React.FC<MessageTimelineProps> = ({
                 onReact={onReact}
                 onPin={onPin}
                 onDelete={onDelete}
-                onForward={onForward}
                 onRetry={onRetry}
               />
             </React.Fragment>

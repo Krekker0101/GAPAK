@@ -19,11 +19,11 @@ func TestCredentialedCORSAllowsExactConfiguredOriginOnly(t *testing.T) {
 	app.Post("/api/v1/test", func(c *fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
 
 	tests := []struct {
-		name, origin string
-		want         int
+		name, origin      string
+		wantAllowedOrigin string
 	}{
-		{name: "allowed", origin: "https://gapak.vercel.app", want: fiber.StatusNoContent},
-		{name: "wrong origin", origin: "https://evil.example", want: fiber.StatusForbidden},
+		{name: "allowed", origin: "https://gapak.vercel.app", wantAllowedOrigin: "https://gapak.vercel.app"},
+		{name: "wrong origin", origin: "https://evil.example"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -33,10 +33,13 @@ func TestCredentialedCORSAllowsExactConfiguredOriginOnly(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resp.StatusCode != tc.want {
-				t.Fatalf("expected %d, got %d", tc.want, resp.StatusCode)
+			if resp.StatusCode != fiber.StatusNoContent {
+				t.Fatalf("expected handler status %d, got %d", fiber.StatusNoContent, resp.StatusCode)
 			}
-			if tc.origin == "https://gapak.vercel.app" && resp.Header.Get("Access-Control-Allow-Credentials") != "true" {
+			if got := resp.Header.Get("Access-Control-Allow-Origin"); got != tc.wantAllowedOrigin {
+				t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, tc.wantAllowedOrigin)
+			}
+			if tc.wantAllowedOrigin != "" && resp.Header.Get("Access-Control-Allow-Credentials") != "true" {
 				t.Fatal("missing Allow-Credentials: true")
 			}
 		})

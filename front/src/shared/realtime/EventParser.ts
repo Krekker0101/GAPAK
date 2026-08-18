@@ -36,7 +36,7 @@ const parseMessage = (value: unknown): BackendChatMessage => {
 export function parseRealtimeFrame(raw: unknown): RealtimeEvent {
   if (!isRecord(raw)) throw new Error('WebSocket frame must be an object');
 
-  const frame = raw as BackendRealtimeMessage;
+  const frame = raw as unknown as BackendRealtimeMessage;
   const type = requireString(frame.type, 'type');
 
   if (type === 'history') {

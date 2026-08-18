@@ -13,6 +13,7 @@ import {
   ShieldAlert,
   Sliders,
   XOctagon,
+  BellRing,
 } from 'lucide-react';
 import { SecurityService, SecurityState } from './SecurityService';
 
@@ -24,12 +25,13 @@ import { AuditLogSection } from './components/AuditLogSection';
 import { AlertsSection } from './components/AlertsSection';
 import { SecurityFlagsSection } from './components/SecurityFlagsSection';
 import { PanicModeSection } from './components/PanicModeSection';
+import { PushDevicesSection } from './components/PushDevicesSection';
 
 export const SecurityCenterView: React.FC = () => {
   const [secState, setSecState] = useState<SecurityState | null>(() => SecurityService.getState());
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'sessions' | 'devices' | '2fa' | 'audit' | 'alerts' | 'flags' | 'panic'
+    'overview' | 'sessions' | 'devices' | 'push' | '2fa' | 'audit' | 'alerts' | 'flags' | 'panic'
   >('overview');
 
   useEffect(() => {
@@ -54,6 +56,7 @@ export const SecurityCenterView: React.FC = () => {
     { id: 'overview', label: 'Overview', icon: <ShieldCheck className="w-4 h-4 text-indigo-400" /> },
     { id: 'sessions', label: 'Sessions', icon: <Laptop className="w-4 h-4 text-tertiary" />, badge: secState.sessions.length },
     { id: 'devices', label: 'Devices', icon: <Fingerprint className="w-4 h-4 text-tertiary" /> },
+    { id: 'push', label: 'Push', icon: <BellRing className="w-4 h-4 text-indigo-400" /> },
     { id: '2fa', label: '2FA', icon: <KeyRound className="w-4 h-4 text-emerald-400" />, badge: secState.twoFactor.enabled ? 'ON' : 'OFF' },
     { id: 'audit', label: 'Audit Log', icon: <Clock className="w-4 h-4 text-tertiary" /> },
     {
@@ -79,11 +82,11 @@ export const SecurityCenterView: React.FC = () => {
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-6 h-6 text-indigo-400" />
             <h1 className="text-xl font-extrabold tracking-tight text-primary">
-              GAPAK Security & Moderation Center
+              GAPAK Security Center
             </h1>
           </div>
           <p className="text-xs text-tertiary mt-1">
-            Enterprise threat response, session authorization, 2FA management, security telemetry, and user moderation
+            Sessions, cryptographic devices, 2FA, audit events, alerts and emergency session revocation
           </p>
         </div>
       </div>
@@ -139,6 +142,8 @@ export const SecurityCenterView: React.FC = () => {
         {activeTab === 'sessions' && <SessionsSection sessions={secState.sessions} />}
 
         {activeTab === 'devices' && <DevicesSection />}
+
+        {activeTab === 'push' && <PushDevicesSection />}
 
         {activeTab === '2fa' && <TwoFactorSection twoFactor={secState.twoFactor} />}
 

@@ -3,7 +3,7 @@
  * Catches unhandled React runtime errors and provides recovery actions.
  */
 
-import React, { Component, ErrorInfo, ReactNode } from 'react';
+import React, { ErrorInfo, ReactNode } from 'react';
 import { AlertOctagon, RotateCcw } from 'lucide-react';
 import { telemetry } from '../telemetry/telemetry';
 
@@ -18,8 +18,8 @@ interface State {
 }
 
 export class ErrorBoundary extends React.Component<Props, State> {
-  public props: Props;
-  public state: State;
+  public override props: Props;
+  public override state: State;
 
   constructor(props: Props) {
     super(props);
@@ -34,7 +34,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
     return { hasError: true, error };
   }
 
-  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+  public override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     telemetry.trackError('React Error Boundary Caught Failure', error, {
       componentStack: errorInfo.componentStack,
     });
@@ -44,7 +44,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
     this.setState({ hasError: false, error: null });
   };
 
-  public render() {
+  public override render() {
     if (this.state.hasError) {
       if (this.props.fallback) {
         return this.props.fallback;

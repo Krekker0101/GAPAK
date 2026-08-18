@@ -50,10 +50,15 @@ func Idempotency(redisClient *redis.Client, db *pgxpool.Pool, jwtManager *authpl
 		}
 
 		identity := idempotencyIdentity(c, jwtManager)
-		bodyHash := sha256.Sum256(c.Body())
-		requestHash := hex.EncodeToString(bodyHash[:])
+		requestHash := idempotencyRequestHash(c)
 		digest := sha256.Sum256([]byte(strings.Join([]string{identity, c.Method(), c.Path(), key}, "|")))
 		redisKey := "idempotent:" + hex.EncodeToString(digest[:])
+		// PostgreSQL is the authoritative idempotency store. Redis is used only
+		// when no database is available, so a cache miss can never re-execute a
+		// mutation that was already committed and durably recorded.
+		if db != nil {
+			return executeWithDBIdempotency(c, db, identity, c.Method(), c.Path(), key, requestHash)
+		}
 
 		ctx, cancel := context.WithTimeout(c.UserContext(), 750*time.Millisecond)
 		defer cancel()
@@ -90,15 +95,27 @@ func Idempotency(redisClient *redis.Client, db *pgxpool.Pool, jwtManager *authpl
 					}
 					return fiber.NewError(fiber.StatusConflict, "Request with this idempotency key is already in progress")
 				}
-				return executeAndPersistRedis(c, redisClient, db, redisKey, ctx, identity, c.Method(), c.Path(), key, requestHash)
+				return executeAndPersistRedis(c, redisClient, redisKey, requestHash)
 			}
 		}
 
-		if db == nil {
-			return c.Next()
-		}
-		return executeWithDBIdempotency(c, db, identity, c.Method(), c.Path(), key, requestHash)
+		return c.Next()
 	}
+}
+
+func idempotencyRequestHash(c *fiber.Ctx) string {
+	digest := sha256.New()
+	for _, part := range [][]byte{
+		[]byte(c.Method()),
+		[]byte(c.Path()),
+		c.Request().URI().QueryString(),
+		[]byte(c.Get(fiber.HeaderContentType)),
+		c.Body(),
+	} {
+		_, _ = digest.Write([]byte{0})
+		_, _ = digest.Write(part)
+	}
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 func captureReplayHeaders(c *fiber.Ctx) map[string][]string {
@@ -166,8 +183,7 @@ func replayIdempotentResponse(c *fiber.Ctx, response idempotentResponse) error {
 	return c.Status(response.Status).Send(body)
 }
 
-func executeAndPersistRedis(c *fiber.Ctx, redisClient *redis.Client, db *pgxpool.Pool, redisKey string, ctx context.Context, identity, method, path, key, requestHash string) error {
-
+func executeAndPersistRedis(c *fiber.Ctx, redisClient *redis.Client, redisKey, requestHash string) error {
 	if err := c.Next(); err != nil || c.Response().StatusCode() >= 400 {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 		_ = redisClient.Del(cleanupCtx, redisKey).Err()
@@ -182,35 +198,12 @@ func executeAndPersistRedis(c *fiber.Ctx, redisClient *redis.Client, db *pgxpool
 		cleanupCancel()
 		return marshalErr
 	}
-	if err := redisClient.Set(ctx, redisKey, payload, idempotencyTTL).Err(); err != nil {
-		if db != nil {
-			if persistErr := persistDBIdempotency(ctx, db, identity, method, path, key, requestHash, response); persistErr == nil {
-				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-				_ = redisClient.Del(cleanupCtx, redisKey).Err()
-				cleanupCancel()
-				return nil
-			}
-		}
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		_ = redisClient.Del(cleanupCtx, redisKey).Err()
-		cleanupCancel()
-	}
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(c.UserContext()), 750*time.Millisecond)
+	defer persistCancel()
+	// If persistence fails, leave the INFLIGHT marker to expire instead of
+	// deleting it and immediately allowing a duplicate mutation.
+	_ = redisClient.Set(persistCtx, redisKey, payload, idempotencyTTL).Err()
 	return nil
-}
-
-func persistDBIdempotency(ctx context.Context, db *pgxpool.Pool, identity, method, path, key, requestHash string, response idempotentResponse) error {
-	headersJSON, err := json.Marshal(response.Headers)
-	if err != nil {
-		return err
-	}
-	_, err = db.Exec(ctx, `
-		INSERT INTO http_idempotency_records (id, identity_key, method, path, idempotency_key, request_hash, status, content_type, headers_json, body_b64, state, expires_at, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,'DONE',NOW()+INTERVAL '5 minutes',NOW(),NOW())
-		ON CONFLICT (identity_key, method, path, idempotency_key) DO UPDATE SET
-			request_hash=EXCLUDED.request_hash, status=EXCLUDED.status, content_type=EXCLUDED.content_type,
-			headers_json=EXCLUDED.headers_json, body_b64=EXCLUDED.body_b64, state='DONE', expires_at=EXCLUDED.expires_at, updated_at=NOW()`,
-		uuid.NewString(), identity, method, path, key, requestHash, response.Status, response.ContentType, headersJSON, response.Body)
-	return err
 }
 
 func executeWithDBIdempotency(c *fiber.Ctx, db *pgxpool.Pool, identity, method, path, key, requestHash string) error {
@@ -267,12 +260,18 @@ func executeWithDBIdempotency(c *fiber.Ctx, db *pgxpool.Pool, identity, method, 
 		}
 	}
 EXECUTE:
-	if err := c.Next(); err != nil || c.Response().StatusCode() >= 400 {
-		_, _ = db.Exec(ctx, `DELETE FROM http_idempotency_records WHERE identity_key=$1 AND method=$2 AND path=$3 AND idempotency_key=$4 AND state='INFLIGHT'`, identity, method, path, key)
-		return err
+	// The claim timeout protects only database coordination. Business handlers
+	// may legitimately take longer, so persistence gets a fresh bounded context.
+	cancel()
+	handlerErr := c.Next()
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(c.UserContext()), 2*time.Second)
+	defer persistCancel()
+	if handlerErr != nil || c.Response().StatusCode() >= 400 {
+		_, _ = db.Exec(persistCtx, `DELETE FROM http_idempotency_records WHERE identity_key=$1 AND method=$2 AND path=$3 AND idempotency_key=$4 AND state='INFLIGHT'`, identity, method, path, key)
+		return handlerErr
 	}
 	stored = idempotentResponse{Status: c.Response().StatusCode(), ContentType: string(c.Response().Header.ContentType()), Headers: captureReplayHeaders(c), RequestHash: requestHash, Body: base64.StdEncoding.EncodeToString(c.Response().Body())}
 	headersJSON, _ := json.Marshal(stored.Headers)
-	_, err := db.Exec(ctx, `UPDATE http_idempotency_records SET status=$5, content_type=$6, headers_json=$7::jsonb, body_b64=$8, state='DONE', updated_at=NOW() WHERE identity_key=$1 AND method=$2 AND path=$3 AND idempotency_key=$4 AND request_hash=$9`, identity, method, path, key, stored.Status, stored.ContentType, headersJSON, stored.Body, requestHash)
+	_, err := db.Exec(persistCtx, `UPDATE http_idempotency_records SET status=$5, content_type=$6, headers_json=$7::jsonb, body_b64=$8, state='DONE', updated_at=NOW() WHERE identity_key=$1 AND method=$2 AND path=$3 AND idempotency_key=$4 AND request_hash=$9`, identity, method, path, key, stored.Status, stored.ContentType, headersJSON, stored.Body, requestHash)
 	return err
 }

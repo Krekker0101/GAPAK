@@ -295,7 +295,7 @@ func (r *Repository) FindAccessibleMedia(ctx context.Context, viewerID, mediaID 
 		                  AND ((fc.requester_id = u.id AND fc.addressee_id = $1) OR (fc.addressee_id = u.id AND fc.requester_id = $1))
 		              ))
 		          OR (ups.profile_visibility = 'TRUSTED_ONLY' AND EXISTS (
-		        	        SELECT 1 FROM trusted_circle_memberships tcm
+		                SELECT 1 FROM trusted_circle_memberships tcm
 		                WHERE tcm.owner_id = u.id AND tcm.member_id = $1
 		              ))
 		        )

@@ -25,7 +25,6 @@ import {
   MapPin,
   User,
   Smile,
-  Forward,
   RotateCcw,
   Sparkles,
 } from 'lucide-react';
@@ -40,7 +39,6 @@ interface MessageItemProps {
   onReact: (messageId: string, emoji: string) => void;
   onPin: (messageId: string) => void;
   onDelete: (messageId: string) => void;
-  onForward: (message: ChatMessage) => void;
   onRetry: (messageId: string) => void;
 }
 
@@ -51,7 +49,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   onReact,
   onPin,
   onDelete,
-  onForward,
   onRetry,
 }) => {
   const [isPlayingVoice, setIsPlayingVoice] = useState(false);
@@ -316,17 +313,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             >
               <Pin className="w-3.5 h-3.5 text-amber-400" />
               <span>{message.pinned ? 'Unpin Message' : 'Pin Message'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                onForward(message);
-                setShowMenu(false);
-              }}
-              className="w-full text-left px-2.5 py-1.5 rounded-[var(--radius-lg)] hover:bg-surface-muted flex items-center gap-2 text-primary"
-            >
-              <Forward className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Forward</span>
             </button>
             {isMe && (
               <button

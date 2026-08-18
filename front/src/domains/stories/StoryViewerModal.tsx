@@ -1,18 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Eye, Trash2, Volume2, VolumeX, Star, Loader2 } from 'lucide-react';
-import type { BackendProfile, Story, StoryViewer as BackendStoryViewer } from '../../shared/api/backendContracts';
+import type { BackendProfile, BackendPublicProfile, Story, StoryViewer as BackendStoryViewer } from '../../shared/api/backendContracts';
 import { Avatar } from '../../shared/design-system/primitives';
 import { useToast } from '../../shared/ux/ToastContext';
 import { storiesApi, type StoryReactionType } from './api/storiesApi';
 import { mediaApi } from '../media/api/mediaApi';
 
-interface Props { story: Story; currentUser: BackendProfile; onClose: () => void; onChanged: () => void; }
+type StoryIdentity = Pick<BackendProfile, 'id' | 'displayName'> | BackendPublicProfile;
+interface Props { story: Story; currentUser: Pick<BackendProfile, 'id' | 'displayName'>; onClose: () => void; onChanged: () => void; }
 
 export const StoryViewerModal: React.FC<Props> = ({ story, currentUser, onClose, onChanged }) => {
   const { addToast } = useToast();
   const [current, setCurrent] = useState(story);
-  const [author, setAuthor] = useState<BackendProfile | null>(story.authorId === currentUser.id ? currentUser : null);
+  const [author, setAuthor] = useState<StoryIdentity | null>(story.authorId === currentUser.id ? currentUser : null);
   const [mediaUrl, setMediaUrl] = useState<string>();
   const [mediaKind, setMediaKind] = useState<string>();
   const [viewers, setViewers] = useState<BackendStoryViewer[] | null>(null);
@@ -47,7 +48,7 @@ export const StoryViewerModal: React.FC<Props> = ({ story, currentUser, onClose,
       // The public profile is fetched only when needed; no user object is fabricated.
       let active = true;
       import('../users/api/usersApi').then(({ usersApi }) => usersApi.profile(current.authorId)).then(profile => {
-        if (active) setAuthor(profile as BackendProfile);
+        if (active) setAuthor(profile);
       }).catch(() => { /* identity remains the authoritative ID */ });
       return () => { active = false; };
     }
@@ -102,7 +103,7 @@ export const StoryViewerModal: React.FC<Props> = ({ story, currentUser, onClose,
       <div className="grid flex-1 place-items-center bg-black">
         {loadingMedia && <Loader2 className="animate-spin text-white" />}
         {!loadingMedia && mediaUrl && isVideo && <video src={mediaUrl} autoPlay muted={muted} controls className="max-h-full w-full object-contain" />}
-        {!loadingMedia && mediaUrl && !isVideo && <img src={mediaUrl} alt={current.caption ?? 'Story media'} className="max-h-full w-full object-contain" />}
+        {!loadingMedia && mediaUrl && !isVideo && <img src={mediaUrl} alt={current.caption ?? 'Story media'} loading="lazy" decoding="async" className="max-h-full w-full object-contain" />}
         {!loadingMedia && !mediaUrl && <p className="p-6 text-center text-sm text-white/70">The server did not provide an authorized playback URL.</p>}
       </div>
       <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/90 to-transparent p-4 text-white">

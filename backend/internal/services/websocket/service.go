@@ -518,6 +518,8 @@ func (s *Service) writePump(conn *Connection) {
 
 	for {
 		select {
+		case <-conn.done:
+			return
 		case message, ok := <-conn.Send:
 			conn.Conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			if !ok {

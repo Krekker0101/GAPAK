@@ -84,12 +84,12 @@ class RealtimeManager {
   onStateChange(listener: (state: RealtimeConnectionState) => void): () => void {
     this.stateListeners.add(listener);
     listener(this.state);
-    return () => this.stateListeners.delete(listener);
+    return () => { this.stateListeners.delete(listener); };
   }
 
   onAuthFailure(listener: (error: Error) => void): () => void {
     this.authFailureListeners.add(listener);
-    return () => this.authFailureListeners.delete(listener);
+    return () => { this.authFailureListeners.delete(listener); };
   }
 
   subscribeToChat(chatId: string): boolean {

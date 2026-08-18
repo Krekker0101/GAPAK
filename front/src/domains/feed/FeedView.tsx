@@ -17,8 +17,8 @@ import {
   RefreshCw,
   SlidersHorizontal,
 } from 'lucide-react';
-import { UserStoryGroup, UserProfile } from '../../shared/types';
-import type { Post as BackendPost } from '../../shared/api/backendContracts';
+import { UserProfile } from '../../shared/types';
+import type { Post as BackendPost, Story } from '../../shared/api/backendContracts';
 import type { CreatePostRequest } from '../posts/api/postsApi';
 import { StoryBar } from '../stories/StoryBar';
 import { StoryViewerModal } from '../stories/StoryViewerModal';
@@ -26,19 +26,20 @@ import { PostComposer } from '../posts/PostComposer';
 import { BackendPostCard } from '../posts/BackendPostCard';
 import { Button, Input, Badge } from '../../shared/design-system/primitives';
 import { useToast } from '../../shared/ux/ToastContext';
+import type { StoryReactionType } from '../stories/api/storiesApi';
 
 type FeedFilter = 'all' | 'following' | 'trusted' | 'clips' | 'one_time';
 
 interface FeedViewProps {
   currentUser: UserProfile;
   posts: BackendPost[];
-  storyGroups: UserStoryGroup[];
+  stories: Story[];
   onLikeToggle: (postId: string) => void;
   onAddComment: (postId: string, text: string, parentId?: string) => void;
   onCreatePost: (post: CreatePostRequest) => Promise<unknown>;
   onCreateStory: () => void;
   onUserClick?: (userId: string) => void;
-  onStoryReact?: (storyId: string, emoji: string) => void;
+  onStoryReact?: (storyId: string, reaction: StoryReactionType) => void;
   onDeletePost?: (postId: string) => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
@@ -47,7 +48,7 @@ interface FeedViewProps {
 export const FeedView: React.FC<FeedViewProps> = ({
   currentUser,
   posts,
-  storyGroups,
+  stories,
   onLikeToggle,
   onAddComment,
   onCreatePost,
@@ -61,7 +62,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
   const { addToast } = useToast();
   const [activeFilter, setActiveFilter] = useState<FeedFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedStoryGroupIndex, setSelectedStoryGroupIndex] = useState<number | null>(null);
+  const [selectedStoryId, setSelectedStoryId] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const isRefreshActive = externalRefreshing ?? isRefreshing;
 
@@ -104,12 +105,9 @@ export const FeedView: React.FC<FeedViewProps> = ({
       {/* Stories Bar */}
       <div className="p-4 rounded-[var(--radius-3xl)] border border-subtle dark:border-subtle bg-surface dark:bg-surface shadow-token-sm">
         <StoryBar
-          storyGroups={storyGroups}
+          stories={stories}
           currentUser={currentUser}
-          onSelectGroup={(group) => {
-            const idx = storyGroups.findIndex((g) => g.user.id === group.user.id);
-            if (idx !== -1) setSelectedStoryGroupIndex(idx);
-          }}
+          onSelectStory={setSelectedStoryId}
           onCreateStoryClick={onCreateStory}
         />
       </div>
@@ -191,13 +189,12 @@ export const FeedView: React.FC<FeedViewProps> = ({
       </div>
 
       {/* Story Viewer Modal */}
-      {selectedStoryGroupIndex !== null && (
+      {selectedStoryId !== null && stories.find((story) => story.id === selectedStoryId) && (
         <StoryViewerModal
-          groups={storyGroups}
-          initialGroupIndex={selectedStoryGroupIndex}
+          story={stories.find((story) => story.id === selectedStoryId)!}
           currentUser={currentUser}
-          onClose={() => setSelectedStoryGroupIndex(null)}
-          onStoryReact={onStoryReact}
+          onClose={() => setSelectedStoryId(null)}
+          onChanged={() => { if (onStoryReact) void 0; onRefresh?.(); }}
         />
       )}
 

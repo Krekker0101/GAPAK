@@ -4,18 +4,17 @@
 
 GAPAK Front is a **Vite + React** application. It does not use Next.js, so `NEXT_PUBLIC_*` variables are not used. Vite exposes only variables prefixed with `VITE_`.
 
-The only production frontend variables required are public service endpoints:
+The production frontend uses public service endpoints and the public Web Push VAPID key:
 
 ```env
 VITE_API_BASE_URL=https://gapak-api-production.up.railway.app
 VITE_WS_BASE_URL=wss://gapak-api-production.up.railway.app/ws
 VITE_MEDIA_BASE_URL=https://gapak-api-production.up.railway.app
+VITE_WEB_PUSH_PUBLIC_KEY=<public VAPID key matching the backend sender>
 VITE_ENVIRONMENT=production
-VITE_ENABLE_MOCK_API=false
-VITE_ENABLE_PLATFORM_SANDBOX=false
 ```
 
-Do **not** place JWT signing secrets, refresh tokens, database credentials, Redis credentials, storage credentials, OAuth client secrets, private keys, or encryption keys in Vercel environment variables.
+Do **not** place JWT signing secrets, refresh tokens, database credentials, Redis credentials, storage credentials, OAuth client secrets, the private VAPID key, or encryption private keys in Vercel environment variables.
 
 ## Authentication
 

@@ -6,7 +6,7 @@ import { LoginPage, RegisterPage } from '../../pages/AuthPage';
 const FeedPage = lazy(() => import('../../pages/FeedPage').then(m => ({ default: m.FeedPage })));
 const ProfilePage = lazy(() => import('../../pages/ProfilePage').then(m => ({ default: m.ProfilePage })));
 const ConnectionsPage = lazy(() => import('../../pages/ConnectionsPage').then(m => ({ default: m.ConnectionsPage })));
-import { PageLoading, PageError, ContractPage } from '../../pages/common';
+import { PageLoading, PageError, NotFoundPage } from '../../pages/common';
 const AdminPage = lazy(() => import('../../pages/DomainPages').then(m => ({ default: m.AdminPage })));
 const BattlesPage = lazy(() => import('../../pages/DomainPages').then(m => ({ default: m.BattlesPage })));
 const ChatsPage = lazy(() => import('../../pages/DomainPages').then(m => ({ default: m.ChatsPage })));
@@ -20,12 +20,13 @@ const SubscriptionsPage = lazy(() => import('../../pages/DomainPages').then(m =>
 const TrustRoomsPage = lazy(() => import('../../pages/DomainPages').then(m => ({ default: m.TrustRoomsPage })));
 import { postsApi } from '../../domains/posts/api/postsApi';
 import { useQuery } from '@tanstack/react-query';
-import { PostCard } from '../../domains/posts/PostCard';
+import { BackendPostCard } from '../../domains/posts/BackendPostCard';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 const AuthGate: React.FC = () => {
-  const { state, user } = useAuth();
+  const { state, user, error, restoreSession } = useAuth();
   if (state === 'UNKNOWN' || state === 'AUTHENTICATING' || state === 'REFRESHING') return <PageLoading label="Restoring GAPAK session…" />;
+  if (state === 'AUTH_ERROR') return <PageError error={error ?? new Error('Unable to restore the session')} onRetry={() => void restoreSession()} />;
   if (!user) return <Navigate to="/login" replace />;
   return <AppShell><Outlet /></AppShell>;
 };
@@ -34,8 +35,16 @@ const PostPage: React.FC = () => {
   const { postId } = requireParams();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: ['posts', postId],
+    queryFn: ({ signal }) => postsApi.get(postId!, signal),
+    enabled: Boolean(postId),
+  });
   const like = useMutation({
-    mutationFn: (liked: boolean) => liked ? postsApi.like(postId!, crypto.randomUUID()) : postsApi.unlike(postId!),
+    mutationFn: async (liked: boolean): Promise<void> => {
+      if (liked) await postsApi.like(postId!, crypto.randomUUID());
+      else await postsApi.unlike(postId!, crypto.randomUUID());
+    },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['posts', postId] }),
   });
   const comment = useMutation({
@@ -45,11 +54,10 @@ const PostPage: React.FC = () => {
   if (query.isPending || !user) return <PageLoading label="Loading post…" />;
   if (query.isError) return <PageError error={query.error} onRetry={() => void query.refetch()} />;
   if (!query.data) return <PageError error={new Error('Post not found')} />;
-  return <div className="mx-auto max-w-2xl"><PostCard post={query.data} currentUser={user} onLikeToggle={() => like.mutate(!query.data!.likedByMe)} onAddComment={(postIdValue, text, parentId) => { if (postIdValue === postId) comment.mutate(text); void parentId; }} /></div>;
+  return <div className="mx-auto max-w-2xl"><BackendPostCard post={query.data} currentUserId={user.id} onLikeToggle={() => like.mutate(!query.data!.isLiked)} onAddComment={(postIdValue, text, parentId) => { if (postIdValue === postId) comment.mutate(text); void parentId; }} /></div>;
 };
 
 const requireParams = () => useParams<{ postId: string }>();
-const NotFound = () => <ContractPage title="404 — Page not found" description="This GAPAK route does not exist. Use the navigation or return to the feed." />;
 
 export const AppRouter: React.FC = () => <Suspense fallback={<PageLoading label="Loading GAPAK…" />}><Routes>
   <Route path="/login" element={<LoginPage />} />
@@ -76,6 +84,6 @@ export const AppRouter: React.FC = () => <Suspense fallback={<PageLoading label=
     <Route path="/admin" element={<AdminPage />} />
     <Route path="/presence" element={<PresencePage />} />
     <Route path="/battles" element={<BattlesPage />} />
-    <Route path="*" element={<NotFound />} />
+    <Route path="*" element={<NotFoundPage />} />
   </Route>
 </Routes></Suspense>;

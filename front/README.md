@@ -1,14 +1,6 @@
 # GAPAK Front
 
-Production-oriented React/Vite frontend for GAPAK. The final audit deliberately keeps unsupported backend functionality visible as contract/permission states instead of simulating success.
-
-## Architecture
-
-- `src/app/` — application shell, providers and URL router.
-- `src/pages/` — route-level server-state composition.
-- `src/domains/*/api/` — backend API boundaries.
-- `src/shared/` — HTTP, auth, realtime, security, design system and UX infrastructure.
-- `src/devtools/` — development-only sandbox and fixture code. Legacy prototype domains live under `src/devtools/legacy-domains/` and are not production routes.
+Production React/Vite client for the GAPAK Go API. Routed business domains use typed HTTP services and server-owned state; the application contains no mock backend or production fixture data.
 
 ## Development
 
@@ -18,60 +10,33 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Development-only fixtures can be enabled with:
+Public frontend configuration:
 
 ```env
-VITE_ENABLE_MOCK_API=true
-VITE_ENABLE_PLATFORM_SANDBOX=true
+VITE_API_BASE_URL=https://api.example.com
+VITE_WS_BASE_URL=wss://api.example.com/ws
+VITE_MEDIA_BASE_URL=https://media.example.com
+VITE_WEB_PUSH_PUBLIC_KEY=<public VAPID key from the backend deployment>
+VITE_ENVIRONMENT=production
 ```
 
-These flags are constrained by `import.meta.env.DEV`; a production build cannot enable them.
+The Web Push value is the public VAPID key and must match the backend sender configuration. Never put JWT secrets, refresh tokens, database credentials, OAuth secrets, the private VAPID key or private encryption keys in `VITE_*` variables.
 
-## Production
+## Authentication persistence
 
-```env
-VITE_API_BASE_URL="https://api.example.com"
-VITE_WS_BASE_URL="wss://api.example.com"
-VITE_MEDIA_BASE_URL="https://media.example.com"
-VITE_ENVIRONMENT="production"
-VITE_ENABLE_MOCK_API="false"
-VITE_ENABLE_PLATFORM_SANDBOX="false"
-```
+The access token and CSRF token are memory-only. On reload, the client calls `/auth/csrf`, detects the server session through the HttpOnly refresh cookie, rotates it with `/auth/refresh`, then loads `/users/me`. The backend refresh-cookie TTL determines how long the login survives; explicit logout revokes the session.
 
-Production does not use mock API, mock WebSocket, fake media, fake live data, fake OAuth, fake 2FA or fake cryptography.
+For cross-site Vercel-to-Railway deployments, the backend must use `COOKIE_SECURE=true`, `COOKIE_SAME_SITE=none`, an empty `COOKIE_DOMAIN`, and the exact frontend origin in `CORS_ORIGINS`.
 
-## Verification
+## Quality gates
 
 ```bash
 npm run typecheck
 npm run lint
-npm run test
+npm run test:all
 npm run build
-npm run preview
 ```
 
-`npm run test:e2e` runs the Playwright critical path only when a real backend-authenticated test environment is supplied.
+`npm run test:e2e` requires a real backend-authenticated test environment. Direct browser-to-database access is intentionally absent; the frontend communicates only with the backend API.
 
-## Current release truth
-
-The project is **not yet fully production-ready** because the uploaded frontend cannot prove a complete real backend integration in this environment. In particular, the production login/register UI is absent, CSRF bootstrap is backend-dependent, and full E2EE/realtime guarantees require backend contracts.
-
-See:
-
-- `docs/PRODUCTION_READINESS.md`
-- `docs/ARCHITECTURE.md`
-- `docs/API.md`
-- `docs/AUTH.md`
-- `docs/REALTIME.md`
-- `docs/SECURITY.md`
-- `docs/E2EE.md`
-- `docs/MEDIA.md`
-- `docs/TESTING.md`
-- `docs/DEPLOYMENT.md`
-
-
-## Production deployment note
-
-The production API is deployed on Railway while the SPA is deployed on Vercel. The browser client always uses credentialed requests. The API uses a strict double-submit CSRF cookie when available and a CORS-origin-bound header fallback when browsers block cross-site cookies. Keep the production CORS origin restricted to the exact Vercel application origin.
-
-If the Vercel project is configured with the repository root as its Root Directory, the repository-level `vercel.json` builds `front` and rewrites all SPA routes to `front/dist/index.html`. If the Vercel Root Directory is already `front`, the existing `front/vercel.json` provides the SPA rewrite.
+See `docs/ARCHITECTURE.md`, `docs/AUTH.md`, `docs/REALTIME.md`, `docs/SECURITY.md`, `docs/E2EE.md`, `docs/MEDIA.md`, `docs/TESTING.md`, and `docs/DEPLOYMENT.md`.

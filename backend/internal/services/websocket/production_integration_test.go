@@ -243,13 +243,14 @@ func TestWebSocketHeartbeatUsesNativePingPong(t *testing.T) {
 	if err := conn.WriteJSON(WebSocketMessage{Type: "auth", Data: map[string]interface{}{"token": "valid-token", "device_id": "device-1"}}); err != nil {
 		t.Fatal(err)
 	}
-	pong := make(chan struct{}, 1)
-	conn.SetPongHandler(func(string) error {
+	ping := make(chan struct{}, 1)
+	defaultPingHandler := conn.PingHandler()
+	conn.SetPingHandler(func(data string) error {
 		select {
-		case pong <- struct{}{}:
+		case ping <- struct{}{}:
 		default:
 		}
-		return nil
+		return defaultPingHandler(data)
 	})
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	for {
@@ -257,16 +258,16 @@ func TestWebSocketHeartbeatUsesNativePingPong(t *testing.T) {
 			break
 		}
 		select {
-		case <-pong:
+		case <-ping:
 			return
 		default:
 		}
 	}
 	select {
-	case <-pong:
+	case <-ping:
 		return
 	default:
-		t.Fatal("did not observe native WebSocket pong")
+		t.Fatal("did not observe native WebSocket ping")
 	}
 }
 

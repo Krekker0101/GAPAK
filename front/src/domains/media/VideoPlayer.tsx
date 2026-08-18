@@ -2,7 +2,7 @@
  * Premium Video Player Component
  * GAPAK Media Infrastructure - Phase 4
  *
- * Supports adaptive HLS quality switching, custom UI controls, PiP, captions,
+ * Supports adaptive HLS quality switching, custom UI controls, PiP,
  * buffering states, playback grant auto-renewal, mobile native controls, and IntersectionObserver auto-pause.
  */
 
@@ -15,7 +15,6 @@ import {
   Maximize,
   Minimize,
   Settings,
-  Subtitles,
   RotateCcw,
   Loader2,
   AlertCircle,
@@ -23,7 +22,7 @@ import {
   ShieldCheck,
   Clock,
 } from 'lucide-react';
-import { PlaybackGrant, HLSVariant } from '../../shared/types';
+import { PlaybackGrant } from '../../shared/types';
 import type { MediaUsageContext } from '../../shared/types/media';
 import { PlaybackGrantService } from './PlaybackGrantService';
 
@@ -64,7 +63,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [showControls, setShowControls] = useState(true);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [selectedQuality, setSelectedQuality] = useState<string>('auto');
-  const [captionLanguage, setCaptionLanguage] = useState<string>('off');
   const pendingSeekRef = useRef<number | null>(null);
   // Playback grant state
   const [grant, setGrant] = useState<PlaybackGrant | undefined>(initialGrant);
@@ -76,7 +74,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // Menus toggles
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
-  const [showCaptionMenu, setShowCaptionMenu] = useState(false);
 
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -294,6 +291,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         src={activeSrc}
         poster={poster}
         autoPlay={autoPlay}
+        preload="metadata"
         loop={loop}
         onTimeUpdate={() => videoRef.current && setCurrentTime(videoRef.current.currentTime)}
         onLoadedMetadata={() => {
@@ -318,9 +316,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onError={() => setHasError(true)}
         onClick={togglePlay}
         className="w-full h-full object-contain cursor-pointer"
-      >
-        {grant?.captions?.map(caption => <track key={caption.language} kind="subtitles" src={caption.url} srcLang={caption.language} label={caption.label} default={caption.language === captionLanguage} />)}
-      </video>
+      />
 
       {/* Title & Signed Grant Badge Overlay */}
       <div className="absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/80 to-transparent flex items-center justify-between text-xs text-white z-20 pointer-events-none">
@@ -380,15 +376,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Subtitles Overlay */}
-      {captionLanguage !== 'off' && isPlaying && (
-        <div className="absolute bottom-16 left-0 right-0 text-center z-20 pointer-events-none">
-          <span className="inline-block px-3 py-1 bg-black/80 text-yellow-300 text-xs font-semibold rounded-[var(--radius-lg)] border border-default">
-            [Subtitle ({captionLanguage.toUpperCase()}): GAPAK Realtime Encryption Stream]
-          </span>
-        </div>
-      )}
-
       {/* Bottom Controls Bar */}
       <div
         className={`absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/90 via-black/60 to-transparent transition-opacity duration-300 z-30 ${
@@ -438,15 +425,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           {/* Right Action Icons */}
           <div className="flex items-center gap-2 relative">
-            {/* Subtitles Button */}
-            <button
-              type="button"
-              onClick={() => setShowCaptionMenu(!showCaptionMenu)}
-              className={`p-1 hover:text-indigo-400 transition-colors ${captionLanguage !== 'off' ? 'text-indigo-400' : ''}`}
-            >
-              <Subtitles className="w-5 h-5" />
-            </button>
-
             {/* Picture-in-Picture */}
             <button type="button" onClick={togglePiP} className="p-1 hover:text-indigo-400 transition-colors">
               <PictureInPicture2 className="w-5 h-5" />
@@ -466,34 +444,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
             </button>
 
-            {/* Captions Dropdown */}
-            {showCaptionMenu && (
-              <div className="absolute bottom-full mb-2 right-12 w-36 bg-surface border border-subtle rounded-[var(--radius-xl)] p-1 shadow-token-lg text-xs space-y-1 z-40">
-                <p className="px-2 py-1 text-[10px] font-mono text-tertiary uppercase">Subtitles</p>
-                {['off', 'en', 'ru', 'es'].map((lang) => (
-                  <button
-                    key={lang}
-                    type="button"
-                    onClick={() => {
-                      setCaptionLanguage(lang);
-                      setShowCaptionMenu(false);
-                    }}
-                    className={`w-full p-1.5 text-left rounded-[var(--radius-lg)] ${
-                      captionLanguage === lang ? 'bg-indigo-600 text-white font-bold' : 'hover:bg-surface-muted text-secondary'
-                    }`}
-                  >
-                    {lang.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            )}
-
             {/* Quality & Speed Dropdown */}
             {showSettingsMenu && (
               <div className="absolute bottom-full mb-2 right-0 w-44 bg-surface border border-subtle rounded-[var(--radius-xl)] p-2 shadow-token-lg text-xs space-y-2 z-40">
                 <div>
                   <p className="text-[10px] font-mono text-tertiary uppercase mb-1">Quality</p>
-                  {['auto', '1080p', '720p', '480p', '360p'].map((q) => (
+                  {['auto', ...new Set((grant?.variants ?? []).map((variant) => variant.resolution))].map((q) => (
                     <button
                       key={q}
                       type="button"

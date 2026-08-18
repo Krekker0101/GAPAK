@@ -7,9 +7,8 @@ import { PageError, PageLoading } from './common';
 import { useNavigate } from 'react-router-dom';
 import { storiesApi } from '../domains/stories/api/storiesApi';
 import { StoryComposerModal } from '../domains/stories/StoryComposerModal';
-import { UserStoryGroup } from '../shared/types/social';
 import { useToast } from '../shared/ux/ToastContext';
-import type { Post } from '../shared/api/backendContracts';
+import type { Post, Story } from '../shared/api/backendContracts';
 import { idempotencyKey } from '../shared/ux/idempotencyKey';
 import { RecommendationsPanel } from '../domains/connections/RecommendationsPanel';
 
@@ -44,7 +43,7 @@ export const FeedPage: React.FC = () => {
   }, [feed.data]);
 
   const stories = useQuery({ queryKey: ['stories', 'feed-preview'], queryFn: ({ signal }) => storiesApi.feed({ limit: 20 }, signal), staleTime: 20_000 });
-  const storyGroups: UserStoryGroup[] = stories.data?.items ?? [];
+  const visibleStories: Story[] = (stories.data ?? []).filter((story) => story.status === 'ACTIVE');
 
   const likeMutation = useMutation({
     mutationFn: async ({ postId, liked }: { postId: string; liked: boolean }) => {
@@ -113,7 +112,7 @@ export const FeedPage: React.FC = () => {
         <FeedView
           currentUser={user}
           posts={posts}
-          storyGroups={storyGroups}
+          stories={visibleStories}
           onLikeToggle={(postId) => {
             const post = posts.find((p) => p.id === postId);
             if (post) likeMutation.mutate({ postId, liked: !post.isLiked });
@@ -122,7 +121,7 @@ export const FeedPage: React.FC = () => {
           onCreatePost={(post) => createPost.mutateAsync(post)}
           onCreateStory={() => setComposerOpen(true)}
           onUserClick={(userId) => navigate(`/users/${encodeURIComponent(userId)}`)}
-          onStoryReact={(storyId, emoji) => void storiesApi.react(storyId, emoji, idempotencyKey()).then(() => stories.refetch()).catch((error) => toast.error(error instanceof Error ? error.message : 'Unable to react to story'))}
+          onStoryReact={(storyId, reaction) => void storiesApi.react(storyId, reaction, idempotencyKey()).then(() => stories.refetch()).catch((error) => toast.error(error instanceof Error ? error.message : 'Unable to react to story'))}
           onDeletePost={(postId) => deletePost.mutate(postId)}
           onRefresh={() => { void feed.refetch(); }}
           isRefreshing={feed.isRefetching}

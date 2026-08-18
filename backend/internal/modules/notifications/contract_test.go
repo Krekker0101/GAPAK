@@ -13,7 +13,7 @@ func TestHTTPContractRoutes(t *testing.T) {
 	api := app.Group("/api/v1")
 	NewController(nil, validator.New()).RegisterRoutes(api, func(c *fiber.Ctx) error { return c.Next() })
 	want := map[string]string{
-		"GET /api/v1/notifications/":             "list",
+		"GET /api/v1/notifications":              "list",
 		"GET /api/v1/notifications/unread-count": "unread-count",
 		"POST /api/v1/notifications/:id/read":    "read",
 		"POST /api/v1/notifications/read-all":    "read-all",

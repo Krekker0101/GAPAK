@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"fmt"
+	"mime"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
@@ -12,6 +13,10 @@ import (
 
 func BindBody[T any](c *fiber.Ctx, validate *validator.Validate) (T, error) {
 	var payload T
+	mediaType, _, err := mime.ParseMediaType(c.Get(fiber.HeaderContentType))
+	if err != nil || (mediaType != fiber.MIMEApplicationJSON && !strings.HasSuffix(mediaType, "+json")) {
+		return payload, apperrors.New(fiber.StatusUnsupportedMediaType, "request.unsupported_media_type", "Content-Type must be application/json")
+	}
 	if err := c.BodyParser(&payload); err != nil {
 		return payload, apperrors.WithDetails(apperrors.Wrap(err, fiber.StatusBadRequest, "request.invalid_json", "Invalid JSON body"), map[string]any{
 			"reason": err.Error(),

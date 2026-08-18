@@ -16,6 +16,7 @@ export type UserRole =
   | 'user'
   | 'creator'
   | 'moderator'
+  | 'security_analyst'
   | 'admin'
   | 'super_admin';
 
@@ -95,6 +96,14 @@ export interface HttpRequestConfig extends Omit<RequestInit, 'body'> {
   includeResponseMeta?: boolean;
 }
 
+export interface HttpResponse<T> {
+  data: T;
+  headers?: Headers;
+  status: number;
+  requestId: string;
+  meta?: Record<string, unknown>;
+}
+
 // --- Theme Tokens & System ---
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -144,9 +153,4 @@ export interface TelemetryEvent {
 export * from './social';
 export * from './chat';
 export * from './media';
-export * from './live';
-export * from './trustRooms';
-export * from './battles';
 export * from './security';
-export * from './moderation';
-

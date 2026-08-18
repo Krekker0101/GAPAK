@@ -39,10 +39,6 @@ export class AuthManager {
       // missing/misconfigured route on the server, not a real auth failure —
       // treat it the same as "no session" instead of surfacing a hard error
       // or letting callers retry a route that can never succeed.
-      if (error instanceof ApiError && error.status === 404) {
-        tokenManager.clear();
-        return '';
-      }
       throw error;
     }
   }

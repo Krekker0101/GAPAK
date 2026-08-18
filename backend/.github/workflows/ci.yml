@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.24.13'
+  GO_VERSION: '1.26.6'
   IMAGE_NAME: gapak/backend
 
 jobs:
@@ -66,25 +66,38 @@ jobs:
         run: test -z "$(gofmt -l .)"
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.61
+          version: v2.12.2
           args: --timeout=5m
 
       - name: Vet
         run: go vet ./...
 
-      - name: Unit / integration tests
+      - name: Migration check
+        run: ./scripts/ci/check-migrations.sh
+
+      - name: Unit tests
         run: go test ./... -count=1
+
+      - name: Database integration tests
+        env:
+          GAPAK_INTEGRATION_DB_URL: ${{ env.DATABASE_URL }}
+          GAPAK_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: go test -race -p=1 ./internal/workers ./internal/platform/events ./internal/modules/sync ./internal/platform/push -count=1
 
       - name: Race detector
         run: go test -race ./... -count=1
 
       - name: Fuzz smoke tests
-        run: go test ./internal/platform/pagination ./internal/platform/auth ./internal/modules/media ./internal/services/websocket ./internal/platform/logger -run=^$ -fuzz=Fuzz -fuzztime=15s
-
-      - name: Migration check
-        run: ./scripts/ci/check-migrations.sh
+        run: |
+          go test ./internal/services/websocket -run=^$ -fuzz=^FuzzParseSequenceNeverPanics$ -fuzztime=15s
+          go test ./internal/platform/auth -run=^$ -fuzz=^FuzzParseAccessTokenNeverPanics$ -fuzztime=15s
+          go test ./internal/platform/logger -run=^$ -fuzz=^FuzzSanitizeNeverPanics$ -fuzztime=15s
+          go test ./internal/platform/pagination -run=^$ -fuzz=^FuzzDecodeNeverPanics$ -fuzztime=15s
+          go test ./internal/platform/pagination -run=^$ -fuzz=^FuzzCursorRoundTripInvariant$ -fuzztime=15s
+          go test ./internal/modules/media -run=^$ -fuzz=^FuzzNormalizeUploadRequestNeverPanics$ -fuzztime=15s
 
   security:
     name: Security / Dependencies / Secrets
@@ -103,7 +116,7 @@ jobs:
       - name: Go vulnerability scan
         uses: golang/govulncheck-action@v1
         with:
-          go-version-file: go.mod
+          go-version-input: ${{ env.GO_VERSION }}
           go-package: ./...
 
       - name: Secret scan

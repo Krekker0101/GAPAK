@@ -4,15 +4,14 @@ This document is retained for historical continuity. The final production-readin
 
 ## Final migration rules
 
-- Production never selects `mockBackend`.
-- Production never imports `src/devtools/` or `src/devtools/legacy-domains/`.
+- Production contains no runtime mock transport or fixture domain.
 - Unsupported backend functionality is represented by an explicit contract/permission state.
 - Fake crypto, fake OAuth, fake 2FA, fake realtime and fake media are not production paths.
 - Backend authorization is authoritative.
 
 ## Completed final-stage corrections
 
-- Legacy Trust Rooms, Battles and Moderation fixture services moved into `src/devtools/legacy-domains/`.
+- Legacy Trust Rooms, Battles and Moderation fixtures were removed; their production pages now use backend controllers.
 - Production relationship/post/story UI no longer claims unsupported mutations succeeded.
 - Presence no longer fabricates `offline` responses after backend failures.
 - Logout uses the authenticated transport.

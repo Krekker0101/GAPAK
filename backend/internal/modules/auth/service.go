@@ -543,12 +543,12 @@ func (s *Service) HandleOAuthCallback(ctx context.Context, provider, code, codeV
 		return AuthResponse{}, "", err
 	}
 
-	accessToken, err := exchangeCodeForToken(providerCfg, code, codeVerifier)
+	accessToken, err := exchangeCodeForToken(ctx, providerCfg, code, codeVerifier)
 	if err != nil {
 		return AuthResponse{}, "", apperrors.New(400, "auth.oauth_exchange_failed", "Failed to exchange authorization code")
 	}
 
-	userInfo, err := s.fetchOAuthUserInfo(provider, accessToken)
+	userInfo, err := s.fetchOAuthUserInfo(ctx, provider, accessToken)
 	if err != nil {
 		return AuthResponse{}, "", apperrors.New(400, "auth.oauth_userinfo_failed", "Failed to fetch user information from provider")
 	}
@@ -666,14 +666,14 @@ func (s *Service) getOAuthProviderConfig(provider string) (config.OAuthProviderC
 	}
 }
 
-func (s *Service) fetchOAuthUserInfo(provider, accessToken string) (*oauthUserInfo, error) {
+func (s *Service) fetchOAuthUserInfo(ctx context.Context, provider, accessToken string) (*oauthUserInfo, error) {
 	switch strings.ToLower(provider) {
 	case "google":
-		return fetchGoogleUserInfo(accessToken)
+		return fetchGoogleUserInfo(ctx, accessToken)
 	case "github":
-		return fetchGitHubUserInfo(accessToken)
+		return fetchGitHubUserInfo(ctx, accessToken)
 	case "facebook":
-		return fetchFacebookUserInfo(accessToken)
+		return fetchFacebookUserInfo(ctx, accessToken)
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", provider)
 	}

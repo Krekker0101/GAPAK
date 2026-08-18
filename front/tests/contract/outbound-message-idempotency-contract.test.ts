@@ -28,22 +28,13 @@ test('MessageItem exposes pending/sent/failed-equivalent states with a retry aff
 });
 
 test('live-chat messages carry a clientMessageId and a pending/sent/failed status', async () => {
-  const types = await read('src/shared/types/live.ts');
-  assert.match(types, /export type LiveChatMessageStatus = 'pending' \| 'sent' \| 'failed'/);
-  assert.match(types, /clientMessageId\?: string/);
-  assert.match(types, /status\?: LiveChatMessageStatus/);
-
-  const service = await read('src/devtools/live/LiveStreamService.ts');
-  assert.match(service, /clientMessageId: string = crypto\.randomUUID\(\)/);
-  assert.match(service, /find\(\(m\) => m\.clientMessageId === clientMessageId\)/);
-  assert.match(service, /retryChatMessage\(streamId: string, clientMessageId: string\)/);
-
-  const liveChat = await read('src/devtools/live/LiveChat.tsx');
-  assert.match(liveChat, /crypto\.randomUUID\(\)/);
-  assert.match(liveChat, /msg\.status === 'failed'/);
-  // Failure must never clear the input the user already typed: the
-  // `else if (res.cooldownSec)` branch must not call setInputText('').
-  const cooldownBranch = liveChat.slice(liveChat.indexOf('} else if (res.cooldownSec) {'), liveChat.indexOf('};', liveChat.indexOf('} else if (res.cooldownSec) {')));
-  assert.notEqual(cooldownBranch.indexOf('} else if (res.cooldownSec) {'), -1);
-  assert.doesNotMatch(cooldownBranch, /setInputText\(''\)/);
+  const page = await read('src/domains/live/LivePage.tsx');
+  const api = await read('src/domains/live/api/liveApi.ts');
+  assert.match(page, /type LiveChatDeliveryStatus = 'pending' \| 'sent' \| 'failed'/);
+  assert.match(page, /clientMessageId\?: string/);
+  assert.match(page, /deliveryStatus\?: LiveChatDeliveryStatus/);
+  assert.match(page, /const clientMessageId = existingClientMessageId \?\? crypto\.randomUUID\(\)/);
+  assert.match(page, /liveApi\.postChat\(data\.id, body, clientMessageId\)/);
+  assert.match(page, /deliveryStatus: 'failed'/);
+  assert.match(api, /idempotencyKey/);
 });

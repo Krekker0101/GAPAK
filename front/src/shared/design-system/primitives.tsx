@@ -23,7 +23,7 @@ import { PresenceStatus } from '../types';
 // 1. BUTTON & ICON BUTTON
 // ==========================================
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger' | 'accent';
+  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger' | 'accent' | 'gradient';
   size?: 'sm' | 'md' | 'lg';
   isLoading?: boolean;
   leftIcon?: ReactNode;
@@ -61,6 +61,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         'hover:bg-surface-subtle text-secondary',
       danger: 'bg-rose-600 hover:bg-rose-500 text-white shadow-token-sm active:bg-rose-700',
       accent: 'bg-purple-600 hover:bg-purple-500 text-white shadow-token-sm active:bg-purple-700',
+      gradient: 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-token-sm',
     };
 
     const sizes = {
@@ -209,10 +210,11 @@ export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElemen
   label?: string;
   options: SelectOption[];
   error?: string;
+  helperText?: string;
 }
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  ({ label, options, error, className = '', id, ...props }, ref) => {
+  ({ label, options, error, helperText, className = '', id, ...props }, ref) => {
     return (
       <div className="w-full flex flex-col gap-1.5">
         {label && <label className="text-xs font-medium text-secondary dark:text-secondary">{label}</label>}
@@ -233,7 +235,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           </select>
           <ChevronDown className="w-4 h-4 text-tertiary absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
         </div>
-        {error && <p className="text-xs text-rose-500 font-medium">{error}</p>}
+        {error ? <p className="text-xs text-rose-500 font-medium">{error}</p> : helperText ? <p className="text-xs text-muted">{helperText}</p> : null}
       </div>
     );
   }
@@ -299,18 +301,24 @@ export const Switch: React.FC<SwitchProps> = ({ checked, onChange, label, disabl
 export interface AvatarProps {
   src?: string;
   name?: string;
-  size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+  alt?: string;
+  fallback?: string;
+  size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl';
   status?: PresenceStatus;
+  presence?: PresenceStatus;
   className?: string;
 }
 
-export const Avatar: React.FC<AvatarProps> = ({ src, name = 'User', size = 'md', status, className = '' }) => {
+export const Avatar: React.FC<AvatarProps> = ({ src, name, alt, fallback, size = 'md', status, presence, className = '' }) => {
+  const accessibleName = alt || name || fallback || 'User';
+  const resolvedStatus = status || presence;
   const sizeMap = {
     xs: 'w-6 h-6 text-[10px]',
     sm: 'w-8 h-8 text-xs',
     md: 'w-10 h-10 text-sm',
     lg: 'w-12 h-12 text-base',
     xl: 'w-16 h-16 text-lg',
+    '2xl': 'w-24 h-24 text-2xl',
   };
 
   const statusColors = {
@@ -321,7 +329,7 @@ export const Avatar: React.FC<AvatarProps> = ({ src, name = 'User', size = 'md',
     offline: 'bg-surface-stronger',
   };
 
-  const initials = name
+  const initials = (fallback || name || alt || 'User')
     .split(' ')
     .map((n) => n[0])
     .join('')
@@ -331,7 +339,7 @@ export const Avatar: React.FC<AvatarProps> = ({ src, name = 'User', size = 'md',
   return (
     <div className={`relative inline-block flex-shrink-0 ${className}`}>
       {src ? (
-        <img src={src} alt={name} className={`${sizeMap[size]} rounded-[var(--radius-pill)] object-cover ring-1 ring-slate-700/50`} />
+        <img src={src} alt={accessibleName} loading="lazy" decoding="async" className={`${sizeMap[size]} rounded-[var(--radius-pill)] object-cover ring-1 ring-slate-700/50`} />
       ) : (
         <div
           className={`${sizeMap[size]} rounded-[var(--radius-pill)] bg-gradient-to-tr from-indigo-600 to-purple-600 text-white font-semibold flex items-center justify-center ring-1 ring-slate-700/50`}
@@ -339,9 +347,9 @@ export const Avatar: React.FC<AvatarProps> = ({ src, name = 'User', size = 'md',
           {initials}
         </div>
       )}
-      {status && (
+      {resolvedStatus && (
         <span
-          className={`absolute bottom-0 right-0 w-3 h-3 rounded-[var(--radius-pill)] ${statusColors[status]} ring-2 ring-slate-900`}
+          className={`absolute bottom-0 right-0 w-3 h-3 rounded-[var(--radius-pill)] ${statusColors[resolvedStatus]} ring-2 ring-slate-900`}
         />
       )}
     </div>
@@ -350,7 +358,7 @@ export const Avatar: React.FC<AvatarProps> = ({ src, name = 'User', size = 'md',
 
 export interface BadgeProps {
   children: ReactNode;
-  variant?: 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'brand';
+  variant?: 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'brand' | 'accent';
   size?: 'sm' | 'md';
   dot?: boolean;
   className?: string;
@@ -370,6 +378,7 @@ export const Badge: React.FC<BadgeProps> = ({
     danger: 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20',
     info: 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20',
     brand: 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20',
+    accent: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20',
   };
 
   const sizes = {

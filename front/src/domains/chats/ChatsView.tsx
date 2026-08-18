@@ -7,8 +7,8 @@ import { MessageTimeline } from './MessageTimeline';
 import { Composer } from './Composer';
 import { TrustedDevicesModal } from './TrustedDevicesModal';
 import { CreateChatModal } from './CreateChatModal';
-import { Chat, ChatMessage, ChatType, E2EEMessageEnvelope, EncryptedAttachment, MessageContentType, TrustedDevice } from '../../shared/types';
-import type { Message as BackendMessage } from '../../shared/api/backendContracts';
+import { Chat as ClientChat, ChatMessage, E2EEMessageEnvelope, MessageContentType, TrustedDevice as ClientTrustedDevice, UserProfile } from '../../shared/types';
+import type { Chat as BackendChat, ChatMember as BackendChatMember, Message as BackendMessage, TrustedDevice as BackendTrustedDevice } from '../../shared/api/backendContracts';
 import { chatsApi } from './api/chatsApi';
 import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import { e2eeCryptoEngine, DecryptionError } from './crypto/E2EECryptoEngine';
@@ -18,9 +18,36 @@ import { messageSendQueue } from './transport/MessageSendQueue';
 import { useAuth } from '../auth/AuthContext';
 import { useToast } from '../../shared/ux/ToastContext';
 import { PageError, PageLoading } from '../../pages/common';
+import { usersApi } from '../users/api/usersApi';
 
-const normalizeChats = (data: { chats: Chat[] } | Chat[]): Chat[] => Array.isArray(data) ? data : data.chats;
-type ChatSendPayload = { content: string; contentType: MessageContentType; attachments?: EncryptedAttachment[]; voice?: { durationSeconds: number; waveform: number[] }; ephemeralTimerSeconds?: number; replyToMessageId?: string };
+type ChatSendPayload = { content: string; contentType: MessageContentType; replyToMessageId?: string };
+type MessageCursor = { cursor?: string; cursorId?: string };
+type DecryptedMessagesPage = ChatMessage[] & { nextCursor?: string; nextCursorId?: string; hasMore: boolean };
+
+const pageWithMessages = (messages: ChatMessage[], source?: DecryptedMessagesPage): DecryptedMessagesPage => Object.assign(messages, {
+  ...(source?.nextCursor ? { nextCursor: source.nextCursor } : {}),
+  ...(source?.nextCursorId ? { nextCursorId: source.nextCursorId } : {}),
+  hasMore: source?.hasMore ?? false,
+});
+
+const clientRole = (role: string): UserProfile['role'] => {
+  const roles: UserProfile['role'][] = ['guest', 'user', 'creator', 'moderator', 'admin', 'super_admin'];
+  return roles.includes(role as UserProfile['role']) ? role as UserProfile['role'] : 'user';
+};
+
+const mapChat = (chat: BackendChat, members: ClientChat['members'] = []): ClientChat => ({
+  id: chat.id,
+  type: chat.type,
+  title: chat.title ?? `${chat.type.toLowerCase()} chat`,
+  description: chat.description ?? undefined,
+  members,
+  unreadCount: chat.unreadCount,
+  pinnedMessageIds: [],
+  isEncrypted: chat.encryptionProtocol !== 'NONE',
+  ephemeralTimerSeconds: chat.messageTtlSeconds ?? undefined,
+  createdAt: chat.createdAt,
+  updatedAt: chat.updatedAt,
+});
 
 export const ChatsView: React.FC = () => {
   const { conversationId } = useParams<{ conversationId?: string }>();
@@ -58,9 +85,37 @@ export const ChatsView: React.FC = () => {
     queryKey: ['chats'],
     queryFn: ({ signal }) => chatsApi.list({}, signal),
   });
-  const chats = useMemo(() => chatsQuery.data ? normalizeChats(chatsQuery.data) : [], [chatsQuery.data]);
+  const chats = useMemo(() => (chatsQuery.data ?? []).map((chat) => mapChat(chat)), [chatsQuery.data]);
   const activeChatId = conversationId ?? chats[0]?.id;
-  const activeChat = chats.find((chat) => chat.id === activeChatId);
+  const activeBackendChat = (chatsQuery.data ?? []).find((chat) => chat.id === activeChatId);
+
+  const membersQuery = useQuery<ClientChat['members']>({
+    queryKey: ['chat', 'members', activeChatId],
+    enabled: Boolean(activeChatId && user),
+    queryFn: async ({ signal }) => {
+      const members = await chatsApi.members(activeChatId!, {}, signal);
+      return Promise.all(members.filter((member) => !member.leftAt).map(async (member: BackendChatMember) => {
+        const profile = member.userId === user!.id
+          ? user!
+          : await usersApi.profile(member.userId, signal).then((item) => ({
+              id: item.id,
+              username: item.username,
+              displayName: item.displayName,
+              role: clientRole(item.role),
+              isAnonymous: item.isAnonymous,
+            }));
+        return {
+          id: member.id,
+          userId: member.userId,
+          user: profile,
+          role: member.role === 'MODERATOR' ? 'ADMIN' : member.role,
+          joinedAt: member.joinedAt,
+          isMuted: member.isMuted,
+        };
+      }));
+    },
+  });
+  const activeChat = useMemo(() => activeBackendChat ? mapChat(activeBackendChat, membersQuery.data ?? []) : undefined, [activeBackendChat, membersQuery.data]);
 
   useEffect(() => {
     if (!conversationId && chats[0]) navigate(`/chats/${encodeURIComponent(chats[0].id)}`, { replace: true });
@@ -72,7 +127,7 @@ export const ChatsView: React.FC = () => {
     retry: false,
   });
 
-  const devicesQuery = useQuery<TrustedDevice[]>({
+  const devicesQuery = useQuery<BackendTrustedDevice[]>({
     queryKey: ['security', 'devices'],
     queryFn: ({ signal }) => chatsApi.devices(signal),
   });
@@ -86,14 +141,14 @@ export const ChatsView: React.FC = () => {
       identityKeyFingerprint: device.fingerprint,
       signingKeyFingerprint: device.fingerprint,
       preKeysRemaining: 0,
-      verificationStatus: (device.trustStatus === 'VERIFIED' || device.trustStatus === 'UNVERIFIED' || device.trustStatus === 'CHANGED' || device.trustStatus === 'REVOKED' || device.trustStatus === 'UNKNOWN' ? device.trustStatus : 'UNKNOWN') as TrustedDevice['verificationStatus'],
+      verificationStatus: (device.trustStatus === 'VERIFIED' || device.trustStatus === 'UNVERIFIED' || device.trustStatus === 'CHANGED' || device.trustStatus === 'REVOKED' || device.trustStatus === 'UNKNOWN' ? device.trustStatus : 'UNKNOWN') as ClientTrustedDevice['verificationStatus'],
       lastActiveAt: device.lastSeenAt ?? device.createdAt,
       isCurrentDevice: device.id === currentId,
       registeredAt: device.createdAt,
     }));
   }, [devicesQuery.data, currentDeviceQuery.data?.deviceId]);
 
-  const decryptBackendMessage = useCallback(async (message: BackendMessage, chat: Chat): Promise<ChatMessage> => {
+  const decryptBackendMessage = useCallback(async (message: BackendMessage, chat: ClientChat): Promise<ChatMessage> => {
     const member = chat.members.find((candidate) => candidate.userId === message.senderId);
     const sender = member?.user;
     if (!sender) throw new DecryptionError('Message sender is not a member of the chat.');
@@ -114,15 +169,15 @@ export const ChatsView: React.FC = () => {
     });
   }, []);
 
-  const messagesQuery = useInfiniteQuery<ChatMessage[]>({
+  const messagesQuery = useInfiniteQuery({
     queryKey: ['chat', 'messages', activeChatId],
     enabled: Boolean(activeChatId),
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: undefined as MessageCursor | undefined,
     queryFn: async ({ pageParam, signal }) => {
-      const raw = await chatsApi.messages(activeChatId!, { before: pageParam, limit: 50 }, signal);
-      if (!activeChat) return [];
+      const response = await chatsApi.messagesPage(activeChatId!, { cursor: pageParam?.cursor, cursorId: pageParam?.cursorId, before: true, limit: 50 }, signal);
+      if (!activeChat) return pageWithMessages([]);
       const result: ChatMessage[] = [];
-      for (const message of raw) {
+      for (const message of response.data) {
         try {
           result.push(await decryptBackendMessage(message, activeChat));
         } catch (error) {
@@ -141,9 +196,17 @@ export const ChatsView: React.FC = () => {
           });
         }
       }
-      return result;
+      const nextCursor = typeof response.meta?.nextCursor === 'string' ? response.meta.nextCursor : undefined;
+      const nextCursorId = typeof response.meta?.nextCursorId === 'string' ? response.meta.nextCursorId : undefined;
+      return Object.assign(result, {
+        ...(nextCursor ? { nextCursor } : {}),
+        ...(nextCursorId ? { nextCursorId } : {}),
+        hasMore: response.meta?.hasMore === true,
+      });
     },
-    getNextPageParam: () => undefined,
+    getNextPageParam: (lastPage) => lastPage.hasMore && lastPage.nextCursor
+      ? { cursor: lastPage.nextCursor, ...(lastPage.nextCursorId ? { cursorId: lastPage.nextCursorId } : {}) }
+      : undefined,
   });
 
   const messages = useMemo(() => {
@@ -154,14 +217,22 @@ export const ChatsView: React.FC = () => {
     return [...map.values()].sort((a, b) => (a.createdAt ? new Date(a.createdAt).getTime() : Number.POSITIVE_INFINITY) - (b.createdAt ? new Date(b.createdAt).getTime() : Number.POSITIVE_INFINITY));
   }, [messagesQuery.data, user]);
 
+  const pinnedQuery = useQuery({
+    queryKey: ['chat', 'pinned', activeChatId],
+    queryFn: ({ signal }) => chatsApi.pinned(activeChatId!, signal),
+    enabled: Boolean(activeChatId),
+  });
+  const pinnedIds = useMemo(() => new Set((pinnedQuery.data ?? []).map((item) => item.messageId)), [pinnedQuery.data]);
+  const renderedMessages = useMemo(() => messages.map((message) => ({ ...message, pinned: pinnedIds.has(message.id) })), [messages, pinnedIds]);
+
   useEffect(() => {
-    if (!activeChatId) return;
+    if (!activeChatId || !activeChat) return;
     realtimeManager.subscribeToChat(activeChatId);
     return () => { realtimeManager.unsubscribeFromChat(activeChatId); };
   }, [activeChatId]);
 
   useEffect(() => {
-    if (!activeChatId) return;
+    if (!activeChatId || !activeChat) return;
     return realtimeManager.subscribe('chat.message.created', (event) => {
       if (event.kind !== 'event' || event.chatId !== activeChatId) return;
       const backendMessage = event.data as BackendMessage;
@@ -173,7 +244,7 @@ export const ChatsView: React.FC = () => {
             if (!old) return old;
             const first = old.pages[0] ?? [];
             const exists = first.some((item) => item.id === message.id || (message.clientMessageId && item.clientMessageId === message.clientMessageId));
-            return exists ? old : { ...old, pages: [[...first, message], ...old.pages.slice(1)] };
+            return exists ? old : { ...old, pages: [pageWithMessages([...first, message], first), ...old.pages.slice(1)] };
           });
           queryClient.invalidateQueries({ queryKey: ['chats'] });
           receiptsBatcher.markAsDelivered(activeChatId, message.id);
@@ -230,13 +301,13 @@ export const ChatsView: React.FC = () => {
       queryClient.setQueryData(['chat', 'messages', activeChatId], (old: typeof messagesQuery.data | undefined) => {
         if (!old) return old;
         const first = old.pages[0] ?? [];
-        return { ...old, pages: [[...first, optimistic], ...old.pages.slice(1)] };
+        return { ...old, pages: [pageWithMessages([...first, optimistic], first), ...old.pages.slice(1)] };
       });
     },
     onSuccess: async (serverMessage, variables) => {
       if ('kind' in serverMessage && serverMessage.kind === 'queued') return;
       const acknowledged = serverMessage as BackendMessage;
-      outboundByClientMessageId.current.delete(variables.optimistic.clientMessageId);
+      outboundByClientMessageId.current.delete(variables.optimistic.clientMessageId ?? variables.optimistic.id);
       if (!activeChatId || !activeChat) return;
       try {
         const decrypted = await decryptBackendMessage(acknowledged, activeChat);
@@ -245,7 +316,7 @@ export const ChatsView: React.FC = () => {
           return {
             ...old,
             pages: old.pages.map((page, index) => index === 0
-              ? page.map((m) => m.id === acknowledged.id || m.clientMessageId === variables.optimistic.clientMessageId ? decrypted : m)
+              ? pageWithMessages(page.map((m) => m.id === acknowledged.id || m.clientMessageId === variables.optimistic.clientMessageId ? decrypted : m), page)
               : page),
           };
         });
@@ -258,7 +329,7 @@ export const ChatsView: React.FC = () => {
       if (!activeChatId) return;
       queryClient.setQueryData(['chat', 'messages', activeChatId], (old: typeof messagesQuery.data | undefined) => {
         if (!old) return old;
-        return { ...old, pages: old.pages.map((page, index) => index === 0 ? page.map((m) => m.id === variables.optimistic.id ? { ...m, state: 'failed' as const } : m) : page) };
+        return { ...old, pages: old.pages.map((page, index) => index === 0 ? pageWithMessages(page.map((m) => m.id === variables.optimistic.id ? { ...m, state: 'failed' as const } : m), page) : page) };
       });
       toast.error('Message failed', 'The server rejected the message. You can retry it from the message menu.');
     },
@@ -266,10 +337,6 @@ export const ChatsView: React.FC = () => {
 
   const handleSendMessage = useCallback(async (payload: ChatSendPayload) => {
     if (!activeChat || !user) return;
-    if (payload.attachments?.length) {
-      toast.warning('Encrypted attachments are not ready', 'The media key-wrapping/upload contract must be completed before encrypted attachments can be sent safely.');
-      return;
-    }
     const currentDevice = devices.find((device) => device.isCurrentDevice);
     if (!currentDevice) {
       toast.warning('Register this device first', 'Open Trusted Devices and register this browser before sending encrypted messages.');
@@ -299,8 +366,6 @@ export const ChatsView: React.FC = () => {
         state: 'sending',
         createdAt: undefined,
         reactions: [],
-        attachments: payload.attachments,
-        voice: payload.voice,
         replyTo: replyingTo || undefined,
       };
       await sendMutation.mutateAsync({ payload, optimistic, envelope });
@@ -319,7 +384,14 @@ export const ChatsView: React.FC = () => {
 
   const reactMutation = useMutation({ mutationFn: ({ messageId, emoji }: { messageId: string; emoji: string }) => chatsApi.react(messageId, emoji), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chat', 'messages', activeChatId] }) });
   const deleteMutation = useMutation({ mutationFn: (messageId: string) => chatsApi.deleteMessage(messageId), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chat', 'messages', activeChatId] }) });
-  const createMutation = useMutation({ mutationFn: chatsApi.create, onSuccess: (chat) => { queryClient.invalidateQueries({ queryKey: ['chats'] }); navigate(`/chats/${encodeURIComponent(chat.id)}`); toast.success('Conversation created', chat.title || 'New conversation'); } });
+  const pinMutation = useMutation({
+    mutationFn: (messageId: string) => {
+      if (!activeChatId) throw new Error('No conversation selected');
+      return pinnedIds.has(messageId) ? chatsApi.unpin(activeChatId, messageId) : chatsApi.pin(activeChatId, messageId);
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['chat', 'pinned', activeChatId] }),
+  });
+  const createMutation = useMutation({ mutationFn: (input: import('./api/chatsApi').CreateChatRequest) => chatsApi.create(input), onSuccess: (chat) => { queryClient.invalidateQueries({ queryKey: ['chats'] }); navigate(`/chats/${encodeURIComponent(chat.id)}`); toast.success('Conversation created', chat.title || 'New conversation'); } });
   const registerDevice = useMutation({
     mutationFn: () => cryptoApi.registerCurrentDevice('GAPAK Web Device'),
     onSuccess: () => {
@@ -330,33 +402,35 @@ export const ChatsView: React.FC = () => {
     onError: (error) => toast.error('Device registration failed', error instanceof Error ? error.message : 'The backend rejected device registration.'),
   });
   const revokeDevice = useMutation({
-    mutationFn: chatsApi.revokeDevice,
+    mutationFn: (deviceId: string) => chatsApi.revokeDevice(deviceId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['security', 'devices'] });
       void queryClient.invalidateQueries({ queryKey: ['security', 'current-device'] });
     },
   });
-  const verifyDevice = useMutation({ mutationFn: chatsApi.verifyDevice, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['security', 'devices'] }) });
-
   if (chatsQuery.isPending) return <PageLoading label="Loading conversations…" />;
   if (chatsQuery.isError) return <PageError error={chatsQuery.error} onRetry={() => void chatsQuery.refetch()} />;
+  if (activeChatId && membersQuery.isPending) return <PageLoading label="Loading conversation members…" />;
+  if (membersQuery.isError) return <PageError error={membersQuery.error} onRetry={() => void membersQuery.refetch()} />;
+  if (activeChatId && (messagesQuery.isPending || pinnedQuery.isPending)) return <PageLoading label="Loading encrypted messages…" />;
+  if (messagesQuery.isError) return <PageError error={messagesQuery.error} onRetry={() => void messagesQuery.refetch()} />;
+  if (pinnedQuery.isError) return <PageError error={pinnedQuery.error} onRetry={() => void pinnedQuery.refetch()} />;
   if (!activeChat) return <div className="h-full flex items-center justify-center text-muted">No conversation selected.</div>;
 
   return <div className="flex h-full w-full bg-app text-primary overflow-hidden">
     <ChatSidebar chats={chats} activeChatId={activeChat.id} onSelectChat={(id) => navigate(`/chats/${encodeURIComponent(id)}`)} onOpenCreateModal={() => setIsCreateModalOpen(true)} onOpenDevicesModal={() => setIsDevicesModalOpen(true)} wsState={realtimeManager.getState()} />
     <div className="flex-1 flex flex-col min-w-0 h-full relative">
-      <ChatHeader chat={activeChat} typingText={typingUser || undefined} onOpenDevicesModal={() => setIsDevicesModalOpen(true)} onOpenTestModal={() => toast.info('Chat diagnostics are available from the development sandbox only.')} onTogglePinnedList={() => toast.info('Pinned-message mutation is not exposed by the approved backend contract.')} />
+      <ChatHeader chat={activeChat} typingText={typingUser || undefined} onOpenDevicesModal={() => setIsDevicesModalOpen(true)} />
       <MessageTimeline
-        messages={messages}
+        messages={renderedMessages}
         currentUser={user!}
-        pinnedMessages={messages.filter((m) => m.pinned)}
+        pinnedMessages={renderedMessages.filter((m) => m.pinned)}
         hasMoreBefore={Boolean(messagesQuery.hasNextPage)}
         onLoadMoreBefore={() => void messagesQuery.fetchNextPage()}
         onReply={setReplyingTo}
         onReact={(id, emoji) => reactMutation.mutate({ messageId: id, emoji })}
-        onPin={() => toast.info('Pinned-message mutation is not exposed by the approved backend contract.')}
+        onPin={(id) => pinMutation.mutate(id)}
         onDelete={(id) => deleteMutation.mutate(id)}
-        onForward={(m) => toast.info(`Forwarding is awaiting the approved backend contract: ${m.id}`)}
         onRetry={(messageId) => {
           const pending = outboundByClientMessageId.current.get(messageId);
           if (!pending) {
@@ -373,8 +447,7 @@ export const ChatsView: React.FC = () => {
       />
       <Composer chatId={activeChat.id} replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} onSendMessage={handleSendMessage} onTyping={handleTyping} />
     </div>
-    <TrustedDevicesModal isOpen={isDevicesModalOpen} onClose={() => setIsDevicesModalOpen(false)} devices={devices} onRegisterDevice={() => registerDevice.mutate()} isRegistering={registerDevice.isPending} onRevokeDevice={(id) => revokeDevice.mutate(id)} onVerifyDevice={(id) => verifyDevice.mutate(id)} />
-    <CreateChatModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} onCreateChat={(payload) => createMutation.mutate(payload)} />
+    <TrustedDevicesModal isOpen={isDevicesModalOpen} onClose={() => setIsDevicesModalOpen(false)} devices={devices} onRegisterDevice={() => registerDevice.mutate()} isRegistering={registerDevice.isPending} onRevokeDevice={(id) => revokeDevice.mutate(id)} />
+    <CreateChatModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} onCreateChat={(payload) => createMutation.mutate({ type: payload.type, title: payload.title, description: payload.description, trustedChat: true, encryptionProtocol: 'TRUSTED_CHAT', participantIds: payload.memberIds })} />
   </div>;
 };
-

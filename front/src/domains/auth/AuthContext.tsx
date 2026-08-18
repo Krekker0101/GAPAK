@@ -25,6 +25,7 @@ export interface AuthContextValue {
   logoutAllDevices: () => Promise<void>;
   setPresenceStatus: (presence: PresenceStatus) => void;
   clearError: () => void;
+  restoreSession: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -35,19 +36,31 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
  * where backend data is authoritative.
  */
 const toUserRole = (role: string): UserProfile['role'] => {
-  const allowed: readonly UserProfile['role'][] = ['guest', 'user', 'creator', 'moderator', 'admin', 'super_admin'];
-  return allowed.includes(role as UserProfile['role']) ? role as UserProfile['role'] : 'guest';
+  const allowed: readonly UserProfile['role'][] = ['guest', 'user', 'creator', 'moderator', 'security_analyst', 'admin', 'super_admin'];
+  const normalized = role.trim().toLowerCase() as UserProfile['role'];
+  return allowed.includes(normalized) ? normalized : 'guest';
 };
 
-const toUserProfile = (user: BackendAuthUser | BackendProfile): UserProfile => ({
-  id: user.id,
-  username: user.username,
-  displayName: user.displayName,
-  ...(user.email ? { email: user.email } : {}),
-  role: toUserRole(user.role),
-  isAnonymous: user.isAnonymous,
-  twoFactorEnabled: user.twoFactorEnabled,
-});
+const permissionsForRole = (role: UserProfile['role']): string[] => {
+  if (role === 'admin' || role === 'super_admin') return ['*'];
+  if (role === 'moderator') return ['admin:moderation:read'];
+  if (role === 'security_analyst') return ['security:events:read', 'security:sessions:read', 'security:panic:execute'];
+  return [];
+};
+
+const toUserProfile = (user: BackendAuthUser | BackendProfile): UserProfile => {
+  const role = toUserRole(user.role);
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.displayName,
+    ...(user.email ? { email: user.email } : {}),
+    role,
+    permissions: permissionsForRole(role),
+    isAnonymous: user.isAnonymous,
+    twoFactorEnabled: user.twoFactorEnabled,
+  };
+};
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const queryClient = useQueryClient();
@@ -70,10 +83,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setState('AUTHENTICATED');
       telemetry.record('auth', 'session_hydrated', 'info');
     } catch (err) {
-      authManager.clearSession();
       setUser(null);
-      if (err instanceof ApiError && err.status !== 401 && err.status !== 403) setState('AUTH_ERROR');
-      else setState('UNAUTHENTICATED');
+      if (err instanceof ApiError && err.status !== 401 && err.status !== 403) {
+        setError(err);
+        setState('AUTH_ERROR');
+      } else {
+        authManager.clearSession();
+        setState('UNAUTHENTICATED');
+      }
     }
   }, []);
 
@@ -199,7 +216,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const setPresenceStatus = useCallback((presence: PresenceStatus) => { setUser((prev) => prev ? { ...prev, presence } : prev); }, []);
 
   return (
-    <AuthContext.Provider value={{ state, user, error, login, register, anonymousRegister, verify2FA, forgotPassword, resetPassword, startOAuth, logout, logoutAllDevices, setPresenceStatus, clearError: () => setError(null) }}>
+    <AuthContext.Provider value={{ state, user, error, login, register, anonymousRegister, verify2FA, forgotPassword, resetPassword, startOAuth, logout, logoutAllDevices, setPresenceStatus, clearError: () => setError(null), restoreSession: hydrateSession }}>
       {children}
     </AuthContext.Provider>
   );

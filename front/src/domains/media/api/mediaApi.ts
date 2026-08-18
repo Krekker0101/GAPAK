@@ -2,11 +2,6 @@ import { httpClient } from '../../../shared/api/httpClient';
 import type { MediaAsset as BackendMediaAsset, PlaybackGrant as BackendPlaybackGrant, UploadPartGrant, UploadSession as BackendUploadSession } from '../../../shared/api/backendContracts';
 import type { MediaUsageContext, UploadInitResponse } from '../../../shared/types/media';
 
-/** The backend does not expose media-library list/albums endpoints. */
-export class UnsupportedMediaContractError extends Error {
-  constructor(feature: string) { super(`Backend contract does not expose media ${feature}.`); this.name = 'UnsupportedMediaContractError'; }
-}
-
 const mapSession = (response: BackendUploadSession): UploadInitResponse => ({
   uploadId: response.id,
   mode: response.totalParts > 1 ? 'multipart' : 'single',
@@ -18,8 +13,6 @@ const mapSession = (response: BackendUploadSession): UploadInitResponse => ({
 });
 
 export const mediaApi = {
-  list: async (): Promise<never> => { throw new UnsupportedMediaContractError('list'); },
-  albums: async (): Promise<never> => { throw new UnsupportedMediaContractError('albums'); },
   initializeUpload: async (input: { fileName: string; mimeType: string; sizeBytes: number; checksumSha256?: string; context: MediaUsageContext; multipart: boolean; partSizeBytes?: number }, idempotencyKey: string, signal?: AbortSignal): Promise<UploadInitResponse> => {
     const response = await httpClient.post<BackendUploadSession>('/media/upload-sessions', {
       purpose: input.context, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.sizeBytes,

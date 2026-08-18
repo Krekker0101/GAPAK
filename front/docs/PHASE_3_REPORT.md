@@ -155,7 +155,6 @@ Encrypted attachments are explicitly unavailable rather than being simulated. Th
 - `src/domains/chats/TrustedDevicesModal.tsx`
 - `src/domains/security/components/DevicesSection.tsx`
 - `src/domains/chats/Composer.tsx`
-- `src/devtools/mocks/api/messagingMockData.ts`
 
 ### Documentation/tests
 

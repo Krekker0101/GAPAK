@@ -1,15 +1,12 @@
 /** Server-backed cryptographic device registry. */
 import React, { useEffect, useState } from 'react';
-import { Smartphone, Laptop, Key, ShieldCheck, Trash2, Plus, Fingerprint } from 'lucide-react';
+import { Laptop, ShieldCheck, Trash2, Plus, Fingerprint } from 'lucide-react';
 import { Badge, Button, Dialog, Input } from '../../../shared/design-system/primitives';
-import { TrustedDevice } from '../../../shared/types/chat';
+import type { TrustedDevice } from '../../../shared/api/backendContracts';
 import { SecurityService } from '../SecurityService';
-import { deviceCryptoManager } from '../../chats/crypto/DeviceCryptoManager';
-import { e2eeCryptoEngine } from '../../chats/crypto/E2EECryptoEngine';
-import { useAuth } from '../../auth/AuthContext';
+import { cryptoApi } from '../../chats/api/cryptoApi';
 
 export const DevicesSection: React.FC = () => {
-  const { user } = useAuth();
   const [devices, setDevices] = useState<TrustedDevice[]>([]);
   const [isAddDeviceOpen, setIsAddDeviceOpen] = useState(false);
   const [newDeviceName, setNewDeviceName] = useState('');
@@ -18,18 +15,16 @@ export const DevicesSection: React.FC = () => {
 
   useEffect(() => {
     void SecurityService.getDevices().then(setDevices).catch((error) => setLoadError(error instanceof Error ? error.message : 'Unable to load devices.'));
-    return SecurityService.subscribe((state) => setDevices(state.devices));
+    return SecurityService.subscribe((state) => setDevices(state?.devices ?? []));
   }, []);
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newDeviceName.trim() || !user) return;
+    if (!newDeviceName.trim()) return;
     setBusy(true);
     setLoadError(null);
     try {
-      const deviceId = `web_${crypto.randomUUID()}`;
-      await deviceCryptoManager.getIdentity(deviceId);
-      await e2eeCryptoEngine.registerCurrentDevice(deviceId, newDeviceName.trim());
+      await cryptoApi.registerCurrentDevice(newDeviceName.trim());
       await SecurityService.getDevices();
       setNewDeviceName('');
       setIsAddDeviceOpen(false);
@@ -56,17 +51,16 @@ export const DevicesSection: React.FC = () => {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="p-2.5 rounded-[var(--radius-xl)] bg-indigo-500/10 text-indigo-400"><Laptop className="w-5 h-5" /></div>
-                <Badge variant={dev.verificationStatus === 'VERIFIED' ? 'success' : 'warning'} size="sm">{dev.verificationStatus.toUpperCase()}</Badge>
+                <Badge variant={dev.trustStatus === 'VERIFIED' ? 'success' : 'warning'} size="sm">{dev.trustStatus.toUpperCase()}</Badge>
               </div>
               <div>
-                <h3 className="text-sm font-bold text-primary">{dev.name}</h3>
-                <p className="text-[11px] text-tertiary font-mono mt-1 break-all">Identity fingerprint: {dev.identityKeyFingerprint}</p>
-                <p className="text-[11px] text-tertiary font-mono mt-1">Pre-keys: {dev.preKeysRemaining}</p>
+                <h3 className="text-sm font-bold text-primary">{dev.deviceName || 'GAPAK device'}</h3>
+                <p className="text-[11px] text-tertiary font-mono mt-1 break-all">Identity fingerprint: {dev.fingerprint}</p>
               </div>
             </div>
             <div className="pt-3 border-t border-subtle flex items-center justify-between text-[11px] text-tertiary font-mono">
-              <span>{dev.isCurrentDevice ? 'Current device' : new Date(dev.lastActiveAt).toLocaleString()}</span>
-              {!dev.isCurrentDevice && <button onClick={() => void SecurityService.revokeDevice(dev.id)} className="p-1 text-muted hover:text-rose-400" aria-label="Revoke device"><Trash2 className="w-4 h-4" /></button>}
+              <span>{new Date(dev.lastSeenAt ?? dev.createdAt).toLocaleString()}</span>
+              {!dev.revokedAt && <button onClick={() => void SecurityService.revokeDevice(dev.id)} className="p-1 text-muted hover:text-rose-400" aria-label="Revoke device"><Trash2 className="w-4 h-4" /></button>}
             </div>
           </div>
         ))}

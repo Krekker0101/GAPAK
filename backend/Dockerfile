@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-ARG GO_VERSION=1.24.13
+ARG GO_VERSION=1.26.6
 ARG RUNTIME_VERSION=3.21
 
 FROM golang:${GO_VERSION}-alpine AS builder

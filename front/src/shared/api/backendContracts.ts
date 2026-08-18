@@ -433,6 +433,22 @@ export interface Chat {
   updatedAt: string;
 }
 
+export interface ChatMember {
+  id: string;
+  chatId: string;
+  userId: string;
+  role: 'OWNER' | 'ADMIN' | 'MODERATOR' | 'MEMBER';
+  nickname?: string | null;
+  joinedAt: string;
+  leftAt?: string | null;
+  isMuted: boolean;
+  muteUntil?: string | null;
+  lastReadMessageId?: string | null;
+  lastReadAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MessagePreview {
   id: string;
   senderId: string;
@@ -622,4 +638,255 @@ export interface Presence {
   userId: string;
   status: string;
   lastSeenAt?: string | null;
+}
+
+export interface TrustRoom {
+  id: string;
+  ownerId: string;
+  name: string;
+  description?: string;
+  visibility: 'SECRET' | 'PRIVATE';
+  accessMode: 'INVITE_ONLY' | 'REQUEST' | 'OWNER_APPROVAL';
+  requireTwoFactor: boolean;
+  minAccountAgeDays: number;
+  messageRetentionDays?: number | null;
+  expiresAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TrustRoomMember {
+  userId: string;
+  username: string;
+  displayName: string;
+  avatarFileId?: string | null;
+  role: 'OWNER' | 'ADMIN' | 'MODERATOR' | 'MEMBER' | 'AUDITOR';
+  joinedAt: string;
+  trustedUntil?: string | null;
+}
+
+export interface TrustRoomDetail {
+  room: TrustRoom;
+  currentUserRole: TrustRoomMember['role'];
+  memberCount: number;
+  members: TrustRoomMember[];
+}
+
+export interface CreateTrustRoomRequest {
+  name: string;
+  description?: string;
+  visibility: TrustRoom['visibility'];
+  accessMode: TrustRoom['accessMode'];
+  requireTwoFactor: boolean;
+  minAccountAgeDays: number;
+  messageRetentionDays?: number;
+  expiresAt?: string;
+}
+
+export interface BattleParticipant {
+  userId: string;
+  side: string;
+  isCreator: boolean;
+  joinedAt: string;
+}
+
+export interface Battle {
+  id: string;
+  challengerUserId: string;
+  opponentUserId: string;
+  trustRoomId?: string | null;
+  liveStreamId?: string | null;
+  mode: 'DUEL' | 'CREATOR_DUEL' | 'ROOM_DUEL';
+  status: string;
+  title: string;
+  invitationMessage?: string | null;
+  scheduledFor?: string | null;
+  acceptedAt?: string | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  roundDurationSec: number;
+  scoreHostA: number;
+  scoreHostB: number;
+  roundCount: number;
+  participants: BattleParticipant[];
+  createdAt: string;
+}
+
+export interface CreateBattleRequest {
+  opponentUserId: string;
+  trustRoomId?: string;
+  liveStreamId?: string;
+  mode: Battle['mode'];
+  title: string;
+  invitationMessage?: string;
+  scheduledFor?: string;
+  roundDurationSec: number;
+}
+
+export interface PresenceResponse {
+  userId: string;
+  state: string;
+  isOnline: boolean;
+  lastSeenAt?: string | null;
+  lastHeartbeatAt?: string | null;
+  canViewOnlineStatus: boolean;
+  canViewLastSeen: boolean;
+}
+
+export interface ModerationReport {
+  id: string;
+  reporterUserId: string;
+  targetType: 'USER' | 'POST' | 'TRUST_ROOM' | 'MEDIA';
+  targetId: string;
+  reason: 'HARASSMENT' | 'SPAM' | 'ILLEGAL_CONTENT' | 'IMPERSONATION';
+  description?: string;
+  status: string;
+  handledByUserId?: string;
+  resolutionNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SubscriptionCreator {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarFileId?: string;
+  bio?: string;
+  subscriptionType: 'VISIBLE' | 'SILENT';
+  accountType: string;
+  isFollowing: boolean;
+  isFriend: boolean;
+}
+
+export interface SubscriptionRequest {
+  id: string;
+  subscriberId: string;
+  creatorId: string;
+  status: string;
+  message?: string | null;
+  requestedAt: string;
+  respondedAt?: string | null;
+  createdAt: string;
+}
+
+export interface PendingSubscriptionRequests {
+  items: SubscriptionRequest[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+export interface SubscriptionStats {
+  followersCount: number;
+  followingCount: number;
+  pendingRequestsCount: number;
+  visibleSubscriptions: number;
+  silentSubscriptions: number;
+}
+
+export interface SubscriptionNotificationPreferences {
+  creatorId: string;
+  notifyOnPost: boolean;
+  notifyOnStory: boolean;
+  notifyOnLive: boolean;
+  notifyOnClip: boolean;
+  isMuted: boolean;
+}
+
+export interface AdminOverview {
+  totalUsers: number;
+  activeUsers: number;
+  activeSessions: number;
+  newUsers7d: number;
+  admins: number;
+  posts: number;
+  trustRooms: number;
+  securityEvents24h: number;
+  signupTrend: Array<{ date: string; count: number }>;
+  generatedAt: string;
+}
+
+export interface AdminUser {
+  id: string;
+  email?: string | null;
+  username: string;
+  displayName: string;
+  role: string;
+  accountStatus: string;
+  isAnonymous: boolean;
+  twoFactorEnabled: boolean;
+  lastSeenAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminUsersPage {
+  users: AdminUser[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AdminPageSummary {
+  id: string;
+  slug: string;
+  locale: 'en' | 'ru' | 'tj';
+  title: string;
+  status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+  version: number;
+  updatedBy?: string | null;
+  publishedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminContentBlock {
+  id: string;
+  type: string;
+  props: Record<string, unknown>;
+}
+
+export interface AdminManagedPage extends AdminPageSummary {
+  content: { blocks: AdminContentBlock[] };
+}
+
+export interface PushDevice {
+  id: string;
+  deviceId: string;
+  platform: string;
+  provider: string;
+  endpoint?: string;
+  expiration?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt?: string | null;
+}
+
+export interface SyncChange {
+  id: string;
+  entityType: string;
+  operation: string;
+  revision: number;
+  updatedAt?: string | null;
+  deletedAt?: string | null;
+  data?: Record<string, unknown>;
+}
+
+export interface SyncResponse {
+  cursor: string;
+  nextCursor?: string;
+  hasMore: boolean;
+  changes: {
+    users: SyncChange[];
+    connections: SyncChange[];
+    chats: SyncChange[];
+    messages: SyncChange[];
+    notifications: SyncChange[];
+    stories: SyncChange[];
+    subscriptions: SyncChange[];
+    live: SyncChange[];
+  };
+  deleted: Array<{ id: string; entityType: string; revision: number; deletedAt?: string | null }>;
 }

@@ -10,7 +10,7 @@
  * - Offline / Network State Indicator
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -60,6 +60,8 @@ import { useToast } from '../../shared/ux/ToastContext';
 import { chatsApi } from '../../domains/chats/api/chatsApi';
 import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import type { Chat } from '../../shared/api/backendContracts';
+import { PresenceHeartbeat } from '../../domains/platform/PresencePage';
+import { SyncBridge } from '../../shared/sync/SyncBridge';
 
 const normalizeChatsList = (data: { chats: Chat[] } | Chat[]): Chat[] => (Array.isArray(data) ? data : data.chats);
 
@@ -130,6 +132,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const [loadingMoreNotifications, setLoadingMoreNotifications] = useState(false);
   const [notificationMutationError, setNotificationMutationError] = useState(false);
   const notifications = notificationsState.items;
+
+  const reloadNotifications = useCallback(async () => {
+    await notificationsController.loadInitial();
+    setNotificationsState(notificationsController.getState());
+    setUnreadCount(notificationsController.getUnreadCount());
+  }, [notificationsController]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -251,6 +259,8 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
   return (
     <div className="min-h-screen app-shell-surface text-primary flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+      <PresenceHeartbeat />
+      <SyncBridge onNotificationsChanged={reloadNotifications} />
       <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[var(--z-popover)] focus:rounded-[var(--radius-lg)] focus:bg-surface focus:px-4 focus:py-3 focus:text-sm focus:font-semibold focus:text-primary focus:shadow-token-md">Skip to main content</a>
 
       {/* Offline Alert Bar */}

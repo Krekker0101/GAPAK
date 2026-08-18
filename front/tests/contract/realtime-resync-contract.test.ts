@@ -8,7 +8,7 @@ test('RealtimeManager resync uses a formal cursor store and the documented subsc
   const manager = await read('src/shared/realtime/RealtimeManager.ts');
   assert.match(manager, /import \{ RealtimeCursorStore \} from '\.\/CursorStore'/);
   assert.match(manager, /lastAppliedSequence = new RealtimeCursorStore\(\)/);
-  assert.match(manager, /getCursor\(chatId: string\)/, 'the cursor must be introspectable, not just an internal implementation detail');
+  assert.match(manager, /getCursor\(chatId: string\)/);
   assert.match(manager, /const afterSequence = this\.lastAppliedSequence\.get\(chatId\)/);
   assert.match(manager, /data\.after_sequence = afterSequence/);
   assert.match(manager, /type: 'subscribe'/);
@@ -24,18 +24,17 @@ test('CursorStore never regresses and exposes the API RealtimeManager depends on
   assert.match(source, /clear\(\): void/);
 });
 
-test('docs/REALTIME.md documents the cursor model and splits client vs backend guarantees', async () => {
+test('docs/REALTIME.md separates client recovery behavior from backend ownership', async () => {
   const docs = await read('docs/REALTIME.md');
-  assert.match(docs, /## Cursor \/ resync model \(chats\)/);
+  assert.match(docs, /## Ordering and recovery/);
   assert.match(docs, /after_sequence/);
-  assert.match(docs, /### What the client guarantees/);
-  assert.match(docs, /### What the backend must guarantee/);
-  assert.match(docs, /no gaps/);
+  assert.match(docs, /never fabricates missed data/);
+  assert.match(docs, /The backend is responsible/);
 });
 
-test('docs/REALTIME.md contains an explicit TODO for the live-chat resync endpoint instead of a fake guarantee', async () => {
+test('docs/REALTIME.md describes live chat as HTTP-backed without a fake realtime guarantee', async () => {
   const docs = await read('docs/REALTIME.md');
-  assert.match(docs, /TODO — live chat/);
-  assert.match(docs, /src\/devtools\/live\/LiveStreamService\.ts/);
-  assert.match(docs, /does \*\*not\*\* fake a resync/);
+  assert.match(docs, /Live room data and chat history use `\/live-streams` HTTP endpoints/);
+  assert.match(docs, /does not claim realtime delivery for the live domain/);
+  assert.doesNotMatch(docs, /src\/devtools/);
 });

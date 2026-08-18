@@ -167,14 +167,6 @@ const backendMessageToEnvelope = (message: BackendMessage): E2EEMessageEnvelope 
 export class E2EECryptoEngineService {
   async ensureDevice(deviceId: string) { return deviceCryptoManager.getIdentity(deviceId); }
 
-  async rotateCurrentDevice(_deviceId: string) {
-    throw new Error('GAPAK E2EE device rotation requires a backend key-rotation contract; no partial client-only rotation is allowed.');
-  }
-
-  async registerCurrentDevice(_deviceId: string, _deviceName = 'GAPAK Web Device') {
-    throw new Error('GAPAK E2EE device registration requires authenticated backend binding of identity, agreement and signing keys; no partial registration is allowed.');
-  }
-
   async generateSafetyNumber(keyA: string, keyB: string): Promise<string> {
     const digest = await sha256Hex([keyA, keyB].sort().join(':'));
     return `${digest.slice(0, 4)} ${digest.slice(4, 8)} ${digest.slice(8, 12)} ${digest.slice(12, 16)} ${digest.slice(16, 20)} ${digest.slice(20, 24)}`;
@@ -349,10 +341,6 @@ export class E2EECryptoEngineService {
   private async markMessageSeen(deviceId: string, messageId: string): Promise<boolean> {
     const { deviceKeyStore } = await import('../../../shared/security/deviceKeyStore');
     return deviceKeyStore.markMessageSeen(deviceId, messageId);
-  }
-
-  async encryptAttachment(_file: File): Promise<EncryptedAttachment> {
-    throw new Error('Encrypted attachments require a streaming key-wrapping/upload protocol. The current client does not implement one and therefore refuses to fabricate an attachment envelope.');
   }
 }
 

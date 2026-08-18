@@ -106,7 +106,7 @@ class GlobalUploadManager {
   subscribe(listener: Listener) {
     this.listeners.add(listener);
     listener(this.getSessions());
-    return () => this.listeners.delete(listener);
+    return () => { this.listeners.delete(listener); };
   }
 
   private notify() { const snapshot = this.getSessions(); this.listeners.forEach(listener => listener(snapshot)); }

@@ -42,7 +42,7 @@ export class ConnectionManager {
   onStateChange(listener: (state: RealtimeConnectionState) => void): () => void {
     this.listeners.add(listener);
     listener(this.state);
-    return () => this.listeners.delete(listener);
+    return () => { this.listeners.delete(listener); };
   }
 
   dispose(): void {

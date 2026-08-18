@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"net/url"
 	"testing"
 
@@ -29,5 +30,18 @@ func TestBuildAuthorizeURLIncludesPKCE(t *testing.T) {
 	}
 	if q.Get("code_challenge_method") != "S256" {
 		t.Fatalf("expected S256 PKCE")
+	}
+}
+
+func TestReadOAuthResponseBodyIsBounded(t *testing.T) {
+	body := bytes.Repeat([]byte{'x'}, oauthResponseBodyLimit+1)
+	if _, err := readOAuthResponseBody(bytes.NewReader(body)); err == nil {
+		t.Fatal("oversized OAuth response was accepted")
+	}
+
+	want := []byte(`{"ok":true}`)
+	got, err := readOAuthResponseBody(bytes.NewReader(want))
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("body=%q error=%v", got, err)
 	}
 }

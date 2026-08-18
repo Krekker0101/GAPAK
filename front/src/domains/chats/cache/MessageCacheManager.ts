@@ -16,13 +16,17 @@ class MessageCacheManagerService {
   private chatMessagesStore: Map<string, ChatMessage[]> = new Map();
   private draftStore: Map<string, string> = new Map();
 
+  private timestamp(message: ChatMessage): number {
+    return message.createdAt ? new Date(message.createdAt).getTime() : Number.POSITIVE_INFINITY;
+  }
+
   /**
    * Initializes or seeds chat messages
    */
   public setChatMessages(chatId: string, messages: ChatMessage[]) {
     // Sort chronologically ascending
     const sorted = [...messages].sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      (a, b) => this.timestamp(a) - this.timestamp(b)
     );
     this.chatMessagesStore.set(chatId, sorted);
   }
@@ -38,7 +42,7 @@ class MessageCacheManagerService {
       list[index] = { ...list[index], ...message };
     } else {
       list.push(message);
-      list.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      list.sort((a, b) => this.timestamp(a) - this.timestamp(b));
     }
 
     this.chatMessagesStore.set(chatId, list);

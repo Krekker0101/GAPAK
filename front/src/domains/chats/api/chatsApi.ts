@@ -1,6 +1,7 @@
 import { httpClient } from '../../../shared/api/httpClient';
 import type {
   Chat,
+  ChatMember,
   Message,
   SendMessageRequest,
   TrustedDevice,
@@ -9,6 +10,7 @@ import type {
   PreKeyBundle,
   AcceptedResponse,
 } from '../../../shared/api/backendContracts';
+import type { HttpResponse } from '../../../shared/types';
 
 export type { SendMessageRequest };
 
@@ -47,6 +49,12 @@ export const chatsApi = {
     params: { cursor?: string; cursorId?: string; limit?: number; before?: boolean; withReplies?: boolean; withAttachments?: boolean } = {},
     signal?: AbortSignal,
   ) => httpClient.get<Message[]>(`/chats/${encodeURIComponent(chatId)}/messages`, { params, signal }),
+
+  messagesPage: (
+    chatId: string,
+    params: { cursor?: string; cursorId?: string; limit?: number; before?: boolean; withReplies?: boolean; withAttachments?: boolean } = {},
+    signal?: AbortSignal,
+  ) => httpClient.get<HttpResponse<Message[]>>(`/chats/${encodeURIComponent(chatId)}/messages`, { params, signal, includeResponseMeta: true }),
 
   sendMessage: (chatId: string, data: SendMessageRequest) =>
     httpClient.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, data, { idempotencyKey: data.clientMessageId }),
@@ -87,10 +95,6 @@ export const chatsApi = {
   revokeDevice: (deviceId: string, idempotencyKey = crypto.randomUUID()) =>
     httpClient.delete<void>(`/chats/trusted-devices/${encodeURIComponent(deviceId)}`, { idempotencyKey }),
 
-  verifyDevice: async (_deviceId: string): Promise<never> => {
-    throw new Error('The approved backend contract does not expose a client-side device verification endpoint.');
-  },
-
   registerTrustedDevice: (data: RegisterTrustedDeviceRequest, idempotencyKey = crypto.randomUUID()) =>
     httpClient.post<TrustedDevice>('/chats/trusted-devices', data, { idempotencyKey }),
 
@@ -104,8 +108,17 @@ export const chatsApi = {
     httpClient.get<PreKeyBundle>(`/chats/pre-key-bundles/${encodeURIComponent(userId)}`, { signal }),
 
   members: (chatId: string, params: { role?: string; limit?: number; offset?: number } = {}, signal?: AbortSignal) =>
-    httpClient.get<unknown[]>(`/chats/${encodeURIComponent(chatId)}/members`, { params, signal }),
+    httpClient.get<ChatMember[]>(`/chats/${encodeURIComponent(chatId)}/members`, { params, signal }),
 
   typing: (chatId: string, status: 'TYPING' | 'STOPPED', idempotencyKey = crypto.randomUUID()) =>
     httpClient.post<void>(`/chats/${encodeURIComponent(chatId)}/typing`, { status }, { idempotencyKey }),
+
+  pinned: (chatId: string, signal?: AbortSignal) =>
+    httpClient.get<Array<{ id: string; chatId: string; messageId: string; pinnedById: string; pinnedAt: string }>>(`/chats/${encodeURIComponent(chatId)}/pinned`, { signal }),
+
+  pin: (chatId: string, messageId: string, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.post<unknown>(`/chats/${encodeURIComponent(chatId)}/pinned`, { messageId }, { idempotencyKey }),
+
+  unpin: (chatId: string, messageId: string, idempotencyKey = crypto.randomUUID()) =>
+    httpClient.delete<void>(`/chats/${encodeURIComponent(chatId)}/pinned/${encodeURIComponent(messageId)}`, { idempotencyKey }),
 };

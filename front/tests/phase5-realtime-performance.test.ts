@@ -50,10 +50,12 @@ test('offline message queue never silently evicts and continues past permanent f
 });
 
 test('production image media uses lazy loading and metadata-only video preload', () => {
-  const source = read('src/domains/posts/PostMedia.tsx');
-  assert.match(source, /loading="lazy"/);
-  assert.match(source, /decoding="async"/);
-  assert.match(source, /preload="metadata"/);
+  const avatar = read('src/shared/design-system/primitives.tsx');
+  const story = read('src/domains/stories/StoryViewerModal.tsx');
+  const video = read('src/domains/media/VideoPlayer.tsx');
+  assert.match(avatar, /loading="lazy"/);
+  assert.match(story, /decoding="async"/);
+  assert.match(video, /preload="metadata"/);
 });
 
 test('performance audit script enforces a bounded JS chunk budget', () => {

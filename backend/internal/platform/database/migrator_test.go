@@ -56,7 +56,7 @@ func TestIsSchemaOnlyMigration(t *testing.T) {
 	}{
 		{name: "ddl", sql: `CREATE TABLE users(id UUID PRIMARY KEY); ALTER TABLE users ADD COLUMN created_at TIMESTAMPTZ;`, want: true},
 		{name: "insert", sql: `CREATE TABLE seed(id INT); INSERT INTO seed(id) VALUES (1);`, want: false},
-		{name: "update in function body", sql: `CREATE FUNCTION bump() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN UPDATE users SET id = id; RETURN NEW; END $$;`, want: false},
+		{name: "deferred update in function body", sql: `CREATE FUNCTION bump() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN UPDATE users SET id = id; RETURN NEW; END $$;`, want: true},
 		{name: "comment only", sql: `-- UPDATE users SET id = id;
 CREATE TABLE users(id INT);`, want: true},
 	}

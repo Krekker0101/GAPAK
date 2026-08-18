@@ -66,8 +66,7 @@ already past its local TTL) and, if any remain, opens a dialog asking the user
 to re-select each file or discard it. `GlobalUploadCenter` (the floating
 transfer-status widget) and `UploadRecoveryPrompt` are now both mounted in the
 production `AppShell` — previously `GlobalUploadCenter` was wired only into
-the dev-only sandbox (`src/devtools/live/LiveView.tsx`) and was invisible to
-real users.
+an internal-only screen and was invisible to real users.
 
 **Persisted-record lifecycle.** A record is written after each completed
 part and removed when the session reaches `READY` (success), `CANCELLED`
@@ -87,4 +86,3 @@ its persisted record, so it remains resumable after a reload too.
 ## Backend dependency
 
 Encrypted chat attachments still require per-recipient key wrapping, secure upload-session binding, encrypted thumbnail handling and authorized playback/decryption grants.
-

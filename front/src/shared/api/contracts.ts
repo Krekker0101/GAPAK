@@ -2,8 +2,8 @@ import type { ApiErrorResponse, HttpMethod } from '../types';
 import type { Chat, ChatMessage, E2EEMessageEnvelope, PaginatedMessagesResponse, TrustedDevice } from '../types/chat';
 import type { MediaAlbumPage, MediaPage, PlaybackGrantResponse, UploadCompleteResponse, UploadInitResponse } from '../types/media';
 import type { AuditEvent, SecurityAlert, SecurityFlags, UserSession } from '../types/security';
-import type { StoryPage } from '../../domains/stories/api/storiesApi';
-import type { LiveChatMessage, LiveStream } from '../types/live';
+import type { Story } from './backendContracts';
+import type { LiveChatMessage, LiveStream } from './backendContracts';
 import type { UserProfile } from '../types';
 import type { ConnectionRequest, SubscriptionItem } from '../types/social';
 
@@ -25,7 +25,7 @@ export interface ChatMessagePage extends PaginatedMessagesResponse {}
 export interface ChatSendRequest extends E2EEMessageEnvelope {}
 export interface TrustedDeviceListResponse { devices?: TrustedDevice[]; }
 
-export type StoryFeedResponse = StoryPage;
+export type StoryFeedResponse = Story[];
 export type MediaListResponse = MediaPage;
 export type MediaAlbumsResponse = MediaAlbumPage;
 export type MediaUploadInitResponse = UploadInitResponse;
@@ -78,5 +78,3 @@ export interface WebSocketMessageContract {
   sequence?: number;
   clientMessageId?: string;
 }
-
-

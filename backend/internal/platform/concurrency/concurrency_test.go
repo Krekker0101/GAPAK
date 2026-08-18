@@ -21,12 +21,34 @@ func TestETagIsStableAndOpaque(t *testing.T) {
 }
 
 func TestParseIfMatch(t *testing.T) {
-	rev, ok, err := ParseIfMatch(`"gapak:user_profile:42:abc:signature"`)
+	header := ETag("user_profile", "abc", 42, "secret")
+	rev, ok, err := ParseIfMatch(header)
 	if err != nil || !ok || rev != 42 {
 		t.Fatalf("unexpected parse result: %d %v %v", rev, ok, err)
 	}
 	if _, _, err := ParseIfMatch(`"bad"`); err == nil {
 		t.Fatal("invalid If-Match accepted")
+	}
+	if _, _, err := ParseIfMatch(`W/"gapak:user_profile:42:abc:signature"`); err == nil {
+		t.Fatal("weak If-Match accepted")
+	}
+	if _, _, err := ParseIfMatch(strings.Trim(header, `"`)); err == nil {
+		t.Fatal("unquoted If-Match accepted")
+	}
+}
+
+func TestIfMatchSignatureIsBoundToResource(t *testing.T) {
+	header := ETag("user_profile", "abc", 42, "secret")
+	condition, ok, err := parseIfMatchCondition(header)
+	if err != nil || !ok {
+		t.Fatalf("parse generated ETag: %v", err)
+	}
+	if !validIfMatchSignature(condition, "secret") {
+		t.Fatal("generated ETag signature was rejected")
+	}
+	condition.ResourceID = "other"
+	if validIfMatchSignature(condition, "secret") {
+		t.Fatal("signature remained valid for another resource")
 	}
 }
 

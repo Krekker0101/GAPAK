@@ -218,7 +218,10 @@ class HttpClient {
     telemetry.record('api', 'request_succeeded', 'debug', { requestId, status: responseStatus, method });
     const unwrappedData = this.unwrapSuccess<T>(responseData, responseStatus, requestId);
     if (includeResponseMeta) {
-      return { data: unwrappedData, headers: responseHeaders, status: responseStatus, requestId } as T;
+      const meta = responseData && typeof responseData === 'object' && 'meta' in responseData
+        ? (responseData as { meta?: unknown }).meta
+        : undefined;
+      return { data: unwrappedData, headers: responseHeaders, status: responseStatus, requestId, ...(meta && typeof meta === 'object' ? { meta } : {}) } as T;
     }
     return unwrappedData;
   }

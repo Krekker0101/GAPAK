@@ -6,6 +6,8 @@ export type RealtimeConnectionState =
   | 'CLOSED';
 
 export type BackendRealtimeType =
+  | 'subscribe'
+  | 'unsubscribe'
   | 'history'
   | 'chat.message.created'
   | 'chat.message.edited'

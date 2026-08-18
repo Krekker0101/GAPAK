@@ -3,7 +3,7 @@ import { ShieldCheck, ShieldAlert, Laptop, KeyRound, Clock } from 'lucide-react'
 import type { BackendSession, DeviceAlert, AuditEvent, SecurityFlag } from '../../../shared/api/backendContracts';
 import { Badge, Button } from '../../../shared/design-system/primitives';
 
-interface Props { sessions: BackendSession[]; twoFactor: { enabled: boolean }; alerts: DeviceAlert[]; auditEvents: AuditEvent[]; flags: SecurityFlag[]; onNavigateTab: (tab: string) => void; onRevokeOthers: () => void; }
+interface Props { sessions: BackendSession[]; twoFactor: { enabled: boolean }; alerts: DeviceAlert[]; auditEvents: AuditEvent[]; flags: SecurityFlag[]; onNavigateTab: (tab: 'sessions' | 'alerts' | 'audit') => void; onRevokeOthers: () => void; }
 
 export const OverviewSection: React.FC<Props> = ({ sessions, twoFactor, alerts, auditEvents, flags, onNavigateTab, onRevokeOthers }) => {
   const current = sessions.find((s) => s.isCurrent);

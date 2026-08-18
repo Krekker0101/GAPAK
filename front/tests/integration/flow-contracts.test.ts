@@ -41,5 +41,5 @@ test('trusted-device registration consumes the backend direct response shape', (
 test('device lifecycle exposes the backend trusted-device register/list/revoke/pre-key boundaries', () => {
   const s=read('src/domains/chats/api/chatsApi.ts')+read('src/domains/chats/api/cryptoApi.ts');
   for(const token of ['registerTrustedDevice','trustedDevices','revokeTrustedDevice','publishPreKey']) assert.match(s,new RegExp(token));
-  assert.match(s,/does not expose a client-side device verification endpoint/);
+  assert.doesNotMatch(s,/verifyDevice|\/verify/);
 });

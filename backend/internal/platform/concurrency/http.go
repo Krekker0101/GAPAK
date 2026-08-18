@@ -24,14 +24,20 @@ func StoreFromFiber(c *fiber.Ctx) *Store {
 }
 
 func PrepareMutation(c *fiber.Ctx) error {
-	rev, ok, err := ParseIfMatch(c.Get("If-Match"))
+	condition, ok, err := parseIfMatchCondition(c.Get("If-Match"))
 	if err != nil {
 		return err
 	}
 	if ok {
-		ctx := WithExpectedRevision(c.UserContext(), rev)
+		ctx := withIfMatchCondition(c.UserContext(), condition)
+		if !condition.Any {
+			ctx = WithExpectedRevision(ctx, condition.Revision)
+		}
 		if store := StoreFromFiber(c); store != nil {
 			ctx = WithSecret(ctx, string(store.secret))
+			if !condition.Any && !validIfMatchSignature(condition, string(store.secret)) {
+				return invalidIfMatch("Invalid If-Match signature")
+			}
 		}
 		c.SetUserContext(ctx)
 	}
