@@ -26,6 +26,10 @@ export interface CreateChatRequest {
   metadata?: Record<string, unknown>;
 }
 
+export type EditMessageRequest = Pick<SendMessageRequest,
+  'senderDeviceId' | 'senderKeyId' | 'ciphertext' | 'nonce' | 'authenticationTag' | 'metadata' | 'encryptionProtocol' |
+  'encryptionAlgorithm' | 'associatedData' | 'ratchetCounter' | 'keyEnvelopes'>;
+
 export const chatsApi = {
   list: (
     params: { type?: Chat['type']; limit?: number; offset?: number; unreadOnly?: boolean; pinnedOnly?: boolean } = {},
@@ -64,7 +68,7 @@ export const chatsApi = {
 
   editMessage: (
     messageId: string,
-    data: Partial<Pick<SendMessageRequest, 'ciphertext' | 'nonce' | 'authenticationTag' | 'metadata' | 'attachments'>>,
+    data: EditMessageRequest,
     idempotencyKey = crypto.randomUUID(),
   ) => httpClient.patch<Message>(`/chats/messages/${encodeURIComponent(messageId)}`, data, { idempotencyKey }),
 

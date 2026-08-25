@@ -36,7 +36,7 @@ import (
 	"github.com/gapak/backend/internal/services/websocket"
 )
 
-func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
+func registerModules(ctx context.Context, app *fiber.App, deps Dependencies) *websocket.Service {
 	api := app.Group("/api/v1")
 	concurrencyStore := concurrency.NewStore(deps.DB, deps.Config.Security.JWTAccessSecret)
 	app.Use(func(c *fiber.Ctx) error { concurrency.WithStore(c, concurrencyStore); return c.Next() })
@@ -111,6 +111,7 @@ func registerModules(app *fiber.App, deps Dependencies) *websocket.Service {
 		RegisterRoutes(api, requireAuth)
 	chatsRepo := chats.NewRepository(deps.DB)
 	chatsService := chats.NewService(chatsRepo)
+	chatsService.StartCleanup(ctx, time.Minute)
 	chats.NewController(chatsService, deps.Validate).
 		RegisterRoutes(api, requireAuth)
 

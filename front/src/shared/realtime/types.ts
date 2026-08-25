@@ -14,7 +14,12 @@ export type BackendRealtimeType =
   | 'chat.message.edited'
   | 'chat.message.deleted'
   | 'chat.read_receipt'
+  | 'chat.delivery_receipt'
+  | 'chat.reaction.changed'
+  | 'chat.pin.changed'
   | 'chat.typing'
+  | 'typing'
+  | 'read_receipt'
   | 'ack'
   | 'read_receipt_ack'
   | 'delivery_ack'
@@ -73,6 +78,9 @@ export interface ChatRealtimeEvent {
     | 'chat.message.edited'
     | 'chat.message.deleted'
     | 'chat.read_receipt'
+    | 'chat.delivery_receipt'
+    | 'chat.reaction.changed'
+    | 'chat.pin.changed'
     | 'chat.typing';
   chatId?: string;
   messageId?: string;

@@ -46,6 +46,14 @@ type Service struct {
 	repo *Repository
 }
 
+type messageAuxiliary struct {
+	reactions        map[string][]*model.Reaction
+	readReceipts     map[string][]*model.ReadReceipt
+	deliveryReceipts map[string][]*model.DeliveryReceipt
+	pinned           map[string]bool
+	versionCounts    map[string]int
+}
+
 func NewService(repo *Repository) *Service {
 	return &Service{repo: repo}
 }
@@ -334,6 +342,10 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 	if err := s.repo.AssertChatMembership(ctx, chatID, userID); err != nil {
 		return MessageResponse{}, err
 	}
+	chat, err := s.repo.GetChat(ctx, chatID)
+	if err != nil {
+		return MessageResponse{}, err
+	}
 	if strings.TrimSpace(req.Content) != "" {
 		return MessageResponse{}, apperrors.New(400, "chats.plaintext_rejected", "Plaintext message content is not accepted by the server")
 	}
@@ -343,6 +355,15 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 	}
 	if err := validateE2EECiphertext(req); err != nil {
 		return MessageResponse{}, err
+	}
+	if strings.TrimSpace(req.ReplyToMessageID) != "" {
+		repliedMessage, err := s.repo.GetMessage(ctx, req.ReplyToMessageID)
+		if err != nil {
+			return MessageResponse{}, err
+		}
+		if repliedMessage.ChatID != chatID {
+			return MessageResponse{}, apperrors.ErrNotFound
+		}
 	}
 	if len(req.KeyEnvelopes) == 0 {
 		return MessageResponse{}, apperrors.New(400, "chats.key_envelopes_required", "Encrypted messages require per-device key envelopes")
@@ -363,9 +384,18 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		return MessageResponse{}, err
 	}
 
+	var effectiveTTL *int
+	if chat.MessageTTLSeconds != nil {
+		value := *chat.MessageTTLSeconds
+		effectiveTTL = &value
+	}
+	if req.ExpiresInSeconds != nil && (effectiveTTL == nil || *req.ExpiresInSeconds < *effectiveTTL) {
+		value := *req.ExpiresInSeconds
+		effectiveTTL = &value
+	}
 	var expiresAt *time.Time
-	if req.ExpiresInSeconds != nil {
-		value := time.Now().UTC().Add(time.Duration(*req.ExpiresInSeconds) * time.Second)
+	if effectiveTTL != nil {
+		value := time.Now().UTC().Add(time.Duration(*effectiveTTL) * time.Second)
 		expiresAt = &value
 	}
 
@@ -433,7 +463,7 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		if !same {
 			return MessageResponse{}, apperrors.New(409, "chats.e2ee.replay_conflict", "clientMessageId was already used for a different encrypted message")
 		}
-		return s.toMessageResponse(ctx, createdMessage, userID, nil, nil)
+		return s.toMessageResponse(ctx, createdMessage, userID, nil, nil, nil)
 	}
 	if len(req.KeyEnvelopes) > 0 {
 		envelopes, err := s.toMessageKeyModels(createdMessage.ID, req.SenderDeviceID, req.KeyEnvelopes)
@@ -472,7 +502,9 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		}
 	}
 
-	// Mark as delivered to all other members in the same transaction.
+	// Resolve recipients for notifications. Delivery receipts are created only
+	// after a recipient client actually acknowledges the message; persisting a
+	// receipt here would incorrectly mark offline devices as delivered.
 	members, err := repoTx.ListChatMembers(ctx, chatID, "", 100, 0)
 	if err != nil {
 		return MessageResponse{}, err
@@ -483,12 +515,6 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 			recipientIDs = append(recipientIDs, member.UserID)
 		}
 	}
-	if len(recipientIDs) > 0 {
-		if err := repoTx.MarkMessagesAsDeliveredBatch(ctx, createdMessage.ID, recipientIDs); err != nil {
-			return MessageResponse{}, err
-		}
-	}
-
 	eventID := uuid.NewString()
 	if err := repoTx.AppendChatMessageRealtimeEvent(ctx, eventID, createdMessage.ChatID, createdMessage.ID, createdMessage.SenderID, nullableStringValue(createdMessage.SenderDeviceID), createdMessage.ClientMessageID, createdMessage.SequenceNumber); err != nil {
 		return MessageResponse{}, err
@@ -508,7 +534,7 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		return MessageResponse{}, err
 	}
 
-	return s.toMessageResponse(ctx, createdMessage, userID, nil, nil)
+	return s.toMessageResponse(ctx, createdMessage, userID, nil, nil, nil)
 }
 
 func (s *Service) GetMessage(ctx context.Context, messageID, userID string) (MessageResponse, error) {
@@ -521,7 +547,7 @@ func (s *Service) GetMessage(ctx context.Context, messageID, userID string) (Mes
 		return MessageResponse{}, err
 	}
 
-	return s.toMessageResponse(ctx, message, userID, nil, nil)
+	return s.toMessageResponse(ctx, message, userID, nil, nil, nil)
 }
 
 func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req EditMessageRequest) (MessageResponse, error) {
@@ -534,8 +560,8 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 	if message.SenderID != userID {
 		return MessageResponse{}, apperrors.ErrForbidden
 	}
-	if message.SenderDeviceID == nil {
-		return MessageResponse{}, apperrors.New(403, "chats.e2ee.sender_device_required", "Encrypted messages must be bound to a trusted sender device")
+	if req.SenderKeyID != req.SenderDeviceID+":identity:v1" {
+		return MessageResponse{}, apperrors.New(400, "chats.e2ee.invalid_sender_key_id", "senderKeyId does not match the editing sender device")
 	}
 	// Can only edit within 24 hours
 	if time.Since(message.SentAt) > 24*time.Hour {
@@ -568,7 +594,7 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 
 	repoTx := s.repo.WithTx(tx)
 
-	device, err := repoTx.GetTrustedDeviceForUpdate(ctx, *message.SenderDeviceID)
+	device, err := repoTx.GetTrustedDeviceForUpdate(ctx, req.SenderDeviceID)
 	if err != nil {
 		return MessageResponse{}, err
 	}
@@ -593,6 +619,8 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 	}
 
 	updates := map[string]interface{}{
+		"sender_device_id":     req.SenderDeviceID,
+		"sender_key_id":        req.SenderKeyID,
 		"ciphertext":           req.Ciphertext,
 		"nonce":                req.Nonce,
 		"content":              nil,
@@ -616,15 +644,11 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 		return MessageResponse{}, err
 	}
 	if len(req.KeyEnvelopes) > 0 {
-		senderDeviceID := ""
-		if message.SenderDeviceID != nil {
-			senderDeviceID = *message.SenderDeviceID
-		}
-		envelopes, err := s.toMessageKeyModels(messageID, senderDeviceID, req.KeyEnvelopes)
+		envelopes, err := s.toMessageKeyModels(messageID, req.SenderDeviceID, req.KeyEnvelopes)
 		if err != nil {
 			return MessageResponse{}, err
 		}
-		if err := repoTx.CreateMessageKeyEnvelopes(ctx, envelopes); err != nil {
+		if err := repoTx.ReplaceMessageKeyEnvelopes(ctx, messageID, envelopes); err != nil {
 			return MessageResponse{}, err
 		}
 	}
@@ -653,7 +677,7 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 		return MessageResponse{}, err
 	}
 
-	return s.toMessageResponse(ctx, updatedMessage, userID, nil, nil)
+	return s.toMessageResponse(ctx, updatedMessage, userID, nil, nil, nil)
 }
 
 func (s *Service) DeleteMessage(ctx context.Context, messageID, userID string, req DeleteMessageRequest) error {
@@ -668,7 +692,7 @@ func (s *Service) DeleteMessage(ctx context.Context, messageID, userID string, r
 	}
 
 	if !req.DeleteForEveryone {
-		return nil
+		return apperrors.New(400, "chats.delete_for_me_unsupported", "Per-user deletion is not supported; the message was not deleted")
 	}
 	tx, err := s.repo.Begin(ctx)
 	if err != nil {
@@ -721,9 +745,13 @@ func (s *Service) GetMessagesAfterSequence(ctx context.Context, chatID, userID s
 	if err != nil {
 		return nil, err
 	}
+	auxiliary, err := s.loadMessageAuxiliary(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	response := make([]MessageResponse, 0, len(messages))
 	for _, message := range messages {
-		item, err := s.toMessageResponse(ctx, message, userID, attachmentMap[message.ID], keyEnvelopeMap[message.ID])
+		item, err := s.toMessageResponse(ctx, message, userID, attachmentMap[message.ID], keyEnvelopeMap[message.ID], auxiliary)
 		if err != nil {
 			return nil, err
 		}
@@ -767,10 +795,14 @@ func (s *Service) GetMessages(ctx context.Context, chatID, userID string, query 
 	if err != nil {
 		return nil, nil, err
 	}
+	auxiliary, err := s.loadMessageAuxiliary(ctx, messageIDs)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	response := make([]MessageResponse, 0, len(messages))
 	for _, message := range messages {
-		msgResp, err := s.toMessageResponse(ctx, message, userID, attachmentMap[message.ID], keyEnvelopeMap[message.ID])
+		msgResp, err := s.toMessageResponse(ctx, message, userID, attachmentMap[message.ID], keyEnvelopeMap[message.ID], auxiliary)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -845,6 +877,13 @@ func (s *Service) AddReaction(ctx context.Context, messageID, userID string, req
 	if err != nil {
 		return ReactionResponse{}, err
 	}
+	realtimeEventID := uuid.NewString()
+	if err := repoTx.AppendChatRealtimeEvent(ctx, realtimeEventID, message.ChatID, "chat.reaction.changed", map[string]any{
+		"eventId": realtimeEventID, "type": "chat.reaction.changed", "chatId": message.ChatID,
+		"messageId": message.ID, "data": map[string]any{"messageId": message.ID},
+	}); err != nil {
+		return ReactionResponse{}, err
+	}
 	recipients, err := repoTx.ListChatMemberIDs(ctx, message.ChatID)
 	if err != nil {
 		return ReactionResponse{}, err
@@ -880,6 +919,13 @@ func (s *Service) RemoveReaction(ctx context.Context, messageID, userID string, 
 	defer tx.Rollback(ctx)
 	repoTx := s.repo.WithTx(tx)
 	if err := repoTx.RemoveReaction(ctx, messageID, userID, req.ReactionType); err != nil {
+		return err
+	}
+	realtimeEventID := uuid.NewString()
+	if err := repoTx.AppendChatRealtimeEvent(ctx, realtimeEventID, message.ChatID, "chat.reaction.changed", map[string]any{
+		"eventId": realtimeEventID, "type": "chat.reaction.changed", "chatId": message.ChatID,
+		"messageId": message.ID, "data": map[string]any{"messageId": message.ID},
+	}); err != nil {
 		return err
 	}
 	recipients, err := repoTx.ListChatMemberIDs(ctx, message.ChatID)
@@ -953,8 +999,15 @@ func (s *Service) MarkAsRead(ctx context.Context, chatID, userID string, req Mar
 	if err != nil {
 		return ReadReceiptResponse{}, err
 	}
-	updates := map[string]interface{}{"last_read_message_id": req.MessageID, "last_read_at": time.Now().UTC()}
-	if _, err := repoTx.UpdateChatMember(ctx, message.ChatID, userID, updates); err != nil {
+	if err := repoTx.AdvanceChatMemberReadCursor(ctx, message.ChatID, userID, req.MessageID, receipt.ReadAt); err != nil {
+		return ReadReceiptResponse{}, err
+	}
+	realtimeEventID := uuid.NewString()
+	if err := repoTx.AppendChatRealtimeEvent(ctx, realtimeEventID, message.ChatID, "chat.read_receipt", map[string]any{
+		"eventId": realtimeEventID, "type": "chat.read_receipt", "chatId": message.ChatID,
+		"messageId": message.ID, "senderId": userID,
+		"data": map[string]any{"id": receipt.ID, "messageId": receipt.MessageID, "userId": receipt.UserID, "readAt": receipt.ReadAt},
+	}); err != nil {
 		return ReadReceiptResponse{}, err
 	}
 	recipients, err := repoTx.ListChatMemberIDs(ctx, message.ChatID)
@@ -1068,21 +1121,40 @@ func (s *Service) PublishPreKey(ctx context.Context, userID, deviceID string, re
 }
 
 func (s *Service) GetPreKeyBundle(ctx context.Context, userID string) (PreKeyBundleResponse, error) {
-	device, signedPreKey, oneTimePreKey, err := s.repo.GetPreKeyBundle(ctx, userID)
+	bundles, err := s.repo.GetPreKeyBundles(ctx, userID)
 	if err != nil {
 		return PreKeyBundleResponse{}, err
 	}
+	first := bundles[0]
 	response := PreKeyBundleResponse{
-		UserID: userID,
-		Device: s.toTrustedDeviceResponse(device),
+		UserID:  userID,
+		Device:  s.toTrustedDeviceResponse(first.Device),
+		Devices: make([]PreKeyDeviceBundleResponse, 0, len(bundles)),
 	}
-	if signedPreKey != nil {
-		value := s.toDevicePreKeyResponse(signedPreKey)
+	if first.SignedPreKey != nil {
+		value := s.toDevicePreKeyResponse(first.SignedPreKey)
 		response.SignedPreKey = &value
 	}
-	if oneTimePreKey != nil {
-		value := s.toDevicePreKeyResponse(oneTimePreKey)
+	if first.OneTimePreKey != nil {
+		value := s.toDevicePreKeyResponse(first.OneTimePreKey)
 		response.OneTimePreKey = &value
+	}
+	for _, bundle := range bundles {
+		item := PreKeyDeviceBundleResponse{
+			ID: bundle.Device.ID, UserID: bundle.Device.UserID,
+			IdentityKeyPublic: bundle.Device.IdentityKeyPublic,
+			SigningKeyPublic:  bundle.Device.SigningKeyPublic,
+			TrustStatus:       bundle.Device.TrustStatus, KeyVersion: 1,
+		}
+		if bundle.SignedPreKey != nil {
+			value := s.toDevicePreKeyResponse(bundle.SignedPreKey)
+			item.SignedPreKey = &value
+		}
+		if bundle.OneTimePreKey != nil {
+			value := s.toDevicePreKeyResponse(bundle.OneTimePreKey)
+			item.OneTimePreKey = &value
+		}
+		response.Devices = append(response.Devices, item)
 	}
 	return response, nil
 }
@@ -1097,8 +1169,25 @@ func (s *Service) MarkAsDelivered(ctx context.Context, messageID, userID string)
 		return DeliveryReceiptResponse{}, err
 	}
 
-	receipt, err := s.repo.MarkAsDelivered(ctx, messageID, userID)
+	tx, err := s.repo.Begin(ctx)
 	if err != nil {
+		return DeliveryReceiptResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+	repoTx := s.repo.WithTx(tx)
+	receipt, err := repoTx.MarkAsDelivered(ctx, messageID, userID)
+	if err != nil {
+		return DeliveryReceiptResponse{}, err
+	}
+	realtimeEventID := uuid.NewString()
+	if err := repoTx.AppendChatRealtimeEvent(ctx, realtimeEventID, message.ChatID, "chat.delivery_receipt", map[string]any{
+		"eventId": realtimeEventID, "type": "chat.delivery_receipt", "chatId": message.ChatID,
+		"messageId": message.ID, "senderId": userID,
+		"data": map[string]any{"id": receipt.ID, "messageId": receipt.MessageID, "userId": receipt.UserID, "deliveredAt": receipt.DeliveredAt},
+	}); err != nil {
+		return DeliveryReceiptResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return DeliveryReceiptResponse{}, err
 	}
 
@@ -1144,9 +1233,31 @@ func (s *Service) PinMessage(ctx context.Context, chatID, userID string, req Pin
 	if err := s.repo.AssertChatMembership(ctx, chatID, userID); err != nil {
 		return PinnedMessage{}, err
 	}
-
-	pinned, err := s.repo.PinMessage(ctx, chatID, req.MessageID, userID)
+	message, err := s.repo.GetMessage(ctx, req.MessageID)
 	if err != nil {
+		return PinnedMessage{}, err
+	}
+	if message.ChatID != chatID {
+		return PinnedMessage{}, apperrors.ErrNotFound
+	}
+	tx, err := s.repo.Begin(ctx)
+	if err != nil {
+		return PinnedMessage{}, err
+	}
+	defer tx.Rollback(ctx)
+	repoTx := s.repo.WithTx(tx)
+	pinned, err := repoTx.PinMessage(ctx, chatID, req.MessageID, userID)
+	if err != nil {
+		return PinnedMessage{}, err
+	}
+	eventID := uuid.NewString()
+	if err := repoTx.AppendChatRealtimeEvent(ctx, eventID, chatID, "chat.pin.changed", map[string]any{
+		"eventId": eventID, "type": "chat.pin.changed", "chatId": chatID, "messageId": req.MessageID,
+		"data": map[string]any{"messageId": req.MessageID, "pinned": true, "pinnedById": userID},
+	}); err != nil {
+		return PinnedMessage{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return PinnedMessage{}, err
 	}
 
@@ -1157,8 +1268,30 @@ func (s *Service) UnpinMessage(ctx context.Context, chatID, userID string, req U
 	if err := s.repo.AssertChatMembership(ctx, chatID, userID); err != nil {
 		return err
 	}
-
-	return s.repo.UnpinMessage(ctx, chatID, req.MessageID)
+	message, err := s.repo.GetMessage(ctx, req.MessageID)
+	if err != nil {
+		return err
+	}
+	if message.ChatID != chatID {
+		return apperrors.ErrNotFound
+	}
+	tx, err := s.repo.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	repoTx := s.repo.WithTx(tx)
+	if err := repoTx.UnpinMessage(ctx, chatID, req.MessageID); err != nil {
+		return err
+	}
+	eventID := uuid.NewString()
+	if err := repoTx.AppendChatRealtimeEvent(ctx, eventID, chatID, "chat.pin.changed", map[string]any{
+		"eventId": eventID, "type": "chat.pin.changed", "chatId": chatID, "messageId": req.MessageID,
+		"data": map[string]any{"messageId": req.MessageID, "pinned": false, "pinnedById": userID},
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Service) GetPinnedMessages(ctx context.Context, chatID, userID string) ([]PinnedMessage, error) {
@@ -1191,6 +1324,29 @@ func (s *Service) CleanupExpiredMessages(ctx context.Context) error {
 	return s.repo.CleanupExpiredMessages(ctx)
 }
 
+func (s *Service) StartCleanup(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	go func() {
+		cleanup := func() {
+			_ = s.CleanupExpiredTypingSessions(ctx)
+			_ = s.CleanupExpiredMessages(ctx)
+		}
+		cleanup()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cleanup()
+			}
+		}
+	}()
+}
+
 // ============================================================================
 // RESPONSE CONVERTERS
 // ============================================================================
@@ -1201,17 +1357,14 @@ func (s *Service) toChatResponse(ctx context.Context, chat *model.Chat, userID s
 		member = &model.ChatMember{IsMuted: false}
 	}
 
-	// Calculate unread count
+	const unreadQuery = `
+		SELECT COUNT(*) FROM messages m
+		WHERE m.chat_id = $1 AND m.sent_at >= $2 AND m.sender_id != $4
+		  AND m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at > NOW())
+		  AND m.sequence_number > COALESCE((SELECT read_message.sequence_number FROM messages read_message WHERE read_message.id = $3), 0)`
 	unreadCount := int64(0)
-	if member.LastReadAt != nil {
-		const query = `
-			SELECT COUNT(*) FROM messages
-			WHERE chat_id = $1 AND sent_at > $2 AND sender_id != $3 AND deleted_at IS NULL
-		`
-		err := s.repo.db.QueryRow(ctx, query, chat.ID, member.LastReadAt, userID).Scan(&unreadCount)
-		if err != nil {
-			unreadCount = 0
-		}
+	if err := s.repo.db.QueryRow(ctx, unreadQuery, chat.ID, member.JoinedAt, member.LastReadMessageID, userID).Scan(&unreadCount); err != nil {
+		unreadCount = 0
 	}
 
 	return ChatResponse{
@@ -1235,7 +1388,34 @@ func (s *Service) toChatResponse(ctx context.Context, chat *model.Chat, userID s
 	}, nil
 }
 
-func (s *Service) toMessageResponse(ctx context.Context, message *model.Message, viewerUserID string, attachments []*model.Attachment, keyEnvelopes []*model.MessageKey) (MessageResponse, error) {
+func (s *Service) loadMessageAuxiliary(ctx context.Context, messageIDs []string) (*messageAuxiliary, error) {
+	reactions, err := s.repo.GetReactionsByMessageIDs(ctx, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	readReceipts, err := s.repo.GetReadReceiptsByMessageIDs(ctx, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	deliveryReceipts, err := s.repo.GetDeliveryReceiptsByMessageIDs(ctx, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	pinned, err := s.repo.GetPinnedMessageIDs(ctx, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	versionCounts, err := s.repo.GetMessageVersionCounts(ctx, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	return &messageAuxiliary{
+		reactions: reactions, readReceipts: readReceipts,
+		deliveryReceipts: deliveryReceipts, pinned: pinned, versionCounts: versionCounts,
+	}, nil
+}
+
+func (s *Service) toMessageResponse(ctx context.Context, message *model.Message, viewerUserID string, attachments []*model.Attachment, keyEnvelopes []*model.MessageKey, auxiliary *messageAuxiliary) (MessageResponse, error) {
 	var err error
 	if attachments == nil {
 		attachments, err = s.repo.GetAttachmentsByMessage(ctx, message.ID)
@@ -1249,6 +1429,12 @@ func (s *Service) toMessageResponse(ctx context.Context, message *model.Message,
 			keyEnvelopes = []*model.MessageKey{}
 		}
 	}
+	if auxiliary == nil {
+		auxiliary, err = s.loadMessageAuxiliary(ctx, []string{message.ID})
+		if err != nil {
+			return MessageResponse{}, err
+		}
+	}
 
 	attachmentResponses := make([]AttachmentResponse, 0, len(attachments))
 	for _, att := range attachments {
@@ -1257,6 +1443,18 @@ func (s *Service) toMessageResponse(ctx context.Context, message *model.Message,
 	keyEnvelopeResponses := make([]MessageKeyEnvelopeResponse, 0, len(keyEnvelopes))
 	for _, envelope := range keyEnvelopes {
 		keyEnvelopeResponses = append(keyEnvelopeResponses, s.toMessageKeyEnvelopeResponse(envelope))
+	}
+	reactionResponses := make([]ReactionResponse, 0, len(auxiliary.reactions[message.ID]))
+	for _, reaction := range auxiliary.reactions[message.ID] {
+		reactionResponses = append(reactionResponses, s.toReactionResponse(reaction))
+	}
+	readReceiptResponses := make([]ReadReceiptResponse, 0, len(auxiliary.readReceipts[message.ID]))
+	for _, receipt := range auxiliary.readReceipts[message.ID] {
+		readReceiptResponses = append(readReceiptResponses, s.toReadReceiptResponse(receipt))
+	}
+	deliveryReceiptResponses := make([]DeliveryReceiptResponse, 0, len(auxiliary.deliveryReceipts[message.ID]))
+	for _, receipt := range auxiliary.deliveryReceipts[message.ID] {
+		deliveryReceiptResponses = append(deliveryReceiptResponses, s.toDeliveryReceiptResponse(receipt))
 	}
 
 	return MessageResponse{
@@ -1279,6 +1477,7 @@ func (s *Service) toMessageResponse(ctx context.Context, message *model.Message,
 		Content:              nil,
 		KeyEnvelopes:         keyEnvelopeResponses,
 		Metadata:             bytesToMetadata(message.Metadata),
+		ReplyToMessageID:     message.ReplyToMessageID,
 		ReplyToMessage:       nil,
 		ForwardedFromMessage: nil,
 		ForwardedFromChatID:  message.ForwardedFromChatID,
@@ -1290,11 +1489,11 @@ func (s *Service) toMessageResponse(ctx context.Context, message *model.Message,
 		CreatedAt:            message.CreatedAt,
 		UpdatedAt:            message.UpdatedAt,
 		Attachments:          attachmentResponses,
-		Reactions:            []ReactionResponse{},
-		ReadReceipts:         []ReadReceiptResponse{},
-		DeliveryReceipts:     []DeliveryReceiptResponse{},
-		IsPinned:             false,
-		VersionCount:         0,
+		Reactions:            reactionResponses,
+		ReadReceipts:         readReceiptResponses,
+		DeliveryReceipts:     deliveryReceiptResponses,
+		IsPinned:             auxiliary.pinned[message.ID],
+		VersionCount:         auxiliary.versionCounts[message.ID],
 	}, nil
 }
 
@@ -1464,6 +1663,17 @@ func (s *Service) validateKeyEnvelopeRecipients(ctx context.Context, chatID stri
 }
 
 func (s *Service) validateKeyEnvelopeRecipientsWithRepo(ctx context.Context, repo *Repository, chatID string, reqs []MessageKeyEnvelopeRequest, lock bool) error {
+	expectedRecipients, err := repo.ListChatTrustedDeviceRecipients(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	expected := make(map[string]string, len(expectedRecipients))
+	for _, recipient := range expectedRecipients {
+		expected[recipient.DeviceID] = recipient.UserID
+	}
+	if len(reqs) != len(expected) {
+		return apperrors.New(400, "chats.e2ee.incomplete_recipient_devices", "A key envelope is required for every active trusted device in the chat")
+	}
 	seenDevices := make(map[string]struct{}, len(reqs))
 	for _, req := range reqs {
 		if err := validateGapakE2EEKeyEnvelope(req); err != nil {
@@ -1473,6 +1683,10 @@ func (s *Service) validateKeyEnvelopeRecipientsWithRepo(ctx context.Context, rep
 			return apperrors.New(409, "chats.e2ee.duplicate_recipient_device", "Each recipient device may receive only one key envelope")
 		}
 		seenDevices[req.RecipientDeviceID] = struct{}{}
+		expectedUserID, ok := expected[req.RecipientDeviceID]
+		if !ok || expectedUserID != req.RecipientUserID {
+			return apperrors.ErrForbidden
+		}
 		if err := repo.AssertChatMembership(ctx, chatID, req.RecipientUserID); err != nil {
 			return err
 		}

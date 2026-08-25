@@ -41,8 +41,11 @@ export class RealtimeEventRouter {
 
       if (event.chatId && typeof event.sequence === 'number') {
         const previous = this.latestSequence.get(event.chatId);
-        if (previous !== undefined && event.sequence <= previous) return false;
-        this.latestSequence.set(event.chatId, event.sequence);
+        // Edits and deletions retain the original message sequence. Only a
+        // duplicate/stale creation is invalid by sequence; mutation events are
+        // deduplicated by their durable event IDs above.
+        if (event.type === 'chat.message.created' && previous !== undefined && event.sequence <= previous) return false;
+        if (previous === undefined || event.sequence > previous) this.latestSequence.set(event.chatId, event.sequence);
       }
     }
 
@@ -86,6 +89,7 @@ export class RealtimeEventRouter {
     if (event.kind === 'event') {
       if (event.chatId) {
         this.queryClient.invalidateQueries({ queryKey: ['chat', 'messages', event.chatId] });
+        if (event.type === 'chat.pin.changed') this.queryClient.invalidateQueries({ queryKey: ['chat', 'pinned', event.chatId] });
       }
       this.queryClient.invalidateQueries({ queryKey: ['chats'] });
     }

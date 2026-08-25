@@ -166,7 +166,7 @@ func (s *Service) FinalizeUploadedObject(ctx context.Context, session *model.Upl
 		_ = s.store.DeleteObjects(ctx, session.Bucket, []string{session.ObjectKey})
 		return apperrors.New(400, "media.mime_detection_failed", "Unable to detect uploaded file type")
 	}
-	if !strings.EqualFold(detected, session.MimeType) {
+	if !compatibleMIMEType(session.MimeType, detected) {
 		_ = s.store.DeleteObjects(ctx, session.Bucket, []string{session.ObjectKey})
 		return apperrors.New(400, "media.mime_type_mismatch", "Detected MIME type does not match declared type")
 	}
@@ -175,6 +175,24 @@ func (s *Service) FinalizeUploadedObject(ctx context.Context, session *model.Upl
 		return apperrors.New(400, "media.mime_type_not_allowed", "Detected MIME type is not allowed")
 	}
 	return nil
+}
+
+func compatibleMIMEType(declared, detected string) bool {
+	declared = strings.ToLower(strings.TrimSpace(declared))
+	detected = strings.ToLower(strings.TrimSpace(detected))
+	if declared == detected {
+		return true
+	}
+	// Browser MediaRecorder emits audio-only WebM/OGG containers. Go's content
+	// sniffer can identify only the container and may report the video/general
+	// variant even when the stream contains audio only.
+	compatible := map[string]map[string]struct{}{
+		"audio/webm": {"video/webm": {}},
+		"audio/ogg":  {"application/ogg": {}},
+		"audio/wav":  {"audio/wave": {}, "audio/x-wav": {}},
+	}
+	_, ok := compatible[declared][detected]
+	return ok
 }
 
 func (s *Service) detectObjectMIMEType(ctx context.Context, bucket, objectKey string) (string, error) {

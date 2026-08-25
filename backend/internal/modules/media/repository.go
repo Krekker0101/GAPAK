@@ -304,11 +304,12 @@ func (r *Repository) FindAccessibleMedia(ctx context.Context, viewerID, mediaID 
 		      SELECT 1
 		      FROM attachments a
 		      JOIN messages msg ON msg.id = a.message_id AND msg.deleted_at IS NULL
+		        AND (msg.expires_at IS NULL OR msg.expires_at > NOW())
 		      JOIN chat_members self ON self.chat_id = msg.chat_id
 		        AND self.user_id = $1
 		        AND self.deleted_at IS NULL
 		        AND self.left_at IS NULL
-		      WHERE a.media_file_id = m.id
+		      WHERE (a.media_file_id = m.id OR a.thumbnail_file_id = m.id)
 		    )
 		    OR EXISTS (
 		      SELECT 1

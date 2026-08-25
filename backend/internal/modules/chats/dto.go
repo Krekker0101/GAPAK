@@ -73,6 +73,8 @@ type CreateAttachmentRequest struct {
 }
 
 type EditMessageRequest struct {
+	SenderDeviceID      string                      `json:"senderDeviceId" validate:"required,uuid"`
+	SenderKeyID         string                      `json:"senderKeyId" validate:"required,min=3,max=255"`
 	Ciphertext          string                      `json:"ciphertext" validate:"required,min=32,max=50000"`
 	Nonce               string                      `json:"nonce" validate:"required,len=24"`
 	Content             string                      `json:"content" validate:"omitempty,max=50000"`
@@ -165,9 +167,8 @@ type ListMessagesQuery struct {
 }
 
 type ListReactionsQuery struct {
-	MessageID string `query:"messageId" validate:"required,uuid"`
-	Type      string `query:"type" validate:"omitempty,oneof=LIKE LOVE LAUGH SURPRISE SAD ANGRY FIRE THUMBS_UP THUMBS_DOWN"`
-	Limit     int    `query:"limit" validate:"omitempty,min=1,max=100"`
+	Type  string `query:"type" validate:"omitempty,oneof=LIKE LOVE LAUGH SURPRISE SAD ANGRY FIRE THUMBS_UP THUMBS_DOWN"`
+	Limit int    `query:"limit" validate:"omitempty,min=1,max=100"`
 }
 
 type ListMembersQuery struct {
@@ -246,6 +247,7 @@ type MessageResponse struct {
 	Content              *string                      `json:"content,omitempty"`
 	KeyEnvelopes         []MessageKeyEnvelopeResponse `json:"keyEnvelopes,omitempty"`
 	Metadata             map[string]interface{}       `json:"metadata,omitempty"`
+	ReplyToMessageID     *string                      `json:"replyToMessageId,omitempty"`
 	ReplyToMessage       *MessageResponse             `json:"replyToMessage,omitempty"`
 	ForwardedFromMessage *MessageResponse             `json:"forwardedFromMessage,omitempty"`
 	ForwardedFromChatID  *string                      `json:"forwardedFromChatId,omitempty"`
@@ -292,10 +294,24 @@ type TrustedDeviceResponse struct {
 }
 
 type PreKeyBundleResponse struct {
-	UserID        string                `json:"userId"`
-	Device        TrustedDeviceResponse `json:"device"`
-	SignedPreKey  *DevicePreKeyResponse `json:"signedPreKey,omitempty"`
-	OneTimePreKey *DevicePreKeyResponse `json:"oneTimePreKey,omitempty"`
+	UserID        string                       `json:"userId"`
+	Device        TrustedDeviceResponse        `json:"device"`
+	Devices       []PreKeyDeviceBundleResponse `json:"devices"`
+	SignedPreKey  *DevicePreKeyResponse        `json:"signedPreKey,omitempty"`
+	OneTimePreKey *DevicePreKeyResponse        `json:"oneTimePreKey,omitempty"`
+}
+
+// PreKeyDeviceBundleResponse carries encryption material for every active
+// device. Device/SignedPreKey above remain for backwards-compatible clients.
+type PreKeyDeviceBundleResponse struct {
+	ID                string                `json:"id"`
+	UserID            string                `json:"userId"`
+	IdentityKeyPublic string                `json:"identityKeyPublic"`
+	SigningKeyPublic  *string               `json:"signingKeyPublic,omitempty"`
+	TrustStatus       string                `json:"trustStatus"`
+	KeyVersion        int                   `json:"keyVersion"`
+	SignedPreKey      *DevicePreKeyResponse `json:"signedPreKey,omitempty"`
+	OneTimePreKey     *DevicePreKeyResponse `json:"oneTimePreKey,omitempty"`
 }
 
 type DevicePreKeyResponse struct {

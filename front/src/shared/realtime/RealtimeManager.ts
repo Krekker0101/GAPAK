@@ -103,6 +103,14 @@ class RealtimeManager {
     return this.sendChatSubscription(chatId);
   }
 
+  sendTyping(chatId: string, isTyping: boolean): boolean {
+    if (!chatId || this.state !== 'CONNECTED') return false;
+    return this.connection?.send({
+      type: 'typing',
+      data: { chat_id: chatId, is_typing: isTyping },
+    }) ?? false;
+  }
+
   unsubscribeFromChat(chatId: string): boolean {
     const existed = this.subscribedChats.delete(chatId);
     if (!existed) return false;

@@ -1,5 +1,12 @@
 export type TrustState = 'VERIFIED' | 'UNVERIFIED' | 'CHANGED' | 'REVOKED' | 'UNKNOWN';
 
+export const backendTrustState = (value: unknown): TrustState => {
+  if (value === 'TRUSTED') return 'VERIFIED';
+  return value === 'VERIFIED' || value === 'UNVERIFIED' || value === 'CHANGED' || value === 'REVOKED' || value === 'UNKNOWN'
+    ? value
+    : 'UNKNOWN';
+};
+
 /**
  * GAPAK E2EE protocol v1.
  *

@@ -503,6 +503,22 @@ export interface CreateAttachmentRequest {
   metadata?: Record<string, unknown>;
 }
 
+export interface MessageAttachment {
+  id: string;
+  messageId: string;
+  mediaFileId: string;
+  kind: CreateAttachmentRequest['kind'];
+  fileName?: string | null;
+  mimeType?: string | null;
+  sizeBytes: number;
+  width?: number | null;
+  height?: number | null;
+  durationSeconds?: number | null;
+  thumbnailFileId?: string | null;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface Message {
   id: string;
   chatId: string;
@@ -523,6 +539,11 @@ export interface Message {
   content?: string | null;
   keyEnvelopes?: Array<MessageKeyEnvelope & { id: string; messageId: string; senderDeviceId: string; createdAt: string }>;
   metadata?: Record<string, unknown>;
+  attachments?: MessageAttachment[];
+  replyToMessageId?: string | null;
+  reactions?: Array<{ id: string; messageId: string; userId: string; reactionType: string; createdAt: string }>;
+  readReceipts?: Array<{ id: string; messageId: string; userId: string; readAt: string }>;
+  deliveryReceipts?: Array<{ id: string; messageId: string; userId: string; deliveredAt: string }>;
   expiresAt?: string | null;
   sentAt: string;
   editedAt?: string | null;
@@ -530,6 +551,7 @@ export interface Message {
   createdAt: string;
   updatedAt: string;
   isPinned: boolean;
+  versionCount?: number;
 }
 
 export interface TrustedDevice {
@@ -562,6 +584,11 @@ export interface PublishPreKeyRequest {
 export interface PreKeyBundle {
   userId: string;
   device: TrustedDevice;
+  devices?: Array<Pick<TrustedDevice, 'id' | 'userId' | 'identityKeyPublic' | 'signingKeyPublic' | 'trustStatus'> & {
+    keyVersion: number;
+    signedPreKey?: DevicePreKey;
+    oneTimePreKey?: DevicePreKey;
+  }>;
   signedPreKey?: DevicePreKey;
   oneTimePreKey?: DevicePreKey;
 }

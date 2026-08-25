@@ -7,12 +7,12 @@ import { MessageTimeline } from './MessageTimeline';
 import { Composer } from './Composer';
 import { TrustedDevicesModal } from './TrustedDevicesModal';
 import { CreateChatModal } from './CreateChatModal';
-import { Chat as ClientChat, ChatMessage, E2EEMessageEnvelope, MessageContentType, TrustedDevice as ClientTrustedDevice, UserProfile } from '../../shared/types';
+import { Chat as ClientChat, ChatMessage, E2EEMessageEnvelope, EncryptedAttachment, MessageContentType, TrustedDevice as ClientTrustedDevice, UserProfile } from '../../shared/types';
 import type { Chat as BackendChat, ChatMember as BackendChatMember, Message as BackendMessage, TrustedDevice as BackendTrustedDevice } from '../../shared/api/backendContracts';
 import { chatsApi } from './api/chatsApi';
 import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import { e2eeCryptoEngine, DecryptionError } from './crypto/E2EECryptoEngine';
-import { cryptoApi } from './api/cryptoApi';
+import { cryptoApi, trustState } from './api/cryptoApi';
 import { receiptsBatcher } from './transport/ReceiptsBatcher';
 import { messageSendQueue } from './transport/MessageSendQueue';
 import { useAuth } from '../auth/AuthContext';
@@ -20,7 +20,7 @@ import { useToast } from '../../shared/ux/ToastContext';
 import { PageError, PageLoading } from '../../pages/common';
 import { usersApi } from '../users/api/usersApi';
 
-type ChatSendPayload = { content: string; contentType: MessageContentType; replyToMessageId?: string };
+type ChatSendPayload = { content: string; contentType: MessageContentType; replyToMessageId?: string; attachments?: EncryptedAttachment[] };
 type MessageCursor = { cursor?: string; cursorId?: string };
 type DecryptedMessagesPage = ChatMessage[] & { nextCursor?: string; nextCursorId?: string; hasMore: boolean };
 
@@ -33,6 +33,16 @@ const pageWithMessages = (messages: ChatMessage[], source?: DecryptedMessagesPag
 const clientRole = (role: string): UserProfile['role'] => {
   const roles: UserProfile['role'][] = ['guest', 'user', 'creator', 'moderator', 'admin', 'super_admin'];
   return roles.includes(role as UserProfile['role']) ? role as UserProfile['role'] : 'user';
+};
+
+const reactionToEmoji: Record<string, string> = {
+  LIKE: '👍', LOVE: '❤️', LAUGH: '😂', SURPRISE: '😮', SAD: '😢', ANGRY: '😡',
+  FIRE: '🔥', THUMBS_UP: '👍', THUMBS_DOWN: '👎',
+};
+
+const emojiToReaction: Record<string, string> = {
+  '👍': 'THUMBS_UP', '❤️': 'LOVE', '❤': 'LOVE', '🔥': 'FIRE', '😂': 'LAUGH',
+  '😮': 'SURPRISE', '😢': 'SAD', '😡': 'ANGRY', '👎': 'THUMBS_DOWN',
 };
 
 const mapChat = (chat: BackendChat, members: ClientChat['members'] = []): ClientChat => ({
@@ -56,9 +66,11 @@ export const ChatsView: React.FC = () => {
   const { user } = useAuth();
   const toast = useToast();
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
+  const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
   const [typingUser, setTypingUser] = useState<string | null>(null);
   const [isDevicesModalOpen, setIsDevicesModalOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [expiryClock, setExpiryClock] = useState(() => Date.now());
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const outboundByClientMessageId = useRef(new Map<string, { chatId: string; request: import('./api/chatsApi').SendMessageRequest }>());
 
@@ -141,7 +153,7 @@ export const ChatsView: React.FC = () => {
       identityKeyFingerprint: device.fingerprint,
       signingKeyFingerprint: device.fingerprint,
       preKeysRemaining: 0,
-      verificationStatus: (device.trustStatus === 'VERIFIED' || device.trustStatus === 'UNVERIFIED' || device.trustStatus === 'CHANGED' || device.trustStatus === 'REVOKED' || device.trustStatus === 'UNKNOWN' ? device.trustStatus : 'UNKNOWN') as ClientTrustedDevice['verificationStatus'],
+      verificationStatus: trustState(device.trustStatus) as ClientTrustedDevice['verificationStatus'],
       lastActiveAt: device.lastSeenAt ?? device.createdAt,
       isCurrentDevice: device.id === currentId,
       registeredAt: device.createdAt,
@@ -160,14 +172,51 @@ export const ChatsView: React.FC = () => {
     if (senderDevice.verificationStatus !== 'VERIFIED') throw new DecryptionError(`Sender device trust state ${senderDevice.verificationStatus} is not acceptable.`);
 
     const envelope = e2eeCryptoEngine.fromBackendMessage(message);
-    return e2eeCryptoEngine.decryptMessage({
+    const decrypted = await e2eeCryptoEngine.decryptMessage({
       envelope,
       senderProfile: sender,
       targetDeviceId: currentDevice.deviceId,
       senderSigningPublicJwk: senderDevice.signingPublicKey,
       senderTrustState: senderDevice.verificationStatus,
     });
-  }, []);
+    // The signed E2EE envelope carries a client-generated immutable crypto ID,
+    // while the API exposes a server-issued persistence ID. UI/cache identity
+    // must always use the latter without changing the bytes that were signed.
+    const reactionGroups = new Map<string, { users: string[]; reactedByMe: boolean }>();
+    for (const reaction of message.reactions ?? []) {
+      const current = reactionGroups.get(reaction.reactionType) ?? { users: [], reactedByMe: false };
+      current.users.push(reaction.userId);
+      if (reaction.userId === user?.id) current.reactedByMe = true;
+      reactionGroups.set(reaction.reactionType, current);
+    }
+    const otherRead = (message.readReceipts ?? []).some((receipt) => receipt.userId !== message.senderId);
+    const otherDelivered = (message.deliveryReceipts ?? []).some((receipt) => receipt.userId !== message.senderId);
+    const state: ChatMessage['state'] = message.deletedAt
+      ? 'deleted'
+      : message.editedAt
+        ? 'edited'
+        : message.senderId === user?.id
+          ? otherRead ? 'read' : otherDelivered ? 'delivered' : 'sent'
+          : 'delivered';
+    return {
+      ...decrypted,
+      id: message.id,
+      clientMessageId: message.clientMessageId,
+      createdAt: message.createdAt || message.sentAt,
+      updatedAt: message.updatedAt,
+      expiresAt: message.expiresAt ?? decrypted.expiresAt,
+      state,
+      pinned: message.isPinned,
+      readByUserIds: (message.readReceipts ?? []).map((receipt) => receipt.userId),
+      deliveredToUserIds: (message.deliveryReceipts ?? []).map((receipt) => receipt.userId),
+      reactions: [...reactionGroups.entries()].map(([reactionType, value]) => ({
+        emoji: reactionToEmoji[reactionType] ?? reactionType,
+        count: value.users.length,
+        users: value.users,
+        reactedByMe: value.reactedByMe,
+      })),
+    };
+  }, [user?.id]);
 
   const messagesQuery = useInfiniteQuery({
     queryKey: ['chat', 'messages', activeChatId],
@@ -214,7 +263,11 @@ export const ChatsView: React.FC = () => {
     const all = pages.flatMap((page) => page);
     const map = new Map<string, ChatMessage>();
     all.forEach((message) => map.set(message.id, message));
-    return [...map.values()].sort((a, b) => (a.createdAt ? new Date(a.createdAt).getTime() : Number.POSITIVE_INFINITY) - (b.createdAt ? new Date(b.createdAt).getTime() : Number.POSITIVE_INFINITY));
+    const ordered = [...map.values()].sort((a, b) => (a.createdAt ? new Date(a.createdAt).getTime() : Number.POSITIVE_INFINITY) - (b.createdAt ? new Date(b.createdAt).getTime() : Number.POSITIVE_INFINITY));
+    const byID = new Map(ordered.map((message) => [message.id, message]));
+    return ordered.map((message) => message.replyToMessageId && byID.has(message.replyToMessageId)
+      ? { ...message, replyTo: byID.get(message.replyToMessageId) }
+      : message);
   }, [messagesQuery.data, user]);
 
   const pinnedQuery = useQuery({
@@ -223,7 +276,22 @@ export const ChatsView: React.FC = () => {
     enabled: Boolean(activeChatId),
   });
   const pinnedIds = useMemo(() => new Set((pinnedQuery.data ?? []).map((item) => item.messageId)), [pinnedQuery.data]);
-  const renderedMessages = useMemo(() => messages.map((message) => ({ ...message, pinned: pinnedIds.has(message.id) })), [messages, pinnedIds]);
+  useEffect(() => {
+    if (!messages.some(message => message.expiresAt && Date.parse(message.expiresAt) > Date.now())) return;
+    const timer = window.setInterval(() => setExpiryClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [messages]);
+  const visibleMessages = useMemo(() => messages.filter(message => !message.expiresAt || Date.parse(message.expiresAt) > expiryClock), [expiryClock, messages]);
+  const renderedMessages = useMemo(() => visibleMessages.map((message) => ({ ...message, pinned: pinnedIds.has(message.id) })), [visibleMessages, pinnedIds]);
+
+  useEffect(() => {
+    if (!activeChatId || !user) return;
+    for (const message of visibleMessages) {
+      if (message.sender.id === user.id || message.state === 'decryption_failed' || message.state === 'deleted') continue;
+      if (!message.deliveredToUserIds?.includes(user.id)) receiptsBatcher.markAsDelivered(activeChatId, message.id);
+      if (!message.readByUserIds?.includes(user.id)) receiptsBatcher.markAsRead(activeChatId, message.id);
+    }
+  }, [activeChatId, visibleMessages, user]);
 
   useEffect(() => {
     if (!activeChatId || !activeChat) return;
@@ -350,8 +418,12 @@ export const ChatsView: React.FC = () => {
         senderDeviceId: currentDevice.id,
         plaintext: payload.content,
         contentType: payload.contentType,
-        recipientUserIds: activeChat.members.map((member) => member.userId).filter((id) => id !== user.id),
+        // Include every active device of the sender as well. Otherwise the
+        // sender cannot decrypt the acknowledgement, history after reload, or
+        // the same message on another authenticated device.
+        recipientUserIds: activeChat.members.map((member) => member.userId),
         replyToMessageId: payload.replyToMessageId,
+        attachments: payload.attachments,
       });
       const optimistic: ChatMessage = {
         // clientMessageId is the only client-generated correlation identifier;
@@ -366,6 +438,7 @@ export const ChatsView: React.FC = () => {
         state: 'sending',
         createdAt: undefined,
         reactions: [],
+        attachments: payload.attachments,
         replyTo: replyingTo || undefined,
       };
       await sendMutation.mutateAsync({ payload, optimistic, envelope });
@@ -377,12 +450,48 @@ export const ChatsView: React.FC = () => {
 
   const handleTyping = useCallback(() => {
     if (!activeChatId || !user) return;
-    void chatsApi.typing(activeChatId, 'TYPING');
+    if (!realtimeManager.sendTyping(activeChatId, true)) void chatsApi.typing(activeChatId, 'TYPING');
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-    typingTimerRef.current = setTimeout(() => { void chatsApi.typing(activeChatId, 'STOPPED'); }, 1000);
+    typingTimerRef.current = setTimeout(() => {
+      if (!realtimeManager.sendTyping(activeChatId, false)) void chatsApi.typing(activeChatId, 'STOPPED');
+    }, 1000);
   }, [activeChatId, user]);
 
-  const reactMutation = useMutation({ mutationFn: ({ messageId, emoji }: { messageId: string; emoji: string }) => chatsApi.react(messageId, emoji), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chat', 'messages', activeChatId] }) });
+  const handleEditMessage = useCallback((message: ChatMessage, content: string) => {
+    if (!activeChat || !user) return;
+    const currentDevice = devices.find((device) => device.isCurrentDevice);
+    if (!currentDevice) {
+      toast.warning('Register this device first', 'Editing requires the current trusted encryption device.');
+      return;
+    }
+    void (async () => {
+      try {
+        const envelope = await e2eeCryptoEngine.encryptMessage({
+          chatId: activeChat.id,
+          senderId: user.id,
+          senderDeviceId: currentDevice.id,
+          plaintext: content,
+          contentType: message.contentType,
+          recipientUserIds: activeChat.members.map((member) => member.userId),
+          replyToMessageId: message.replyToMessageId,
+          expiresAt: message.expiresAt,
+        });
+        await chatsApi.editMessage(message.id, e2eeCryptoEngine.toBackendEditMessageRequest(envelope));
+        await queryClient.invalidateQueries({ queryKey: ['chat', 'messages', activeChat.id] });
+      } catch (error) {
+        toast.error('Message edit failed', error instanceof Error ? error.message : 'The encrypted edit was rejected.');
+      }
+    })();
+  }, [activeChat, devices, queryClient, toast, user]);
+
+  const reactMutation = useMutation({
+    mutationFn: ({ messageId, emoji }: { messageId: string; emoji: string }) => {
+      const reactionType = emojiToReaction[emoji] ?? emoji;
+      return chatsApi.react(messageId, reactionType);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chat', 'messages', activeChatId] }),
+    onError: (error) => toast.error('Reaction failed', error instanceof Error ? error.message : 'The reaction was rejected.'),
+  });
   const deleteMutation = useMutation({ mutationFn: (messageId: string) => chatsApi.deleteMessage(messageId), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chat', 'messages', activeChatId] }) });
   const pinMutation = useMutation({
     mutationFn: (messageId: string) => {
@@ -427,7 +536,8 @@ export const ChatsView: React.FC = () => {
         pinnedMessages={renderedMessages.filter((m) => m.pinned)}
         hasMoreBefore={Boolean(messagesQuery.hasNextPage)}
         onLoadMoreBefore={() => void messagesQuery.fetchNextPage()}
-        onReply={setReplyingTo}
+        onReply={(message) => { setEditingMessage(null); setReplyingTo(message); }}
+        onEdit={(message) => { setReplyingTo(null); setEditingMessage(message); }}
         onReact={(id, emoji) => reactMutation.mutate({ messageId: id, emoji })}
         onPin={(id) => pinMutation.mutate(id)}
         onDelete={(id) => deleteMutation.mutate(id)}
@@ -445,7 +555,16 @@ export const ChatsView: React.FC = () => {
             .catch((error) => toast.error('Message retry failed', error instanceof Error ? error.message : 'The encrypted message remains failed.'));
         }}
       />
-      <Composer chatId={activeChat.id} replyingTo={replyingTo} onCancelReply={() => setReplyingTo(null)} onSendMessage={handleSendMessage} onTyping={handleTyping} />
+      <Composer
+        chatId={activeChat.id}
+        replyingTo={replyingTo}
+        editingMessage={editingMessage}
+        onCancelReply={() => setReplyingTo(null)}
+        onCancelEdit={() => setEditingMessage(null)}
+        onSendMessage={handleSendMessage}
+        onEditMessage={handleEditMessage}
+        onTyping={handleTyping}
+      />
     </div>
     <TrustedDevicesModal isOpen={isDevicesModalOpen} onClose={() => setIsDevicesModalOpen(false)} devices={devices} onRegisterDevice={() => registerDevice.mutate()} isRegistering={registerDevice.isPending} onRevokeDevice={(id) => revokeDevice.mutate(id)} />
     <CreateChatModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} onCreateChat={(payload) => createMutation.mutate({ type: payload.type, title: payload.title, description: payload.description, trustedChat: true, encryptionProtocol: 'TRUSTED_CHAT', participantIds: payload.memberIds })} />

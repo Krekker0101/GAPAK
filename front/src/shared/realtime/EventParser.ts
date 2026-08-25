@@ -51,6 +51,9 @@ export function parseRealtimeFrame(raw: unknown): RealtimeEvent {
     type === 'chat.message.edited' ||
     type === 'chat.message.deleted' ||
     type === 'chat.read_receipt' ||
+    type === 'chat.delivery_receipt' ||
+    type === 'chat.reaction.changed' ||
+    type === 'chat.pin.changed' ||
     type === 'chat.typing'
   ) {
     const eventId = requireString(frame.eventId ?? frame.id, 'eventId');

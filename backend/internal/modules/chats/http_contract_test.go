@@ -1,6 +1,7 @@
 package chats
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 
@@ -26,5 +27,31 @@ func TestPreKeyBundleRouteUsesPathUserID(t *testing.T) {
 
 	if resp.StatusCode != fiber.StatusOK {
 		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}
+
+func TestPreKeyBundleResponseIncludesAllDevicesAndLegacyDevice(t *testing.T) {
+	response := PreKeyBundleResponse{
+		UserID: "11111111-1111-4111-8111-111111111111",
+		Device: TrustedDeviceResponse{ID: "22222222-2222-4222-8222-222222222222"},
+		Devices: []PreKeyDeviceBundleResponse{
+			{ID: "22222222-2222-4222-8222-222222222222", KeyVersion: 1},
+			{ID: "33333333-3333-4333-8333-333333333333", KeyVersion: 1},
+		},
+	}
+	raw, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded["device"]; !ok {
+		t.Fatal("legacy device field is missing")
+	}
+	devices, ok := decoded["devices"].([]any)
+	if !ok || len(devices) != 2 {
+		t.Fatalf("devices=%#v", decoded["devices"])
 	}
 }

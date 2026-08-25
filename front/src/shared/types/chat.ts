@@ -64,13 +64,17 @@ export type MessageState =
 
 export interface EncryptedAttachment {
   id: string;
+  mediaFileId: string;
   name: string;
   type: 'image' | 'video' | 'audio' | 'document' | 'voice' | 'sticker';
   sizeBytes: number;
-  encryptedBlobUrl: string; // Local preview URL only; never a server URL.
-  nonce: string; // Hex-encoded AES-GCM IV
+  /** Optional local preview. Remote content is always obtained through a short-lived playback grant. */
+  encryptedBlobUrl?: string;
+  nonce?: string;
   mimeType: string;
   thumbnailUrl?: string;
+  durationSeconds?: number;
+  waveform?: number[];
 }
 
 export interface MessageReaction {
@@ -123,9 +127,12 @@ export interface ChatMessage {
   createdAt?: string;
   updatedAt?: string;
   expiresAt?: string;
+  replyToMessageId?: string;
   replyTo?: ChatMessage;
   versions?: MessageVersion[];
   reactions: MessageReaction[];
+  readByUserIds?: string[];
+  deliveredToUserIds?: string[];
   pinned?: boolean;
   attachments?: EncryptedAttachment[];
   location?: { lat: number; lng: number; label?: string };

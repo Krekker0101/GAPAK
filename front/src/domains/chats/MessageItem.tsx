@@ -7,7 +7,7 @@
  * emoji reactions, and message action menus.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Check,
   CheckCheck,
@@ -31,6 +31,26 @@ import {
 import { ChatMessage, EncryptedAttachment } from '../../shared/types';
 import { Avatar, Badge, IconButton } from '../../shared/design-system/primitives';
 import { MentionText } from '../../shared/text/MentionText';
+import { mediaApi } from '../media/api/mediaApi';
+
+const ChatAttachmentView: React.FC<{ attachment: EncryptedAttachment; isMe: boolean; onOpenImage: (url: string) => void }> = ({ attachment, isMe, onOpenImage }) => {
+  const [url, setUrl] = useState(attachment.encryptedBlobUrl);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void mediaApi.requestPlaybackGrant(attachment.mediaFileId, 'CHAT_ATTACHMENT')
+      .then(grant => { if (active) setUrl(grant.request.url); })
+      .catch(() => { if (active && !attachment.encryptedBlobUrl) setError(true); });
+    return () => { active = false; };
+  }, [attachment.encryptedBlobUrl, attachment.mediaFileId]);
+
+  if (error) return <div className="p-2 text-xs text-rose-300">Attachment access expired or was denied.</div>;
+  if (attachment.type === 'image') return url ? <img src={url} alt={attachment.name} onClick={() => onOpenImage(url)} className="max-h-60 w-full cursor-pointer rounded-[var(--radius-xl)] object-cover hover:opacity-90" /> : <div className="p-4 text-xs">Authorizing image…</div>;
+  if (attachment.type === 'video') return url ? <video src={url} controls preload="metadata" className="max-h-72 w-full rounded-[var(--radius-xl)]" /> : <div className="p-4 text-xs">Authorizing video…</div>;
+  if (attachment.type === 'audio' || attachment.type === 'voice') return url ? <audio src={url} controls preload="metadata" className="w-full min-w-64" /> : <div className="p-4 text-xs">Authorizing audio…</div>;
+  return <div className={`flex items-center justify-between rounded-[var(--radius-xl)] p-2.5 text-xs ${isMe ? 'bg-indigo-700/50' : 'bg-app'}`}><div className="flex min-w-0 items-center gap-2"><FileText className="h-4 w-4 shrink-0 text-indigo-400" /><div className="min-w-0"><p className="max-w-[150px] truncate font-semibold">{attachment.name}</p><p className="text-[10px] opacity-75">{(attachment.sizeBytes / 1024).toFixed(1)} KB · protected</p></div></div>{url && <a href={url} download={attachment.name} aria-label={`Download ${attachment.name}`}><Download className="h-3.5 w-3.5" /></a>}</div>;
+};
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -39,6 +59,7 @@ interface MessageItemProps {
   onReact: (messageId: string, emoji: string) => void;
   onPin: (messageId: string) => void;
   onDelete: (messageId: string) => void;
+  onEdit: (message: ChatMessage) => void;
   onRetry: (messageId: string) => void;
 }
 
@@ -49,6 +70,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   onReact,
   onPin,
   onDelete,
+  onEdit,
   onRetry,
 }) => {
   const [isPlayingVoice, setIsPlayingVoice] = useState(false);
@@ -56,7 +78,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
 
-  const quickEmojis = ['👍', '❤️', '🔥', '😂', '😮', '🛡️'];
+  const quickEmojis = ['👍', '❤️', '🔥', '😂', '😮', '👎'];
 
   const renderStateIcon = () => {
     switch (message.state) {
@@ -159,7 +181,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           )}
 
           {/* Voice Message Player */}
-          {message.contentType === 'VOICE' && message.voice && (
+          {message.contentType === 'VOICE' && message.voice && !message.attachments?.some(attachment => attachment.type === 'voice') && (
             <div className="flex items-center gap-3 py-1 min-w-[200px]">
               <button
                 type="button"
@@ -201,27 +223,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             <div className="space-y-2 mt-2">
               {message.attachments.map((att) => (
                 <div key={att.id} className="rounded-[var(--radius-xl)] overflow-hidden border border-subtle">
-                  {att.type === 'image' ? (
-                    <img
-                      src={att.encryptedBlobUrl}
-                      alt={att.name}
-                      onClick={() => setSelectedImage(att.encryptedBlobUrl)}
-                      className="w-full max-h-60 object-cover rounded-[var(--radius-xl)] cursor-pointer hover:opacity-90"
-                    />
-                  ) : (
-                    <div className={`p-2.5 rounded-[var(--radius-xl)] flex items-center justify-between text-xs ${
-                      isMe ? 'bg-indigo-700/50' : 'bg-app'
-                    }`}>
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-indigo-400" />
-                        <div>
-                          <p className="font-semibold truncate max-w-[150px]">{att.name}</p>
-                          <p className="text-[10px] opacity-75">{(att.sizeBytes / 1024).toFixed(1)} KB • E2EE</p>
-                        </div>
-                      </div>
-                      <IconButton icon={<Download className="w-3.5 h-3.5" />} ariaLabel="Download" />
-                    </div>
-                  )}
+                  <ChatAttachmentView attachment={att} isMe={isMe} onOpenImage={setSelectedImage} />
                 </div>
               ))}
             </div>
@@ -315,17 +317,29 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               <span>{message.pinned ? 'Unpin Message' : 'Pin Message'}</span>
             </button>
             {isMe && (
-              <button
-                type="button"
-                onClick={() => {
-                  onDelete(message.id);
-                  setShowMenu(false);
-                }}
-                className="w-full text-left px-2.5 py-1.5 rounded-[var(--radius-lg)] hover:bg-rose-500/10 flex items-center gap-2 text-rose-400"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete</span>
-              </button>
+              <>
+                {message.contentType === 'TEXT' && (
+                  <button
+                    type="button"
+                    onClick={() => { onEdit(message); setShowMenu(false); }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-[var(--radius-lg)] hover:bg-surface-muted flex items-center gap-2 text-primary"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Edit</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDelete(message.id);
+                    setShowMenu(false);
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-[var(--radius-lg)] hover:bg-rose-500/10 flex items-center gap-2 text-rose-400"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete</span>
+                </button>
+              </>
             )}
           </div>
         )}

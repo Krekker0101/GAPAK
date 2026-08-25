@@ -236,7 +236,7 @@ func New(ctx context.Context) (*App, error) {
 	}
 
 	registerBaseRoutes(fiberApp, deps)
-	wsService := registerModules(fiberApp, deps)
+	wsService := registerModules(ctx, fiberApp, deps)
 	wsService.Start(ctx)
 	app.WebSocket = wsService
 

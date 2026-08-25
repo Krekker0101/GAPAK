@@ -1,6 +1,6 @@
 import { httpClient } from '../../../shared/api/httpClient';
 import { deviceCryptoManager } from '../crypto/DeviceCryptoManager';
-import { GAPAK_E2EE_PROTOCOL_VERSION, RecipientKeyBundle, TrustState } from '../crypto/CryptoProtocol';
+import { backendTrustState, GAPAK_E2EE_PROTOCOL_VERSION, RecipientKeyBundle } from '../crypto/CryptoProtocol';
 import { JsonWebKeyValidation } from '../crypto/JsonWebKeyValidation';
 import { bytesToHex, canonicalJson, utf8 } from '../../../shared/security/hex';
 
@@ -43,10 +43,13 @@ interface RecipientBundleResponse {
   oneTimePreKey?: { publicKey?: string; signature?: string | null; keyId?: string };
 }
 
-const trustState = (value: unknown): TrustState =>
-  value === 'VERIFIED' || value === 'UNVERIFIED' || value === 'CHANGED' || value === 'REVOKED' || value === 'UNKNOWN'
-    ? value
-    : 'UNKNOWN';
+/**
+ * The backend calls an authenticated, non-revoked GAPAK device TRUSTED while
+ * the UI historically calls the same state VERIFIED. Keep that translation at
+ * the API boundary so the cryptographic policy never silently downgrades a
+ * backend-issued trusted device to UNKNOWN.
+ */
+export const trustState = backendTrustState;
 
 const parseJsonWebKey = (value: unknown, field: string): JsonWebKey => {
   if (typeof value !== 'string') throw new E2EEBackendContractError(`Backend did not provide ${field}.`);

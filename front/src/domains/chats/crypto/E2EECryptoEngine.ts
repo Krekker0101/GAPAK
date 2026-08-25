@@ -43,7 +43,38 @@ const decryptWithKey = async (key: CryptoKey, ciphertext: string, ivHex: string,
   }
 };
 
-const canonicalEnvelopeData = (envelope: Pick<E2EEMessageEnvelope, 'id'|'chatId'|'senderId'|'senderDeviceId'|'senderKeyId'|'ciphertext'|'nonce'|'keyEnvelopes'|'ratchetCounter'|'keyVersion'|'contentType'|'createdAt'|'expiresAt'|'replyToMessageId'>) => utf8(canonicalJson(envelope));
+// The backend intentionally returns only the key envelopes visible to the
+// authenticated recipient. Signing the complete per-recipient envelope map
+// would therefore produce different verification bytes for every viewer.
+// Wrapped keys are independently authenticated with AES-GCM and message-bound
+// AAD; the outer signature covers the immutable ciphertext and routing fields.
+const canonicalAttachments = (attachments: EncryptedAttachment[] | undefined) => (attachments ?? []).map(attachment => ({
+  mediaFileId: attachment.mediaFileId,
+  name: attachment.name,
+  type: attachment.type,
+  sizeBytes: attachment.sizeBytes,
+  mimeType: attachment.mimeType,
+  ...(attachment.nonce ? { nonce: attachment.nonce } : {}),
+  ...(attachment.durationSeconds !== undefined ? { durationSeconds: attachment.durationSeconds } : {}),
+  ...(attachment.waveform ? { waveform: attachment.waveform } : {}),
+}));
+
+const canonicalEnvelopeData = (envelope: Pick<E2EEMessageEnvelope, 'id'|'chatId'|'senderId'|'senderDeviceId'|'senderKeyId'|'ciphertext'|'nonce'|'ratchetCounter'|'keyVersion'|'contentType'|'createdAt'|'expiresAt'|'replyToMessageId'|'attachments'>) => utf8(canonicalJson({
+  id: envelope.id,
+  chatId: envelope.chatId,
+  senderId: envelope.senderId,
+  senderDeviceId: envelope.senderDeviceId,
+  senderKeyId: envelope.senderKeyId,
+  ciphertext: envelope.ciphertext,
+  nonce: envelope.nonce,
+  ratchetCounter: envelope.ratchetCounter,
+  keyVersion: envelope.keyVersion,
+  contentType: envelope.contentType,
+  createdAt: envelope.createdAt,
+  ...(envelope.expiresAt ? { expiresAt: envelope.expiresAt } : {}),
+  ...(envelope.replyToMessageId ? { replyToMessageId: envelope.replyToMessageId } : {}),
+  ...(envelope.attachments?.length ? { attachments: canonicalAttachments(envelope.attachments) } : {}),
+}));
 
 const assertRecipientTrust = (bundles: RecipientKeyBundle[], recipientUserIds: string[]) => {
   const byUser = new Map<string, RecipientKeyBundle[]>();
@@ -126,7 +157,16 @@ const backendMessageToEnvelope = (message: BackendMessage): E2EEMessageEnvelope 
   if (!Object.keys(keyEnvelopes).length) throw new DecryptionError('Backend message contains no recipient key envelopes.');
 
   const contentType = message.type as MessageContentType;
-  const createdAt = message.createdAt || message.sentAt;
+  const metadataMessageId = message.metadata?.messageId;
+  const metadataCreatedAt = message.metadata?.createdAt;
+  const metadataExpiresAt = message.metadata?.expiresAt;
+  const metadataReplyToMessageId = message.metadata?.replyToMessageId;
+  const cryptoMessageId = typeof metadataMessageId === 'string' && metadataMessageId.length > 0
+    ? metadataMessageId
+    : message.clientMessageId || message.id;
+  const createdAt = typeof metadataCreatedAt === 'string' && !Number.isNaN(Date.parse(metadataCreatedAt))
+    ? metadataCreatedAt
+    : message.createdAt || message.sentAt;
   if (message.associatedData) {
     const expectedAssociatedData = bytesToHex(utf8(canonicalJson({
       protocolVersion: GAPAK_E2EE_PROTOCOL_VERSION,
@@ -134,7 +174,7 @@ const backendMessageToEnvelope = (message: BackendMessage): E2EEMessageEnvelope 
       senderId: message.senderId,
       senderDeviceId: message.senderDeviceId,
       senderKeyId: message.senderKeyId,
-      messageId: message.id,
+      messageId: cryptoMessageId,
       ratchetCounter: message.ratchetCounter,
       keyVersion: Math.max(1, Number(message.metadata?.keyVersion ?? message.keyEnvelopes?.[0]?.keyVersion ?? 1)),
       contentType,
@@ -144,7 +184,7 @@ const backendMessageToEnvelope = (message: BackendMessage): E2EEMessageEnvelope 
   }
   return {
     protocolVersion: GAPAK_E2EE_PROTOCOL_VERSION,
-    id: message.id,
+    id: cryptoMessageId,
     clientMessageId: message.clientMessageId,
     chatId: message.chatId,
     senderId: message.senderId,
@@ -159,8 +199,24 @@ const backendMessageToEnvelope = (message: BackendMessage): E2EEMessageEnvelope 
     authenticationTag: message.authenticationTag,
     contentType,
     createdAt,
-    expiresAt: message.expiresAt ?? undefined,
-    replyToMessageId: undefined,
+    // Only client-signed expiry metadata belongs to the crypto envelope. A
+    // server-enforced room TTL is applied to UI/storage separately and must not
+    // change the bytes covered by the sender signature.
+    expiresAt: typeof metadataExpiresAt === 'string' ? metadataExpiresAt : undefined,
+    replyToMessageId: typeof metadataReplyToMessageId === 'string'
+      ? metadataReplyToMessageId
+      : message.replyToMessageId ?? undefined,
+    attachments: (message.attachments ?? []).map(attachment => ({
+      id: attachment.id,
+      mediaFileId: attachment.mediaFileId,
+      name: attachment.fileName ?? 'attachment',
+      type: attachment.kind.toLowerCase() as EncryptedAttachment['type'],
+      sizeBytes: attachment.sizeBytes,
+      mimeType: attachment.mimeType ?? 'application/octet-stream',
+      nonce: typeof attachment.metadata?.nonce === 'string' ? attachment.metadata.nonce : undefined,
+      durationSeconds: attachment.durationSeconds ?? undefined,
+      waveform: Array.isArray(attachment.metadata?.waveform) ? attachment.metadata.waveform.filter((value): value is number => typeof value === 'number') : undefined,
+    })),
   };
 };
 
@@ -282,15 +338,41 @@ export class E2EECryptoEngineService {
         messageId: envelope.id,
         keyVersion: envelope.keyVersion,
         createdAt: envelope.createdAt,
+        ...(envelope.expiresAt ? { expiresAt: envelope.expiresAt } : {}),
+        ...(envelope.replyToMessageId ? { replyToMessageId: envelope.replyToMessageId } : {}),
       },
       replyToMessageId: envelope.replyToMessageId,
       keyEnvelopes: Object.values(envelope.keyEnvelopes).map(keyEnvelopeToBackend),
     };
 
-    if (envelope.attachments?.length) {
-      throw new Error('Encrypted attachments are not supported by the approved SendMessageRequest mapping yet.');
-    }
+    if (envelope.attachments?.length) request.attachments = envelope.attachments.map(attachment => ({
+      mediaFileId: attachment.mediaFileId,
+      kind: attachment.type.toUpperCase() as NonNullable<SendMessageRequest['attachments']>[number]['kind'],
+      fileName: attachment.name,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      metadata: attachment.nonce ? { nonce: attachment.nonce } : undefined,
+      durationSeconds: attachment.durationSeconds,
+      ...(attachment.waveform ? { metadata: { ...(attachment.nonce ? { nonce: attachment.nonce } : {}), waveform: attachment.waveform } } : {}),
+    }));
     return request;
+  }
+
+  toBackendEditMessageRequest(envelope: E2EEMessageEnvelope) {
+    const request = this.toBackendSendMessageRequest(envelope);
+    return {
+      senderDeviceId: request.senderDeviceId,
+      senderKeyId: request.senderKeyId,
+      ciphertext: request.ciphertext,
+      nonce: request.nonce,
+      authenticationTag: request.authenticationTag,
+      metadata: request.metadata,
+      encryptionProtocol: request.encryptionProtocol,
+      encryptionAlgorithm: request.encryptionAlgorithm,
+      associatedData: request.associatedData,
+      ratchetCounter: request.ratchetCounter,
+      keyEnvelopes: request.keyEnvelopes,
+    };
   }
 
   fromBackendMessage(message: BackendMessage): E2EEMessageEnvelope {
@@ -323,6 +405,7 @@ export class E2EECryptoEngineService {
     const plaintext = await decryptWithKey(messageKey, envelope.ciphertext, envelope.nonce, aad);
     const seen = await this.markMessageSeen(targetDeviceId, envelope.id);
     if (!seen) throw new DecryptionError('Duplicate or replayed message rejected');
+    const voiceAttachment = envelope.attachments?.find(attachment => attachment.type === 'voice');
     return {
       id: envelope.id,
       chatId: envelope.chatId,
@@ -333,8 +416,10 @@ export class E2EECryptoEngineService {
       state: 'delivered',
       createdAt: envelope.createdAt,
       expiresAt: envelope.expiresAt,
+      replyToMessageId: envelope.replyToMessageId,
       reactions: [],
       attachments: envelope.attachments,
+      voice: voiceAttachment ? { durationSeconds: voiceAttachment.durationSeconds ?? 0, waveform: voiceAttachment.waveform ?? [] } : undefined,
     };
   }
 

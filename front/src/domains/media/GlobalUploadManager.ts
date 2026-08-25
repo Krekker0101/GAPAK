@@ -134,6 +134,26 @@ class GlobalUploadManager {
     return id;
   }
 
+  waitForCompletion(id: string): Promise<UploadSession> {
+    return new Promise((resolve, reject) => {
+      let unsubscribe = () => {};
+      let settled = false;
+      const inspect = (sessions: UploadSession[]) => {
+        if (settled) return;
+        const session = sessions.find(item => item.id === id);
+        if (!session) return;
+        if (session.state === 'READY') { settled = true; unsubscribe(); resolve(session); }
+        if (['FAILED', 'CANCELLED', 'EXPIRED'].includes(session.state)) {
+          settled = true;
+          unsubscribe();
+          reject(new Error(session.error || `Upload ended with state ${session.state}.`));
+        }
+      };
+      unsubscribe = this.subscribe(inspect);
+      if (settled) unsubscribe();
+    });
+  }
+
   private async run(id: string) {
     const runtime = this.runtimes.get(id);
     if (!runtime) return;
@@ -280,9 +300,20 @@ class GlobalUploadManager {
     this.patch(id, { state: 'PROCESSING', progress: 100, processingStep: 'Waiting for server-side media processing…' });
     const result = await mediaApi.completeUpload(runtime.init.uploadId, parts, id);
     if (!result.mediaFileId) throw new Error('Upload completion response did not include mediaFileId.');
+    await this.waitUntilMediaReady(result.mediaFileId);
     this.patch(id, { state: 'READY', mediaId: result.mediaFileId, processingStep: 'Media ready.' });
     this.runtimes.delete(id);
     void this.deletePersisted(id);
+  }
+
+  private async waitUntilMediaReady(mediaFileId: string): Promise<void> {
+    for (let attempt = 0; attempt < 90; attempt++) {
+      const asset = await mediaApi.getAsset(mediaFileId);
+      if (asset.status === 'READY') return;
+      if (asset.status === 'FAILED') throw new Error('Server-side media validation or processing failed.');
+      await new Promise(resolve => setTimeout(resolve, 2_000));
+    }
+    throw new Error('Media processing timed out. Retry after the server finishes processing.');
   }
 
   pauseUpload(id: string) {

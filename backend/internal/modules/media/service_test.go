@@ -70,3 +70,15 @@ func TestValidateCompletedPartsRejectsOverSizedUpload(t *testing.T) {
 		t.Fatal("expected over-sized upload to be rejected")
 	}
 }
+
+func TestCompatibleMIMETypeAcceptsAudioOnlyRecorderContainers(t *testing.T) {
+	tests := [][2]string{{"audio/webm", "video/webm"}, {"audio/ogg", "application/ogg"}, {"audio/wav", "audio/wave"}}
+	for _, item := range tests {
+		if !compatibleMIMEType(item[0], item[1]) {
+			t.Fatalf("expected declared %s and detected %s to be compatible", item[0], item[1])
+		}
+	}
+	if compatibleMIMEType("audio/webm", "application/pdf") {
+		t.Fatal("unrelated MIME types must remain incompatible")
+	}
+}

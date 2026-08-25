@@ -240,8 +240,11 @@ func (s *Service) handleRealtimeEvent(ctx context.Context, event realtimeEnvelop
 			if !s.isAuthorizedRealtimeRecipient(conn, event) {
 				continue
 			}
-		} else if event.Type != "chat.message.created" {
-			if !s.isAuthorizedRealtimeRecipient(conn, event) {
+		} else {
+			// Subscription state is not authorization state: a member may have
+			// been removed after subscribing. Re-check durable membership for
+			// every chat event, including message.created.
+			if err := s.messageService.AssertChatAccess(ctx, conn.UserID, event.ChatID); err != nil {
 				continue
 			}
 		}
@@ -253,8 +256,25 @@ func (s *Service) handleRealtimeEvent(ctx context.Context, event realtimeEnvelop
 		dataPayload := event.Data
 		if event.Type == "chat.read_receipt" {
 			if envelope, ok := event.Data.(map[string]interface{}); ok {
-				dataPayload = envelope["receipt"]
+				if receipt, exists := envelope["receipt"]; exists {
+					dataPayload = receipt
+				}
 			}
+		}
+		if payload, ok := dataPayload.(map[string]interface{}); ok {
+			copyPayload := make(map[string]interface{}, len(payload)+2)
+			for key, value := range payload {
+				copyPayload[key] = value
+			}
+			if _, exists := copyPayload["chatId"]; !exists {
+				copyPayload["chatId"] = event.ChatID
+			}
+			if event.MessageID != "" {
+				if _, exists := copyPayload["messageId"]; !exists {
+					copyPayload["messageId"] = event.MessageID
+				}
+			}
+			dataPayload = copyPayload
 		}
 		data := WebSocketMessage{ID: event.EventID, Type: event.Type, Data: dataPayload}
 		if (event.Type == "chat.message.created" || event.Type == "chat.message.edited" || event.Type == "chat.message.deleted") && event.Data == nil {
@@ -727,24 +747,6 @@ func (s *Service) handleReadReceipt(ctx context.Context, conn *Connection, msg *
 	receipt, err := s.messageService.MarkAsRead(ctx, conn.UserID, chatID, messageID)
 	if err != nil {
 		return err
-	}
-	recipients, err := s.messageService.ListChatMemberIDs(ctx, conn.UserID, chatID)
-	if err != nil {
-		return err
-	}
-	event := realtimeEnvelope{
-		EventID:        generateConnectionID(),
-		Type:           "chat.read_receipt",
-		ChatID:         chatID,
-		SenderID:       conn.UserID,
-		SenderDeviceID: conn.DeviceID,
-		Data: map[string]interface{}{
-			"receipt":            receipt,
-			"recipient_user_ids": recipients,
-		},
-	}
-	if err := s.publishEphemeral(ctx, event); err != nil {
-		s.handleRealtimeEvent(ctx, event)
 	}
 	return s.enqueue(conn, WebSocketMessage{ID: generateConnectionID(), AckFor: msg.ID, Type: "read_receipt_ack", Data: receipt})
 }

@@ -39,6 +39,17 @@ type Repository struct {
 	db dbConn
 }
 
+type DevicePreKeyBundle struct {
+	Device        *model.TrustedDevice
+	SignedPreKey  *model.DevicePreKey
+	OneTimePreKey *model.DevicePreKey
+}
+
+type TrustedDeviceRecipient struct {
+	UserID   string
+	DeviceID string
+}
+
 // allowedUpdateColumns defines which columns can be set via the generic Update* helpers.
 var allowedUpdateColumns = map[string]map[string]struct{}{
 	"chats": {
@@ -64,6 +75,7 @@ var allowedUpdateColumns = map[string]map[string]struct{}{
 		"content":                   {},
 		"metadata":                  {},
 		"sender_key_id":             {},
+		"sender_device_id":          {},
 		"encryption_protocol":       {},
 		"encryption_algorithm":      {},
 		"associated_data":           {},
@@ -248,9 +260,11 @@ func (r *Repository) ListUserChats(ctx context.Context, userID string, limit, of
 		  AND ($3 = false OR EXISTS (
 		  	SELECT 1 FROM messages m
 		  	WHERE m.chat_id = c.id
-		  	AND m.sent_at > COALESCE(cm.last_read_at, '1970-01-01'::timestamp)
+			AND m.sent_at >= cm.joined_at
+			AND m.sequence_number > COALESCE((SELECT read_message.sequence_number FROM messages read_message WHERE read_message.id = cm.last_read_message_id), 0)
 		  	AND m.sender_id != $1
 		  	AND m.deleted_at IS NULL
+			AND (m.expires_at IS NULL OR m.expires_at > NOW())
 		  ))
 		ORDER BY c.is_pinned DESC, c.last_message_at DESC NULLS LAST, c.created_at DESC
 		LIMIT $4 OFFSET $5
@@ -643,7 +657,7 @@ func (r *Repository) GetMessage(ctx context.Context, messageID string) (*model.M
 		       reply_to_message_id, forwarded_from_message_id, forwarded_from_chat_id,
 		       expires_at, sent_at, edited_at, deleted_at, deleted_by_id, created_at, updated_at
 		FROM messages
-		WHERE id = $1
+		WHERE id = $1 AND (expires_at IS NULL OR expires_at > NOW())
 	`
 
 	return r.scanMessage(r.db.QueryRow(ctx, query, messageID))
@@ -730,6 +744,7 @@ func (r *Repository) GetMessagesAfterSequence(ctx context.Context, chatID, userI
 		       expires_at, sent_at, edited_at, deleted_at, deleted_by_id, created_at, updated_at
 		FROM messages
 		WHERE chat_id = $1 AND sequence_number > $2 AND deleted_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > NOW())
 		ORDER BY sequence_number ASC, id ASC
 		LIMIT $3
 	`
@@ -766,7 +781,7 @@ func (r *Repository) GetMessagesCursor(ctx context.Context, chatID, userID strin
 				       reply_to_message_id, forwarded_from_message_id, forwarded_from_chat_id,
 				       expires_at, sent_at, edited_at, deleted_at, deleted_by_id, created_at, updated_at
 				FROM messages
-				WHERE chat_id = $1 AND deleted_at IS NULL
+				WHERE chat_id = $1 AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
 				  AND (sent_at < $2 OR (sent_at = $2 AND id < $3))
 				ORDER BY sent_at DESC, id DESC
 				LIMIT $4
@@ -780,7 +795,7 @@ func (r *Repository) GetMessagesCursor(ctx context.Context, chatID, userID strin
 				       reply_to_message_id, forwarded_from_message_id, forwarded_from_chat_id,
 				       expires_at, sent_at, edited_at, deleted_at, deleted_by_id, created_at, updated_at
 				FROM messages
-				WHERE chat_id = $1 AND deleted_at IS NULL
+				WHERE chat_id = $1 AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
 				ORDER BY sent_at DESC, id DESC
 				LIMIT $2
 			`
@@ -799,7 +814,7 @@ func (r *Repository) GetMessagesCursor(ctx context.Context, chatID, userID strin
 				       reply_to_message_id, forwarded_from_message_id, forwarded_from_chat_id,
 				       expires_at, sent_at, edited_at, deleted_at, deleted_by_id, created_at, updated_at
 				FROM messages
-				WHERE chat_id = $1 AND deleted_at IS NULL
+				WHERE chat_id = $1 AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
 				  AND (sent_at > $2 OR (sent_at = $2 AND id > $3))
 				ORDER BY sent_at ASC, id ASC
 				LIMIT $4
@@ -813,7 +828,7 @@ func (r *Repository) GetMessagesCursor(ctx context.Context, chatID, userID strin
 				       reply_to_message_id, forwarded_from_message_id, forwarded_from_chat_id,
 				       expires_at, sent_at, edited_at, deleted_at, deleted_by_id, created_at, updated_at
 				FROM messages
-				WHERE chat_id = $1 AND deleted_at IS NULL
+				WHERE chat_id = $1 AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
 				ORDER BY sent_at ASC, id ASC
 				LIMIT $2
 			`
@@ -999,6 +1014,30 @@ func (r *Repository) GetReactions(ctx context.Context, messageID, reactionType s
 	return reactions, rows.Err()
 }
 
+func (r *Repository) GetReactionsByMessageIDs(ctx context.Context, messageIDs []string) (map[string][]*model.Reaction, error) {
+	result := make(map[string][]*model.Reaction, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT id, message_id, user_id, reaction_type, created_at
+		FROM reactions
+		WHERE message_id = ANY($1::uuid[])
+		ORDER BY message_id, created_at`, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		reaction, err := r.scanReaction(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[reaction.MessageID] = append(result[reaction.MessageID], reaction)
+	}
+	return result, rows.Err()
+}
+
 // ============================================================================
 // READ/DELIVERY RECEIPT OPERATIONS
 // ============================================================================
@@ -1016,6 +1055,26 @@ func (r *Repository) MarkAsRead(ctx context.Context, messageID, userID string) (
 	return r.scanReadReceipt(r.db.QueryRow(ctx, query, id, messageID, userID))
 }
 
+// AdvanceChatMemberReadCursor moves the cursor only forward. Clients can send
+// delayed or retried receipts out of order, so a generic UPDATE could otherwise
+// make already-read messages unread again.
+func (r *Repository) AdvanceChatMemberReadCursor(ctx context.Context, chatID, userID, messageID string, readAt time.Time) error {
+	const query = `
+		UPDATE chat_members cm
+		SET last_read_message_id = target.id, last_read_at = $4, updated_at = NOW()
+		FROM messages target
+		WHERE cm.chat_id = $1 AND cm.user_id = $2
+		  AND cm.deleted_at IS NULL AND cm.left_at IS NULL
+		  AND target.id = $3 AND target.chat_id = $1
+		  AND target.sequence_number > COALESCE((
+		    SELECT current_message.sequence_number
+		    FROM messages current_message
+		    WHERE current_message.id = cm.last_read_message_id
+		  ), 0)`
+	_, err := r.db.Exec(ctx, query, chatID, userID, messageID, readAt)
+	return err
+}
+
 func (r *Repository) MarkAsDelivered(ctx context.Context, messageID, userID string) (*model.DeliveryReceipt, error) {
 	const query = `
 		INSERT INTO delivery_receipts (id, message_id, user_id, delivered_at)
@@ -1027,6 +1086,54 @@ func (r *Repository) MarkAsDelivered(ctx context.Context, messageID, userID stri
 
 	id := uuid.NewString()
 	return r.scanDeliveryReceipt(r.db.QueryRow(ctx, query, id, messageID, userID))
+}
+
+func (r *Repository) GetReadReceiptsByMessageIDs(ctx context.Context, messageIDs []string) (map[string][]*model.ReadReceipt, error) {
+	result := make(map[string][]*model.ReadReceipt, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT id, message_id, user_id, read_at
+		FROM read_receipts
+		WHERE message_id = ANY($1::uuid[])
+		ORDER BY message_id, read_at`, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		receipt, err := r.scanReadReceipt(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[receipt.MessageID] = append(result[receipt.MessageID], receipt)
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) GetDeliveryReceiptsByMessageIDs(ctx context.Context, messageIDs []string) (map[string][]*model.DeliveryReceipt, error) {
+	result := make(map[string][]*model.DeliveryReceipt, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT id, message_id, user_id, delivered_at
+		FROM delivery_receipts
+		WHERE message_id = ANY($1::uuid[])
+		ORDER BY message_id, delivered_at`, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		receipt, err := r.scanDeliveryReceipt(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[receipt.MessageID] = append(result[receipt.MessageID], receipt)
+	}
+	return result, rows.Err()
 }
 
 // ============================================================================
@@ -1121,6 +1228,26 @@ func (r *Repository) GetPinnedMessages(ctx context.Context, chatID string) ([]*m
 	return pinned, rows.Err()
 }
 
+func (r *Repository) GetPinnedMessageIDs(ctx context.Context, messageIDs []string) (map[string]bool, error) {
+	result := make(map[string]bool, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+	rows, err := r.db.Query(ctx, `SELECT message_id FROM pinned_messages WHERE message_id = ANY($1::uuid[])`, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var messageID string
+		if err := rows.Scan(&messageID); err != nil {
+			return nil, err
+		}
+		result[messageID] = true
+	}
+	return result, rows.Err()
+}
+
 // ============================================================================
 // MESSAGE VERSION OPERATIONS
 // ============================================================================
@@ -1204,6 +1331,31 @@ func (r *Repository) GetMessageVersions(ctx context.Context, messageID string) (
 	return versions, rows.Err()
 }
 
+func (r *Repository) GetMessageVersionCounts(ctx context.Context, messageIDs []string) (map[string]int, error) {
+	result := make(map[string]int, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT message_id, COUNT(*)
+		FROM message_versions
+		WHERE message_id = ANY($1::uuid[])
+		GROUP BY message_id`, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var messageID string
+		var count int
+		if err := rows.Scan(&messageID, &count); err != nil {
+			return nil, err
+		}
+		result[messageID] = count
+	}
+	return result, rows.Err()
+}
+
 // ============================================================================
 // BATCH OPERATIONS
 // ============================================================================
@@ -1230,7 +1382,15 @@ func (r *Repository) EnsureOwnedReadyMedia(ctx context.Context, ownerID string, 
 		WHERE id = ANY($1::uuid[])
 		  AND owner_id = $2
 		  AND deleted_at IS NULL
-		  AND status = 'READY'`
+		  AND status = 'READY'
+		  AND EXISTS (
+		    SELECT 1
+		    FROM upload_sessions us
+		    WHERE us.media_file_id = media_files.id
+		      AND us.owner_id = $2
+		      AND us.purpose = 'CHAT_ATTACHMENT'
+		      AND us.status = 'COMPLETED'
+		  )`
 	var count int
 	if err := r.db.QueryRow(ctx, query, all, ownerID).Scan(&count); err != nil {
 		return err
@@ -1433,9 +1593,24 @@ func (r *Repository) PublishDevicePreKey(ctx context.Context, preKey *model.Devi
 }
 
 func (r *Repository) GetPreKeyBundle(ctx context.Context, userID string) (*model.TrustedDevice, *model.DevicePreKey, *model.DevicePreKey, error) {
-	tx, err := r.db.Begin(ctx)
+	bundles, err := r.GetPreKeyBundles(ctx, userID)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	if len(bundles) == 0 {
+		return nil, nil, nil, apperrors.ErrNotFound
+	}
+	first := bundles[0]
+	return first.Device, first.SignedPreKey, first.OneTimePreKey, nil
+}
+
+// GetPreKeyBundles returns cryptographic material for every active trusted
+// device. A one-time pre-key is consumed only in the same transaction that
+// returns it, preserving single-consumer semantics across concurrent callers.
+func (r *Repository) GetPreKeyBundles(ctx context.Context, userID string) ([]DevicePreKeyBundle, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -1445,12 +1620,28 @@ func (r *Repository) GetPreKeyBundle(ctx context.Context, userID string) (*model
 		FROM trusted_chat_devices
 		WHERE user_id = $1 AND revoked_at IS NULL AND trust_status = 'TRUSTED'
 		ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
-		LIMIT 1
 		FOR UPDATE
 	`
-	device, err := r.scanTrustedDevice(tx.QueryRow(ctx, deviceQuery, userID))
+	rows, err := tx.Query(ctx, deviceQuery, userID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
+	}
+	devices := make([]*model.TrustedDevice, 0)
+	for rows.Next() {
+		device, scanErr := r.scanTrustedDevice(rows)
+		if scanErr != nil {
+			rows.Close()
+			return nil, scanErr
+		}
+		devices = append(devices, device)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(devices) == 0 {
+		return nil, apperrors.ErrNotFound
 	}
 
 	const signedQuery = `
@@ -1461,11 +1652,6 @@ func (r *Repository) GetPreKeyBundle(ctx context.Context, userID string) (*model
 		ORDER BY created_at DESC
 		LIMIT 1
 	`
-	signedPreKey, err := r.scanDevicePreKey(tx.QueryRow(ctx, signedQuery, userID, device.ID))
-	if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
-		return nil, nil, nil, err
-	}
-
 	const oneTimeQuery = `
 		SELECT id, device_id, user_id, key_id, public_key, signature, one_time, used_at, created_at, expires_at
 		FROM trusted_chat_prekeys
@@ -1475,22 +1661,64 @@ func (r *Repository) GetPreKeyBundle(ctx context.Context, userID string) (*model
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
 	`
-	oneTimePreKey, err := r.scanDevicePreKey(tx.QueryRow(ctx, oneTimeQuery, userID, device.ID))
-	if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
-		return nil, nil, nil, err
-	}
-	if oneTimePreKey != nil {
-		if _, err := tx.Exec(ctx, `UPDATE trusted_chat_prekeys SET used_at = NOW() WHERE id = $1`, oneTimePreKey.ID); err != nil {
-			return nil, nil, nil, err
+
+	bundles := make([]DevicePreKeyBundle, 0, len(devices))
+	for _, device := range devices {
+		signedPreKey, scanErr := r.scanDevicePreKey(tx.QueryRow(ctx, signedQuery, userID, device.ID))
+		if scanErr != nil && !errors.Is(scanErr, apperrors.ErrNotFound) {
+			return nil, scanErr
 		}
-		now := time.Now().UTC()
-		oneTimePreKey.UsedAt = &now
+		if errors.Is(scanErr, apperrors.ErrNotFound) {
+			signedPreKey = nil
+		}
+
+		oneTimePreKey, scanErr := r.scanDevicePreKey(tx.QueryRow(ctx, oneTimeQuery, userID, device.ID))
+		if scanErr != nil && !errors.Is(scanErr, apperrors.ErrNotFound) {
+			return nil, scanErr
+		}
+		if errors.Is(scanErr, apperrors.ErrNotFound) {
+			oneTimePreKey = nil
+		}
+		if oneTimePreKey != nil {
+			if _, err := tx.Exec(ctx, `UPDATE trusted_chat_prekeys SET used_at = NOW() WHERE id = $1`, oneTimePreKey.ID); err != nil {
+				return nil, err
+			}
+			now := time.Now().UTC()
+			oneTimePreKey.UsedAt = &now
+		}
+		bundles = append(bundles, DevicePreKeyBundle{Device: device, SignedPreKey: signedPreKey, OneTimePreKey: oneTimePreKey})
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
-	return device, signedPreKey, oneTimePreKey, nil
+	return bundles, nil
+}
+
+func (r *Repository) ListChatTrustedDeviceRecipients(ctx context.Context, chatID string) ([]TrustedDeviceRecipient, error) {
+	const query = `
+		SELECT d.user_id, d.id
+		FROM chat_members cm
+		JOIN trusted_chat_devices d ON d.user_id = cm.user_id
+		WHERE cm.chat_id = $1
+		  AND cm.deleted_at IS NULL AND cm.left_at IS NULL
+		  AND d.revoked_at IS NULL AND d.trust_status = 'TRUSTED'
+		ORDER BY d.user_id, d.id
+	`
+	rows, err := r.db.Query(ctx, query, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	recipients := make([]TrustedDeviceRecipient, 0)
+	for rows.Next() {
+		var recipient TrustedDeviceRecipient
+		if err := rows.Scan(&recipient.UserID, &recipient.DeviceID); err != nil {
+			return nil, err
+		}
+		recipients = append(recipients, recipient)
+	}
+	return recipients, rows.Err()
 }
 
 func (r *Repository) CreateMessageKeyEnvelopes(ctx context.Context, envelopes []*model.MessageKey) error {
@@ -1505,6 +1733,8 @@ func (r *Repository) CreateMessageKeyEnvelopes(ctx context.Context, envelopes []
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (message_id, recipient_device_id) DO UPDATE SET
+			recipient_id = EXCLUDED.recipient_id,
+			sender_device_id = EXCLUDED.sender_device_id,
 			key_id = EXCLUDED.key_id,
 			algorithm = EXCLUDED.algorithm,
 			encrypted_key = EXCLUDED.encrypted_key,
@@ -1538,6 +1768,15 @@ func (r *Repository) CreateMessageKeyEnvelopes(ctx context.Context, envelopes []
 		}
 	}
 	return nil
+}
+
+// ReplaceMessageKeyEnvelopes atomically removes envelopes for devices that are
+// no longer trusted and writes the exact recipient set supplied by the client.
+func (r *Repository) ReplaceMessageKeyEnvelopes(ctx context.Context, messageID string, envelopes []*model.MessageKey) error {
+	if _, err := r.db.Exec(ctx, `DELETE FROM trusted_chat_message_key_envelopes WHERE message_id = $1`, messageID); err != nil {
+		return err
+	}
+	return r.CreateMessageKeyEnvelopes(ctx, envelopes)
 }
 
 func (r *Repository) GetMessageKeyEnvelopesForUser(ctx context.Context, messageID, userID string) ([]*model.MessageKey, error) {
@@ -1604,11 +1843,25 @@ func (r *Repository) CleanupExpiredTypingSessions(ctx context.Context) error {
 
 func (r *Repository) CleanupExpiredMessages(ctx context.Context) error {
 	const query = `
-		UPDATE messages
-		SET deleted_at = NOW(), updated_at = NOW()
-		WHERE expires_at IS NOT NULL
-		AND expires_at < NOW()
-		AND deleted_at IS NULL
+		WITH expired AS (
+		  UPDATE messages
+		  SET deleted_at = NOW(), status = 'DELETED', updated_at = NOW()
+		  WHERE expires_at IS NOT NULL AND expires_at <= NOW() AND deleted_at IS NULL
+		  RETURNING chat_id
+		), affected AS (SELECT DISTINCT chat_id FROM expired)
+		UPDATE chats c
+		SET last_message_id = (
+		      SELECT m.id FROM messages m
+		      WHERE m.chat_id = c.id AND m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at > NOW())
+		      ORDER BY m.sequence_number DESC LIMIT 1
+		    ),
+		    last_message_at = (
+		      SELECT m.sent_at FROM messages m
+		      WHERE m.chat_id = c.id AND m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at > NOW())
+		      ORDER BY m.sequence_number DESC LIMIT 1
+		    ),
+		    updated_at = NOW()
+		WHERE c.id IN (SELECT chat_id FROM affected)
 	`
 	_, err := r.db.Exec(ctx, query)
 	return err

@@ -29,8 +29,9 @@ export const MediaUploadSubsystem: React.FC<Props> = ({
   const input = useRef<HTMLInputElement>(null);
   const objectUrls = useRef(new Map<string, string>());
   const emitted = useRef(new Set<string>());
+  const ownedSessionIds = useRef(new Set<string>());
 
-  useEffect(() => globalUploadManager.subscribe(setSessions), []);
+  useEffect(() => globalUploadManager.subscribe(items => setSessions(items.filter(item => item.context === context && ownedSessionIds.current.has(item.id)))), [context]);
 
   useEffect(() => {
     sessions.filter(s => s.state === 'READY' && s.mediaId && !emitted.current.has(s.id)).forEach(s => {
@@ -57,7 +58,11 @@ export const MediaUploadSubsystem: React.FC<Props> = ({
     Array.from(files).forEach(file => {
       if (file.size > maxFileSizeMB * 1024 * 1024) return;
       const preview = file.type.startsWith('image/') || file.type.startsWith('video/') ? URL.createObjectURL(file) : undefined;
-      void globalUploadManager.startUpload(file, context).then(id => { if (preview) objectUrls.current.set(id, preview); });
+      void globalUploadManager.startUpload(file, context).then(id => {
+        ownedSessionIds.current.add(id);
+        if (preview) objectUrls.current.set(id, preview);
+        setSessions(globalUploadManager.getSessions().filter(item => item.context === context && ownedSessionIds.current.has(item.id)));
+      });
     });
   };
 
