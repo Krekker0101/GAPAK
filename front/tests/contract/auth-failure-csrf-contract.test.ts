@@ -54,6 +54,10 @@ test('production session cookies use a non-cacheable same-origin API reverse pro
   const apiHeaders = vercel.headers?.find((entry) => entry.source === '/api/v1/:path*')?.headers ?? [];
   assert.ok(apiHeaders.some((header) => header.key.toLowerCase() === 'cache-control' && /no-store/.test(header.value)));
   assert.match(runtimeEnv, /import\.meta\.env\.PROD && !useDirectProductionApi \? '' : configuredApiBaseUrl/);
+  const documentHeaders = vercel.headers?.find((entry) => entry.source === '/(.*)')?.headers ?? [];
+  const csp = documentHeaders.find((header) => header.key.toLowerCase() === 'content-security-policy')?.value ?? '';
+  assert.match(csp, /style-src-elem 'self' 'unsafe-inline' https:\/\/www\.gstatic\.com/);
+  assert.doesNotMatch(csp, /script-src[^;]*gstatic/);
 });
 
 test('forced CSRF recovery remains single-flight', () => {
@@ -63,6 +67,14 @@ test('forced CSRF recovery remains single-flight', () => {
   assert.doesNotMatch(manager, /if \(!force && this\.csrfPromise\)/);
   assert.match(client, /if \(this\.csrfBootstrapPromise\) return this\.csrfBootstrapPromise/);
   assert.match(client, /csrfRetry: true/);
+});
+
+test('a temporarily missing refresh deployment cannot trap the entire app', () => {
+  const manager = read('src/shared/api/authManager.ts');
+  assert.match(manager, /finalError\.status === 401 \|\| finalError\.status === 404/);
+  assert.match(manager, /finalError = retryError/);
+  assert.match(manager, /this\.clearSession\(\)/);
+  assert.match(manager, /return ''/);
 });
 
 test('session teardown does not send an unauthenticated presence mutation', () => {

@@ -24,14 +24,23 @@ export class AuthManager {
     try {
       return await httpClient.refreshSession();
     } catch (error) {
+      let finalError: unknown = error;
       if (error instanceof ApiError && (error.status === 403 || error.code === 'CSRF_INVALID' || error.code === 'CSRF_FAILED')) {
-        await this.ensureCsrf(true);
-        return await httpClient.refreshSession();
+        try {
+          await this.ensureCsrf(true);
+          return await httpClient.refreshSession();
+        } catch (retryError) {
+          finalError = retryError;
+        }
       }
       // A refresh without a refresh cookie is the normal anonymous bootstrap
       // state. Do not surface it as an application error or start a retry loop.
-      if (error instanceof ApiError && error.status === 401) {
-        tokenManager.clear();
+      if (finalError instanceof ApiError && (finalError.status === 401 || finalError.status === 404)) {
+        // A 404 can occur briefly when frontend and backend deployments roll
+        // out at different times. It is not recoverable by retrying or by
+        // clearing the browser cache, so reset only auth state and let the UI
+        // present a clean login instead of trapping the whole application.
+        this.clearSession();
         return '';
       }
       // The backend currently does not expose POST /auth/refresh at all on
@@ -39,7 +48,7 @@ export class AuthManager {
       // missing/misconfigured route on the server, not a real auth failure —
       // treat it the same as "no session" instead of surfacing a hard error
       // or letting callers retry a route that can never succeed.
-      throw error;
+      throw finalError;
     }
   }
 
