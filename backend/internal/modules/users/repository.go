@@ -146,7 +146,6 @@ func (r *Repository) SearchPublicProfiles(ctx context.Context, viewerID, queryTe
 		FROM users u
 		JOIN user_privacy_settings ups ON ups.user_id = u.id
 		WHERE u.id <> $1 AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL
-		  AND u.is_anonymous = false
 		  AND ups.searchable_by_username = true
 		  AND (u.username ILIKE '%' || $2 || '%' OR u.display_name ILIKE '%' || $2 || '%')
 		ORDER BY CASE WHEN LOWER(u.username) = LOWER($2) THEN 0 ELSE 1 END,
@@ -169,7 +168,6 @@ func (r *Repository) DiscoverPublicProfiles(ctx context.Context, viewerID, sort 
 		FROM users u
 		JOIN user_privacy_settings ups ON ups.user_id = u.id
 		WHERE u.id <> $1 AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL
-		  AND u.is_anonymous = false
 		  AND ups.profile_visibility = 'PUBLIC'
 		  AND ups.allow_friend_requests = true
 		  AND NOT EXISTS (

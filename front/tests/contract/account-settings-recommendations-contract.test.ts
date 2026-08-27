@@ -16,6 +16,8 @@ test('profile exposes backend-backed account settings', () => {
   assert.match(settings, /usersApi\.me/);
   assert.match(settings, /usersApi\.updatePrivacy/);
   assert.match(settings, /profileVisibility:\s*enabled \? 'PUBLIC' : 'PRIVATE'/);
+  assert.doesNotMatch(settings, /disabled=\{profile\.isAnonymous/);
+  assert.match(settings, /A public anonymous profile exposes only your pseudonym/);
   assert.doesNotMatch(settings, /localStorage|sessionStorage/);
 });
 

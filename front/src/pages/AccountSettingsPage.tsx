@@ -92,12 +92,16 @@ const AccountSettingsForm: React.FC<{ profile: BackendProfile }> = ({ profile })
             <Switch
               id="public-account"
               checked={draft.profileVisibility === 'PUBLIC'}
-              disabled={profile.isAnonymous || update.isPending}
+              disabled={update.isPending}
               onChange={(enabled) => setDraft((current) => ({ ...current, profileVisibility: enabled ? 'PUBLIC' : 'PRIVATE' }))}
               label="Public"
             />
           </div>
-          {profile.isAnonymous && <p className="mt-4 rounded-xl bg-amber-500/10 px-3 py-2 text-xs text-amber-500">Anonymous accounts remain private to protect their identity.</p>}
+          {profile.isAnonymous && (
+            <p className="mt-4 rounded-xl bg-indigo-500/10 px-3 py-2 text-xs leading-relaxed text-indigo-300">
+              A public anonymous profile exposes only your pseudonym, display name, bio, and avatar. Your email and private identity remain hidden.
+            </p>
+          )}
         </div>
 
         <div className="grid gap-6 p-6 md:grid-cols-2">

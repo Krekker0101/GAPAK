@@ -91,13 +91,6 @@ func (s *Service) UpdateTheme(ctx context.Context, userID string, req UpdateThem
 }
 
 func (s *Service) UpdatePrivacy(ctx context.Context, userID string, req UpdatePrivacyRequest) (ProfileResponse, error) {
-	user, err := s.repo.FindProfile(ctx, userID)
-	if err != nil {
-		return ProfileResponse{}, err
-	}
-	if user.IsAnonymous && req.ProfileVisibility != "PRIVATE" {
-		return ProfileResponse{}, apperrors.New(400, "users.anonymous_visibility_invalid", "Anonymous accounts must remain private")
-	}
 	if err := s.repo.UpdatePrivacy(ctx, userID, req); err != nil {
 		return ProfileResponse{}, err
 	}
