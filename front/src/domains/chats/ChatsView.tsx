@@ -59,6 +59,7 @@ const mapChat = (chat: BackendChat, members: ClientChat['members'] = []): Client
   type: chat.type,
   title: chat.type === 'DIRECT' && chat.directPeer ? chat.directPeer.displayName : chat.title ?? `${chat.type.toLowerCase()} chat`,
   description: chat.description ?? undefined,
+  avatarFileId: chat.avatarFileId ?? undefined,
   members,
   unreadCount: chat.unreadCount,
   pinnedMessageIds: [],
@@ -70,6 +71,7 @@ const mapChat = (chat: BackendChat, members: ClientChat['members'] = []): Client
     id: chat.directPeer.id,
     username: chat.directPeer.username,
     displayName: chat.directPeer.displayName,
+    avatarFileId: chat.directPeer.avatarFileId ?? undefined,
   } : undefined,
 });
 
@@ -139,6 +141,7 @@ export const ChatsView: React.FC = () => {
               id: item.id,
               username: item.username,
               displayName: item.displayName,
+              avatarFileId: item.avatarFileId,
               role: clientRole(item.role),
               isAnonymous: item.isAnonymous,
             })).catch((error) => {

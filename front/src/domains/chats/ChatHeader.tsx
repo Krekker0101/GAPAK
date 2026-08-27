@@ -2,6 +2,7 @@ import React from 'react';
 import { ArrowLeft, MoreVertical, PanelRight, Search, ShieldCheck, X } from 'lucide-react';
 import type { Chat, UserPresenceData } from '../../shared/types';
 import { Avatar, IconButton } from '../../shared/design-system/primitives';
+import { ProfileAvatar } from '../users/ProfileAvatar';
 
 interface ChatHeaderProps {
   chat: Chat;
@@ -22,7 +23,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ chat, presence, typingTe
   return <header className="relative flex min-h-[72px] shrink-0 items-center justify-between gap-3 border-b border-subtle bg-surface/95 px-3 backdrop-blur-xl sm:px-4">
     <div className="flex min-w-0 items-center gap-2.5">
       <IconButton icon={<ArrowLeft className="h-5 w-5" />} ariaLabel="Назад к чатам" onClick={onBack} className="lg:hidden" />
-      <div className="relative"><Avatar name={chat.title || 'Chat'} src={chat.avatarUrl} size="md" />{presence?.status === 'online' && <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[var(--color-surface)] bg-emerald-400" />}</div>
+      <div className="relative">{chat.type === 'DIRECT' ? <ProfileAvatar avatarFileId={chat.directPeer?.avatarFileId} name={chat.title || 'Chat'} size="md" /> : <Avatar name={chat.title || 'Chat'} src={chat.avatarUrl} size="md" />}{presence?.status === 'online' && <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[var(--color-surface)] bg-emerald-400" />}</div>
       <div className="min-w-0"><h2 className="truncate text-[15px] font-bold text-primary sm:text-base">{chat.title}</h2><p className={`truncate text-xs ${typingText ? 'font-medium text-indigo-400' : presence?.status === 'online' ? 'text-emerald-500' : 'text-tertiary'}`}>{typingText || (presence?.status === 'online' ? 'в сети' : presence?.status === 'away' ? 'неактивен' : presence?.status === 'offline' ? 'не в сети' : chat.type === 'DIRECT' ? 'защищённый чат' : `${chat.members.length} участников`)}</p></div>
     </div>
 

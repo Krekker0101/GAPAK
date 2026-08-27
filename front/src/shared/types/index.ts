@@ -34,6 +34,7 @@ export interface UserProfile {
   displayName: string;
   email?: string;
   avatarUrl?: string;
+  avatarFileId?: string;
   role: UserRole;
   status?: AccountStatus;
   presence?: PresenceStatus;

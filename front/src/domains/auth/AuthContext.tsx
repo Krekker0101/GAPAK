@@ -55,6 +55,7 @@ const toUserProfile = (user: BackendAuthUser | BackendProfile): UserProfile => {
     username: user.username,
     displayName: user.displayName,
     ...(user.email ? { email: user.email } : {}),
+    ...('avatarFileId' in user && user.avatarFileId ? { avatarFileId: user.avatarFileId } : {}),
     role,
     permissions: permissionsForRole(role),
     isAnonymous: user.isAnonymous,

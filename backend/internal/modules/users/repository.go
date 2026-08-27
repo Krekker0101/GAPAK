@@ -104,9 +104,11 @@ func (r *Repository) CanViewProfile(ctx context.Context, viewerID, targetUserID 
 		         SELECT 1
 		         FROM chat_members viewer_member
 		         JOIN chat_members target_member ON target_member.chat_id = viewer_member.chat_id
+		         JOIN chats shared_chat ON shared_chat.id = viewer_member.chat_id
 		         WHERE viewer_member.user_id = $1 AND target_member.user_id = $2
 		           AND viewer_member.deleted_at IS NULL AND viewer_member.left_at IS NULL
 		           AND target_member.deleted_at IS NULL AND target_member.left_at IS NULL
+		           AND shared_chat.deleted_at IS NULL
 		       )
 		FROM users u
 		JOIN user_privacy_settings ups ON ups.user_id = u.id

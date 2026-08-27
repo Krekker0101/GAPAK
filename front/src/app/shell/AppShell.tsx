@@ -49,7 +49,7 @@ import { useAuth } from '../../domains/auth/AuthContext';
 import { useTheme } from '../../shared/design-system/ThemeContext';
 import { useNetworkState } from '../../shared/ux/useNetworkState';
 import { CommandPalette } from '../../shared/ux/CommandPalette';
-import { Avatar, Badge, IconButton } from '../../shared/design-system/primitives';
+import { Badge, IconButton } from '../../shared/design-system/primitives';
 import { DOMAINS_REGISTRY } from '../../domains';
 import { GlobalUploadCenter } from '../../domains/media/GlobalUploadCenter';
 import { UploadRecoveryPrompt } from '../../domains/media/UploadRecoveryPrompt';
@@ -63,6 +63,8 @@ import type { Chat } from '../../shared/api/backendContracts';
 import { PresenceHeartbeat } from '../../domains/platform/PresencePage';
 import { SyncBridge } from '../../shared/sync/SyncBridge';
 import { BrandLogo } from '../../shared/brand/BrandLogo';
+import { usersApi } from '../../domains/users/api/usersApi';
+import { ProfileAvatar } from '../../domains/users/ProfileAvatar';
 
 const normalizeChatsList = (data: { chats: Chat[] } | Chat[]): Chat[] => (Array.isArray(data) ? data : data.chats);
 
@@ -104,6 +106,13 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const network = useNetworkState();
   const queryClient = useQueryClient();
+  const shellProfileQuery = useQuery({
+    queryKey: ['users', 'shell-profile'],
+    queryFn: ({ signal }) => usersApi.me(signal),
+    enabled: Boolean(user),
+    staleTime: 60_000,
+  });
+  const shellProfile = shellProfileQuery.data;
 
   // Real unread chat count (replaces the previous hardcoded placeholder badge).
   // Shares the ['chats'] query cache with ChatsView so it stays in sync with the chat list.
@@ -259,7 +268,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const currentDomainMeta = DOMAINS_REGISTRY[currentDomain];
 
   return (
-    <div className="min-h-screen app-shell-surface text-primary flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+    <div className="h-screen overflow-hidden app-shell-surface text-primary flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
       <PresenceHeartbeat />
       <SyncBridge onNotificationsChanged={reloadNotifications} />
       <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[var(--z-popover)] focus:rounded-[var(--radius-lg)] focus:bg-surface focus:px-4 focus:py-3 focus:text-sm focus:font-semibold focus:text-primary focus:shadow-token-md">Skip to main content</a>
@@ -272,12 +281,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         </div>
       )}
 
-      <div className="flex-1 flex overflow-hidden md:p-3 md:gap-3">
+      <div className={`flex-1 flex overflow-hidden ${currentDomain === 'chats' ? '' : 'md:p-3 md:gap-3'}`}>
         {/* ========================================== */}
         {/* DESKTOP SIDEBAR - floating glass panel      */}
         {/* ========================================== */}
         <aside
-          className={`liquid-glass-panel hidden md:flex relative flex-col rounded-[var(--radius-2xl)] border border-white/10 shadow-[0_20px_60px_-20px_rgb(0,0,0,0.45)] transition-all duration-300 ease-[cubic-bezier(.22,1,.36,1)] z-30 select-none ${
+          className={`liquid-glass-panel hidden md:flex relative flex-col rounded-[var(--radius-2xl)] border border-white/10 shadow-[0_20px_60px_-20px_rgb(0,0,0,0.45)] transition-all duration-300 ease-[cubic-bezier(.22,1,.36,1)] z-30 select-none ${currentDomain === 'chats' ? '!hidden' : ''} ${
             isSidebarCollapsed ? 'w-18' : 'w-64'
           }`}
         >
@@ -360,7 +369,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           {user && (
             <div className="p-3 border-t border-subtle bg-app-glass">
               <div className={`flex items-center gap-3 ${isSidebarCollapsed ? 'justify-center' : ''}`}>
-                <Avatar src={user.avatarUrl} name={user.displayName} status={user.presence} size="sm" />
+                <ProfileAvatar avatarFileId={shellProfile?.avatarFileId ?? user.avatarFileId} name={shellProfile?.displayName ?? user.displayName} status={user.presence} size="sm" />
                 {!isSidebarCollapsed && (
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-semibold text-primary truncate">{user.displayName}</p>
@@ -376,9 +385,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         {/* ========================================== */}
         {/* MAIN LAYOUT WRAPPER                        */}
         {/* ========================================== */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden md:rounded-[var(--radius-2xl)] md:border md:border-white/10 md:shadow-[0_20px_60px_-20px_rgb(0,0,0,0.35)]">
+        <div className={`flex-1 flex flex-col min-w-0 overflow-hidden ${currentDomain === 'chats' ? '' : 'md:rounded-[var(--radius-2xl)] md:border md:border-white/10 md:shadow-[0_20px_60px_-20px_rgb(0,0,0,0.35)]'}`}>
           {/* Contextual App Header */}
-          <header className="h-16 border-b border-subtle app-glass backdrop-blur-2xl backdrop-saturate-150 px-4 sm:px-6 flex items-center justify-between sticky top-0 z-20 shadow-[0_1px_0_rgb(255_255_255_/_.04)]">
+          <header className={`${currentDomain === 'chats' ? 'hidden' : 'flex'} h-16 border-b border-subtle app-glass backdrop-blur-2xl backdrop-saturate-150 px-4 sm:px-6 items-center justify-between sticky top-0 z-20 shadow-[0_1px_0_rgb(255_255_255_/_.04)]`}>
             {/* Header Title / Breadcrumb */}
             <div className="flex items-center gap-3">
               <button
@@ -481,7 +490,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                     onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
                     className="flex items-center gap-2 focus:outline-none ring-2 ring-transparent focus:ring-indigo-500 rounded-[var(--radius-pill)]"
                   >
-                    <Avatar src={user.avatarUrl} name={user.displayName} status={user.presence} size="sm" />
+                    <ProfileAvatar avatarFileId={shellProfile?.avatarFileId ?? user.avatarFileId} name={shellProfile?.displayName ?? user.displayName} status={user.presence} size="sm" />
                   </button>
 
                   <AnimatePresence>
@@ -557,7 +566,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           </header>
 
           {/* Main Workspace Area */}
-          <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto p-4 sm:p-6 pb-28 md:pb-6 bg-app">
+          <main id="main-content" tabIndex={-1} className={`flex-1 min-h-0 bg-app ${currentDomain === 'chats' ? 'overflow-hidden p-0' : 'overflow-y-auto p-4 pb-28 sm:p-6 md:pb-6'}`}>
             {children}
           </main>
         </div>
@@ -568,7 +577,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       {/* ========================================== */}
       <nav
         aria-label="Primary navigation"
-        className="md:hidden fixed inset-x-0 bottom-0 z-40 flex justify-center px-5 pb-[calc(.9rem+env(safe-area-inset-bottom))]"
+        className={`${currentDomain === 'chats' ? 'hidden' : 'flex'} md:hidden fixed inset-x-0 bottom-0 z-40 justify-center px-5 pb-[calc(.9rem+env(safe-area-inset-bottom))]`}
       >
         <motion.div
           initial={{ y: 48, opacity: 0 }}

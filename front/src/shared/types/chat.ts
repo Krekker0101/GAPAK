@@ -26,6 +26,7 @@ export interface Chat {
   title?: string;
   description?: string;
   avatarUrl?: string;
+  avatarFileId?: string;
   members: ChatMember[];
   lastMessage?: ChatMessage;
   unreadCount: number;
@@ -34,7 +35,7 @@ export interface Chat {
   ephemeralTimerSeconds?: number;
   createdAt: string;
   updatedAt: string;
-  directPeer?: Pick<UserProfile, 'id' | 'username' | 'displayName' | 'avatarUrl'>;
+  directPeer?: Pick<UserProfile, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'avatarFileId'>;
 }
 
 // --- Message Content & States ---

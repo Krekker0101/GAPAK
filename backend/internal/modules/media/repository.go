@@ -298,6 +298,17 @@ func (r *Repository) FindAccessibleMedia(ctx context.Context, viewerID, mediaID 
 		                SELECT 1 FROM trusted_circle_memberships tcm
 		                WHERE tcm.owner_id = u.id AND tcm.member_id = $1
 		              ))
+		          OR EXISTS (
+		                SELECT 1
+		                FROM chat_members viewer_member
+		                JOIN chat_members owner_member ON owner_member.chat_id = viewer_member.chat_id
+		                JOIN chats shared_chat ON shared_chat.id = viewer_member.chat_id
+		                WHERE viewer_member.user_id = $1
+		                  AND owner_member.user_id = u.id
+		                  AND viewer_member.deleted_at IS NULL AND viewer_member.left_at IS NULL
+		                  AND owner_member.deleted_at IS NULL AND owner_member.left_at IS NULL
+		                  AND shared_chat.deleted_at IS NULL
+		              )
 		        )
 		    )
 		    OR EXISTS (

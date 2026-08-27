@@ -5,6 +5,7 @@ import type { BackendPublicProfile } from '../../shared/api/backendContracts';
 import type { Chat, ChatType } from '../../shared/types';
 import { Avatar, IconButton } from '../../shared/design-system/primitives';
 import { usersApi } from '../users/api/usersApi';
+import { ProfileAvatar } from '../users/ProfileAvatar';
 
 interface ChatSidebarProps {
   chats: Chat[];
@@ -71,7 +72,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({ chats, activeChatId, o
         <div className="flex items-center justify-between px-2 py-1.5"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">Пользователи</span>{peopleQuery.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />}</div>
         {peopleQuery.isError && <p className="px-2 py-2 text-xs text-rose-400">Не удалось выполнить поиск. Попробуйте ещё раз.</p>}
         {!peopleQuery.isFetching && !peopleQuery.isError && (peopleQuery.data ?? []).length === 0 && <p className="px-2 py-2 text-xs text-muted">Пользователь не найден</p>}
-        {(peopleQuery.data ?? []).map(profile => <button key={profile.id} type="button" disabled={isCreatingDirect} onClick={() => onStartDirect(profile)} className="group flex w-full items-center gap-3 rounded-2xl px-2.5 py-2 text-left transition hover:bg-brand-soft disabled:opacity-60"><Avatar name={profile.displayName || profile.username} size="md" /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-primary">{profile.displayName || profile.username}</span><span className="block truncate text-xs text-tertiary">@{profile.username}</span></span><MessageCircle className="h-4 w-4 text-indigo-400 opacity-0 transition group-hover:opacity-100" /></button>)}
+        {(peopleQuery.data ?? []).map(profile => <button key={profile.id} type="button" disabled={isCreatingDirect} onClick={() => onStartDirect(profile)} className="group flex w-full items-center gap-3 rounded-2xl px-2.5 py-2 text-left transition hover:bg-brand-soft disabled:opacity-60"><ProfileAvatar avatarFileId={profile.avatarFileId} name={profile.displayName || profile.username} size="md" /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-primary">{profile.displayName || profile.username}</span><span className="block truncate text-xs text-tertiary">@{profile.username}</span></span><MessageCircle className="h-4 w-4 text-indigo-400 opacity-0 transition group-hover:opacity-100" /></button>)}
         <div className="mx-2 mt-2 border-b border-subtle" />
       </section>}
 
@@ -79,7 +80,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({ chats, activeChatId, o
       {filteredChats.length === 0 ? <div className="mx-2 mt-4 rounded-2xl border border-dashed border-default p-6 text-center"><MessageCircle className="mx-auto mb-2 h-6 w-6 text-muted" /><p className="text-sm font-medium text-secondary">Чаты не найдены</p><p className="mt-1 text-xs text-muted">Найдите пользователя выше или создайте новый чат.</p></div> : filteredChats.map(chat => {
         const active = chat.id === activeChatId;
         return <button key={chat.id} type="button" onClick={() => onSelectChat(chat.id)} className={`mb-1 flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-left transition ${active ? 'bg-gradient-to-r from-indigo-600/18 to-purple-500/10 ring-1 ring-inset ring-indigo-500/25' : 'hover:bg-surface-soft'}`}>
-          <div className="relative shrink-0"><Avatar name={chat.title || 'Chat'} src={chat.avatarUrl} size="md" /></div>
+          <div className="relative shrink-0">{chat.type === 'DIRECT' ? <ProfileAvatar avatarFileId={chat.directPeer?.avatarFileId} name={chat.title || 'Chat'} size="md" /> : <Avatar name={chat.title || 'Chat'} src={chat.avatarUrl} size="md" />}</div>
           <span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className="truncate text-sm font-semibold text-primary">{chat.title}</span><span className="shrink-0 text-[10px] text-muted">{new Date(chat.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></span><span className="mt-0.5 flex items-center justify-between gap-2"><span className={`truncate text-xs ${active ? 'text-indigo-400' : 'text-tertiary'}`}>{chatPreview(chat)}</span>{chat.unreadCount > 0 && <span className="min-w-5 rounded-full bg-indigo-600 px-1.5 py-0.5 text-center text-[10px] font-bold text-white">{chat.unreadCount > 99 ? '99+' : chat.unreadCount}</span>}</span></span>
         </button>;
       })}

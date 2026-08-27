@@ -26,9 +26,10 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { ChatMessage, EncryptedAttachment } from '../../shared/types';
-import { Avatar, IconButton } from '../../shared/design-system/primitives';
+import { IconButton } from '../../shared/design-system/primitives';
 import { MentionText } from '../../shared/text/MentionText';
 import { mediaApi } from '../media/api/mediaApi';
+import { ProfileAvatar } from '../users/ProfileAvatar';
 
 const ChatAttachmentView: React.FC<{ attachment: EncryptedAttachment; isMe: boolean; onOpenImage: (url: string) => void }> = ({ attachment, isMe, onOpenImage }) => {
   const [url, setUrl] = useState(attachment.encryptedBlobUrl);
@@ -135,9 +136,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     <div className={`group relative flex gap-3 my-2 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
       {/* Sender Avatar if not me */}
       {!isMe && (
-        <Avatar
+        <ProfileAvatar
+          avatarFileId={message.sender.avatarFileId}
           name={message.sender.displayName}
-          src={message.sender.avatarUrl}
           size="sm"
           className="mt-1 shrink-0"
         />

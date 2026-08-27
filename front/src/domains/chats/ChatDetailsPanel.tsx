@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Chat, ChatMessage, EncryptedAttachment } from '../../shared/types';
 import { Avatar, IconButton } from '../../shared/design-system/primitives';
 import { mediaApi } from '../media/api/mediaApi';
+import { ProfileAvatar } from '../users/ProfileAvatar';
 
 const SharedImage: React.FC<{ attachment: EncryptedAttachment }> = ({ attachment }) => {
   const [url, setUrl] = useState(attachment.encryptedBlobUrl);
@@ -41,7 +42,7 @@ export const ChatDetailsPanel: React.FC<Props> = ({ chat, messages, onClose, onS
     <div className="rounded-3xl border border-subtle bg-gradient-to-br from-brand-soft via-surface to-surface p-5 shadow-sm">
       <div className="flex justify-end"><IconButton icon={<X className="h-4 w-4" />} ariaLabel="Закрыть информацию" onClick={onClose} size="sm" /></div>
       <div className="flex flex-col items-center text-center">
-        <div className="relative"><Avatar name={chat.title || 'Chat'} src={chat.avatarUrl} size="xl" />{chat.type !== 'DIRECT' && <span className="absolute bottom-1 right-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-[var(--color-surface)] bg-indigo-500 px-1 text-[9px] font-bold text-white">{chat.members.length}</span>}</div>
+        <div className="relative">{chat.type === 'DIRECT' ? <ProfileAvatar avatarFileId={chat.directPeer?.avatarFileId} name={chat.title || 'Chat'} size="xl" /> : <Avatar name={chat.title || 'Chat'} src={chat.avatarUrl} size="xl" />}{chat.type !== 'DIRECT' && <span className="absolute bottom-1 right-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-[var(--color-surface)] bg-indigo-500 px-1 text-[9px] font-bold text-white">{chat.members.length}</span>}</div>
         <h3 className="mt-3 text-lg font-bold text-primary">{chat.title}</h3>
         <p className="mt-0.5 text-xs font-medium text-tertiary">{chat.type === 'DIRECT' ? 'личный защищённый чат' : `${chat.members.length} участников`}</p>
         {peer?.username && <p className="mt-2 text-sm text-indigo-400">@{peer.username}</p>}
