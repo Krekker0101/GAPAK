@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom';
+import { Navigate, Outlet, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from '../../domains/auth/AuthContext';
 import { AppShell } from '../shell/AppShell';
 import { LoginPage, RegisterPage } from '../../pages/AuthPage';
@@ -26,9 +26,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 const AuthGate: React.FC = () => {
   const { state, user, error, restoreSession } = useAuth();
+  const location = useLocation();
   if (state === 'UNKNOWN' || state === 'AUTHENTICATING' || state === 'REFRESHING') return <PageLoading label="Restoring GAPAK session…" />;
   if (state === 'AUTH_ERROR') return <PageError error={error ?? new Error('Unable to restore the session')} onRetry={() => void restoreSession()} />;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) return <Navigate to="/login" replace state={{ returnTo: `${location.pathname}${location.search}${location.hash}` }} />;
   return <AppShell><Outlet /></AppShell>;
 };
 

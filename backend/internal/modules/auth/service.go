@@ -28,24 +28,30 @@ const (
 )
 
 type Service struct {
-	repo      *Repository
-	passwords *authplatform.PasswordManager
-	jwt       *authplatform.Manager
-	totp      *authplatform.TOTPManager
-	encryptor *appcrypto.Encryptor
-	privacy   *privacy.Service
-	oauthCfg  config.OAuthConfig
+	repo           *Repository
+	passwords      *authplatform.PasswordManager
+	jwt            *authplatform.Manager
+	totp           *authplatform.TOTPManager
+	encryptor      *appcrypto.Encryptor
+	privacy        *privacy.Service
+	sessionIdleTTL time.Duration
+	oauthCfg       config.OAuthConfig
 }
 
-func NewService(repo *Repository, passwords *authplatform.PasswordManager, jwt *authplatform.Manager, totp *authplatform.TOTPManager, encryptor *appcrypto.Encryptor, privacyService *privacy.Service, oauthCfg config.OAuthConfig) *Service {
+func NewService(repo *Repository, passwords *authplatform.PasswordManager, jwt *authplatform.Manager, totp *authplatform.TOTPManager, encryptor *appcrypto.Encryptor, privacyService *privacy.Service, securityCfg config.SecurityConfig, oauthCfg config.OAuthConfig) *Service {
+	sessionIdleTTL := securityCfg.SessionIdleTTL
+	if sessionIdleTTL <= 0 {
+		sessionIdleTTL = 7 * 24 * time.Hour
+	}
 	return &Service{
-		repo:      repo,
-		passwords: passwords,
-		jwt:       jwt,
-		totp:      totp,
-		encryptor: encryptor,
-		privacy:   privacyService,
-		oauthCfg:  oauthCfg,
+		repo:           repo,
+		passwords:      passwords,
+		jwt:            jwt,
+		totp:           totp,
+		encryptor:      encryptor,
+		privacy:        privacyService,
+		sessionIdleTTL: sessionIdleTTL,
+		oauthCfg:       oauthCfg,
 	}
 }
 
@@ -190,6 +196,10 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken string) (AuthResp
 	if err != nil || session.RevokedAt != nil || session.ExpiresAt.Before(time.Now().UTC()) {
 		return AuthResponse{}, "", apperrors.ErrInvalidToken
 	}
+	if sessionIdleExpired(session.LastUsedAt, s.sessionIdleTTL, time.Now().UTC()) {
+		_ = s.repo.RevokeSession(ctx, session.ID)
+		return AuthResponse{}, "", apperrors.ErrInvalidToken
+	}
 	if session.RefreshTokenHash != authplatform.HashOpaqueToken(rawRefreshToken) {
 		_ = s.repo.CreateAuditEvent(ctx, &session.UserID, &session.ID, "auth.refresh_replay_detected", "session", session.ID, s.privacy.SanitizeAuditMetadata(map[string]any{"reason": "refresh_token_hash_mismatch"}))
 		_ = s.repo.RevokeSession(ctx, session.ID)
@@ -228,6 +238,10 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken string) (AuthResp
 	session.LastUsedAt = time.Now().UTC()
 
 	return s.buildAuthResponse(user, session, pair), pair.RefreshToken, nil
+}
+
+func sessionIdleExpired(lastUsedAt time.Time, idleTTL time.Duration, now time.Time) bool {
+	return idleTTL > 0 && !lastUsedAt.Add(idleTTL).After(now)
 }
 
 func (s *Service) Logout(ctx context.Context, userID, currentSessionID string, allDevices bool) error {

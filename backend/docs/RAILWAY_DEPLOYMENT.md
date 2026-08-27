@@ -59,6 +59,7 @@ Set these explicitly in `gapak-api`, `gapak-worker`, and `gapak-migrate` where a
 - `COOKIE_DOMAIN=`
 - `JWT_ACCESS_TTL=15m`
 - `JWT_REFRESH_TTL=720h`
+- `SESSION_IDLE_TTL=168h` (automatic logout after 7 days without using this device)
 
 Do not copy localhost values into production.
 

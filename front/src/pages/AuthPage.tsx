@@ -23,6 +23,14 @@ const AuthPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const isRegister = location.pathname === '/register';
+  const requestedReturnTo = (location.state as { returnTo?: unknown } | null)?.returnTo;
+  const returnTo = typeof requestedReturnTo === 'string'
+    && requestedReturnTo.startsWith('/')
+    && !requestedReturnTo.startsWith('//')
+    && !requestedReturnTo.startsWith('/login')
+    && !requestedReturnTo.startsWith('/register')
+    ? requestedReturnTo
+    : '/posts';
 
   const [loginValue, setLoginValue] = useState('');
   const [email, setEmail] = useState('');
@@ -35,7 +43,7 @@ const AuthPage: React.FC = () => {
   const [displayName, setDisplayName] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  if (user) return <Navigate to="/posts" replace />;
+  if (user) return <Navigate to={returnTo} replace />;
 
   const busy = state === 'AUTHENTICATING' || state === 'REFRESHING';
 
@@ -71,7 +79,7 @@ const AuthPage: React.FC = () => {
       } else {
         await login({ login: loginValue.trim(), password, ...(totpCode.trim() ? { totpCode: totpCode.trim() } : {}) });
       }
-      navigate('/posts', { replace: true });
+      navigate(returnTo, { replace: true });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Authentication failed');
     }
@@ -96,7 +104,7 @@ const AuthPage: React.FC = () => {
         username: generatedUsername,
         displayName: 'GAPAK Guest',
       });
-      navigate('/posts', { replace: true });
+      navigate(returnTo, { replace: true });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Anonymous registration failed');
     }

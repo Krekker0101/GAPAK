@@ -74,6 +74,7 @@ func registerModules(ctx context.Context, app *fiber.App, deps Dependencies) *we
 			deps.TOTP,
 			deps.Encryptor,
 			deps.Privacy,
+			deps.Config.Security,
 			deps.Config.OAuth,
 		),
 		deps.Validate,

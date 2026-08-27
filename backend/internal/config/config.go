@@ -65,6 +65,7 @@ type SecurityConfig struct {
 	JWTRefreshSecret  string
 	AccessTokenTTL    time.Duration
 	RefreshTokenTTL   time.Duration
+	SessionIdleTTL    time.Duration
 	PasswordPepper    string
 	EncryptionKey     string
 	CookieDomain      string
@@ -239,6 +240,7 @@ func Load() (Config, error) {
 			JWTRefreshSecret:  getEnv("JWT_REFRESH_SECRET", "default-jwt-refresh-secret-change-in-production-min-32-chars"),
 			AccessTokenTTL:    getEnvDuration("JWT_ACCESS_TTL", 15*time.Minute),
 			RefreshTokenTTL:   getEnvDuration("JWT_REFRESH_TTL", 30*24*time.Hour),
+			SessionIdleTTL:    getEnvDuration("SESSION_IDLE_TTL", 7*24*time.Hour),
 			PasswordPepper:    getEnv("PASSWORD_PEPPER", "default-password-pepper-change-in-production"),
 			EncryptionKey:     getEnv("ENCRYPTION_KEY_BASE64", "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODk="),
 			CookieDomain:      getEnvAllowEmpty("COOKIE_DOMAIN", "localhost"),
@@ -569,7 +571,7 @@ func validateTypedEnvironment() error {
 		"ANONYMITY_STORE_IP", "ANONYMITY_STORE_USER_AGENT", "ANONYMITY_TRUST_PROXY_HEADERS", "AUTO_MIGRATE", "COOKIE_SECURE", "METRICS_ENABLED", "REDIS_ENABLED", "PUSH_ENABLED", "PUSH_APNS_PRODUCTION",
 	}
 	durations := []string{
-		"DATABASE_MAX_CONN_IDLE_TIME", "DATABASE_MAX_CONN_LIFETIME", "HTTP_IDLE_TIMEOUT", "HTTP_READ_TIMEOUT", "HTTP_WRITE_TIMEOUT", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL",
+		"DATABASE_MAX_CONN_IDLE_TIME", "DATABASE_MAX_CONN_LIFETIME", "HTTP_IDLE_TIMEOUT", "HTTP_READ_TIMEOUT", "HTTP_WRITE_TIMEOUT", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL", "SESSION_IDLE_TTL",
 		"LIVE_REPLAY_RETENTION", "MEDIA_FFMPEG_MAX_DURATION", "MEDIA_FFMPEG_TIMEOUT", "QUEUE_CLAIM_TTL", "RATE_LIMIT_AUTH_WINDOW", "RATE_LIMIT_GLOBAL_WINDOW",
 		"RATE_LIMIT_PASSWORD_WINDOW", "STORAGE_PLAYBACK_GRANT_TTL", "STORAGE_SIGNED_URL_TTL", "STORAGE_UPLOAD_INTENT_TTL", "STORY_DEFAULT_TTL",
 		"WORKER_MEDIA_CLEANUP_INTERVAL", "WORKER_POLL_INTERVAL", "PUSH_WORKER_POLL_INTERVAL", "PUSH_WORKER_BASE_RETRY", "PUSH_WORKER_MAX_RETRY",
@@ -642,8 +644,14 @@ func validate(cfg Config) error {
 	if cfg.Security.AccessTokenTTL <= 0 || cfg.Security.RefreshTokenTTL <= 0 {
 		return fmt.Errorf("JWT TTL values must be positive")
 	}
+	if cfg.Security.SessionIdleTTL < 0 {
+		return fmt.Errorf("SESSION_IDLE_TTL cannot be negative")
+	}
 	if cfg.Security.RefreshTokenTTL <= cfg.Security.AccessTokenTTL {
 		return fmt.Errorf("JWT_REFRESH_TTL must be greater than JWT_ACCESS_TTL")
+	}
+	if cfg.Security.SessionIdleTTL > 0 && cfg.Security.SessionIdleTTL > cfg.Security.RefreshTokenTTL {
+		return fmt.Errorf("SESSION_IDLE_TTL cannot exceed JWT_REFRESH_TTL")
 	}
 	if len(cfg.Security.JWTAccessSecret) < 32 || len(cfg.Security.JWTRefreshSecret) < 32 {
 		return fmt.Errorf("JWT secrets must be at least 32 characters long")

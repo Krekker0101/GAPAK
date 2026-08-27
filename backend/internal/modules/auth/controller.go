@@ -131,6 +131,7 @@ func (ctl *Controller) registerAnonymous(c *fiber.Ctx) error {
 func (ctl *Controller) refresh(c *fiber.Ctx) error {
 	rawToken := strings.TrimSpace(c.Cookies(ctl.config.RefreshCookieName))
 	if rawToken == "" {
+		authplatform.ClearAuthCookies(c, ctl.config)
 		return apperrors.ErrUnauthorized
 	}
 	if err := middleware.ValidateCSRFForMutations(ctl.csrf, ctl.jwt, ctl.config, ctl.allowedOrigins...)(c); err != nil {
@@ -139,6 +140,15 @@ func (ctl *Controller) refresh(c *fiber.Ctx) error {
 
 	response, refreshToken, err := ctl.service.Refresh(c.UserContext(), rawToken)
 	if err != nil {
+		if apperrors.As(err).Status == fiber.StatusUnauthorized {
+			// A stale/revoked refresh cookie would otherwise be submitted again on
+			// every reload. Clear it server-side because HttpOnly cookies cannot be
+			// repaired by frontend JavaScript or by clearing an in-memory cache.
+			authplatform.ClearAuthCookies(c, ctl.config)
+			if claims, parseErr := ctl.jwt.ParseRefreshToken(rawToken); parseErr == nil {
+				_ = ctl.csrf.Delete(c.UserContext(), claims.SessionID)
+			}
+		}
 		return err
 	}
 	authplatform.SetAccessCookie(c, ctl.config, response.AccessToken, time.Now().UTC().Add(time.Duration(response.AccessTTL)*time.Second))

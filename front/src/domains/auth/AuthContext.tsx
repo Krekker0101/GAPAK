@@ -1,5 +1,5 @@
 /** GAPAK authentication/session state. UI state only; API semantics live in authApi. */
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { AuthState, UserProfile, PresenceStatus } from '../../shared/types';
 import { ApiError } from '../../shared/api/httpClient';
@@ -68,48 +68,64 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [state, setState] = useState<AuthState>('UNKNOWN');
   const [user, setUser] = useState<UserProfile | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
+  const hydrationPromiseRef = useRef<Promise<void> | null>(null);
 
-  const hydrateSession = useCallback(async () => {
+  const hydrateSession = useCallback((): Promise<void> => {
+    // React StrictMode and multiple providers can request restoration at the
+    // same time. Serializing the whole flow prevents an older failed attempt
+    // from overwriting a newer successful one and leaving the app stuck.
+    if (hydrationPromiseRef.current) return hydrationPromiseRef.current;
+    setError(null);
     setState('AUTHENTICATING');
-    try {
-      const token = await authManager.requireSession();
-      if (!token) {
-        authManager.clearSession();
+    const operation = (async () => {
+      try {
+        const token = await authManager.requireSession();
+        if (!token) {
+          authManager.clearSession();
+          queryClient.clear();
+          setUser(null);
+          setState('UNAUTHENTICATED');
+          return;
+        }
+        const profile = await authApi.me();
+        setUser(toUserProfile(profile));
+        setState('AUTHENTICATED');
+        telemetry.record('auth', 'session_hydrated', 'info');
+      } catch (err) {
         setUser(null);
-        setState('UNAUTHENTICATED');
-        return;
+        // Only 401 proves that the browser session is no longer valid. The
+        // backend also clears stale HttpOnly auth cookies on this response, so
+        // the next login/reload starts cleanly without deleting browser cache.
+        if (err instanceof ApiError && err.status === 401) {
+          authManager.clearSession();
+          queryClient.clear();
+          setState('UNAUTHENTICATED');
+        } else {
+          const apiError = err instanceof ApiError
+            ? err
+            : new ApiError(err instanceof Error ? err.message : 'Unable to restore the session', 0, 'SESSION_RESTORE_FAILED');
+          setError(apiError);
+          setState('AUTH_ERROR');
+        }
       }
-      const profile = await authApi.me();
-      setUser(toUserProfile(profile));
-      setState('AUTHENTICATED');
-      telemetry.record('auth', 'session_hydrated', 'info');
-    } catch (err) {
-      setUser(null);
-      // Only 401 proves that the browser session is no longer valid. A 403 is
-      // an authorization decision for this request and must never destroy a
-      // still-refreshable session or redirect the user back to the login page.
-      if (err instanceof ApiError && err.status === 401) {
-        authManager.clearSession();
-        setState('UNAUTHENTICATED');
-      } else {
-        const apiError = err instanceof ApiError
-          ? err
-          : new ApiError(err instanceof Error ? err.message : 'Unable to restore the session', 0, 'SESSION_RESTORE_FAILED');
-        setError(apiError);
-        setState('AUTH_ERROR');
-      }
-    }
-  }, []);
+    })().finally(() => {
+      hydrationPromiseRef.current = null;
+    });
+    hydrationPromiseRef.current = operation;
+    return operation;
+  }, [queryClient]);
 
   useEffect(() => { void hydrateSession(); }, [hydrateSession]);
   useEffect(() => {
     const handleCrossTabLogout = () => {
+      authManager.clearSession();
+      queryClient.clear();
       setUser(null);
       setState('UNAUTHENTICATED');
     };
     window.addEventListener('gapak:cross-tab-logout', handleCrossTabLogout);
     return () => window.removeEventListener('gapak:cross-tab-logout', handleCrossTabLogout);
-  }, []);
+  }, [queryClient]);
 
   const applyAuthResponse = useCallback((response: { accessToken?: string; user?: BackendAuthUser; csrfToken?: string; session?: { id: string } }) => {
     if (!response.accessToken || !response.user) {
