@@ -11,6 +11,13 @@ export class E2EEBackendContractError extends Error {
   }
 }
 
+export class CurrentDeviceNotRegisteredError extends E2EEBackendContractError {
+  constructor() {
+    super('No server-registered device matches the local cryptographic identity.');
+    this.name = 'CurrentDeviceNotRegisteredError';
+  }
+}
+
 interface BackendTrustedDevice {
   id: string;
   userId: string;
@@ -158,7 +165,7 @@ export const cryptoApi = {
     }
 
     if (matches.length !== 1) {
-      if (matches.length === 0) throw new E2EEBackendContractError('No server-registered device matches the local cryptographic identity. Register this browser device first.');
+      if (matches.length === 0) throw new CurrentDeviceNotRegisteredError();
       throw new E2EEBackendContractError('Multiple server devices match the local cryptographic identity. Current device identity is ambiguous.');
     }
 

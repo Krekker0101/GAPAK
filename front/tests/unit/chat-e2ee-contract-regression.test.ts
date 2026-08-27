@@ -9,6 +9,13 @@ test('backend TRUSTED devices map to the frontend verified policy state', () => 
   assert.equal(backendTrustState('unexpected-state'), 'UNKNOWN');
 });
 
+test('ordinary chat initializes browser encryption automatically without a Trusted Devices prompt', () => {
+  const source = readFileSync('src/domains/chats/ChatsView.tsx', 'utf8');
+  assert.match(source, /CurrentDeviceNotRegisteredError/);
+  assert.match(source, /registerDevice\.mutateAsync\(\)/);
+  assert.doesNotMatch(source, /Register this device first|Open Trusted Devices and register this browser/);
+});
+
 test('a persisted message restores immutable signed client metadata', () => {
   const source = readFileSync('src/domains/chats/crypto/E2EECryptoEngine.ts', 'utf8');
   assert.match(source, /metadataMessageId/);

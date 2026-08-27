@@ -13,7 +13,7 @@ import type { BackendPublicProfile, Chat as BackendChat, ChatMember as BackendCh
 import { chatsApi } from './api/chatsApi';
 import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import { e2eeCryptoEngine, DecryptionError } from './crypto/E2EECryptoEngine';
-import { cryptoApi, trustState } from './api/cryptoApi';
+import { cryptoApi, CurrentDeviceNotRegisteredError, trustState } from './api/cryptoApi';
 import { receiptsBatcher } from './transport/ReceiptsBatcher';
 import { messageSendQueue } from './transport/MessageSendQueue';
 import { useAuth } from '../auth/AuthContext';
@@ -94,6 +94,8 @@ export const ChatsView: React.FC = () => {
   const outboundTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inboundTypingTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const outboundByClientMessageId = useRef(new Map<string, { chatId: string; request: import('./api/chatsApi').SendMessageRequest }>());
+  const deviceRegistrationPromiseRef = useRef<Promise<{ deviceId: string }> | null>(null);
+  const automaticDeviceRegistrationAttemptedRef = useRef(false);
 
   useEffect(() => {
     const flush = () => {
@@ -250,6 +252,34 @@ export const ChatsView: React.FC = () => {
       registeredAt: device.createdAt,
     }));
   }, [devicesQuery.data, currentDeviceQuery.data?.deviceId]);
+
+  const registerCurrentBrowser = useCallback(() => {
+    if (!deviceRegistrationPromiseRef.current) {
+      deviceRegistrationPromiseRef.current = cryptoApi.getCurrentDevice()
+        .catch((error) => {
+          if (!(error instanceof CurrentDeviceNotRegisteredError)) throw error;
+          return cryptoApi.registerCurrentDevice('GAPAK Web Device');
+        })
+        .finally(() => { deviceRegistrationPromiseRef.current = null; });
+    }
+    return deviceRegistrationPromiseRef.current;
+  }, []);
+
+  const registerDevice = useMutation({
+    mutationFn: registerCurrentBrowser,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['security', 'devices'] });
+      void queryClient.invalidateQueries({ queryKey: ['security', 'current-device'] });
+      void queryClient.invalidateQueries({ queryKey: ['chat', 'messages'] });
+    },
+    onError: (error) => toast.error('Secure messaging setup failed', error instanceof Error ? error.message : 'The backend rejected automatic device registration.'),
+  });
+
+  useEffect(() => {
+    if (!(currentDeviceQuery.error instanceof CurrentDeviceNotRegisteredError) || automaticDeviceRegistrationAttemptedRef.current) return;
+    automaticDeviceRegistrationAttemptedRef.current = true;
+    registerDevice.mutate();
+  }, [currentDeviceQuery.error, registerDevice]);
 
   const decryptBackendMessage = useCallback(async (message: BackendMessage, chat: ClientChat, batch?: DecryptionBatch): Promise<ChatMessage> => {
     const member = chat.members.find((candidate) => candidate.userId === message.senderId);
@@ -500,17 +530,16 @@ export const ChatsView: React.FC = () => {
 
   const handleSendMessage = useCallback(async (payload: ChatSendPayload) => {
     if (!activeChat || !user) return;
-    const currentDevice = devices.find((device) => device.isCurrentDevice);
-    if (!currentDevice) {
-      toast.warning('Register this device first', 'Open Trusted Devices and register this browser before sending encrypted messages.');
-      return;
-    }
-    const clientMessageId = crypto.randomUUID();
     try {
+      const existingDevice = devices.find((device) => device.isCurrentDevice);
+      const registeredDevice = existingDevice ? undefined : await registerDevice.mutateAsync();
+      const currentDeviceID = existingDevice?.id ?? registeredDevice?.deviceId;
+      if (!currentDeviceID) throw new Error('The browser encryption device could not be initialized.');
+      const clientMessageId = crypto.randomUUID();
       const envelope = await e2eeCryptoEngine.encryptMessage({
         chatId: activeChat.id,
         senderId: user.id,
-        senderDeviceId: currentDevice.id,
+        senderDeviceId: currentDeviceID,
         plaintext: payload.content,
         contentType: payload.contentType,
         // Include every active device of the sender as well. Otherwise the
@@ -541,7 +570,7 @@ export const ChatsView: React.FC = () => {
     } catch (error) {
       toast.error('Encrypted message not sent', error instanceof Error ? error.message : 'The GAPAK E2EE send pipeline failed closed.');
     }
-  }, [activeChat, user, sendMutation, replyingTo, devices]);
+  }, [activeChat, user, sendMutation, replyingTo, devices, registerDevice]);
 
   const handleTyping = useCallback(() => {
     if (!activeChatId || !user) return;
@@ -554,17 +583,16 @@ export const ChatsView: React.FC = () => {
 
   const handleEditMessage = useCallback((message: ChatMessage, content: string) => {
     if (!activeChat || !user) return;
-    const currentDevice = devices.find((device) => device.isCurrentDevice);
-    if (!currentDevice) {
-      toast.warning('Register this device first', 'Editing requires the current trusted encryption device.');
-      return;
-    }
     void (async () => {
       try {
+        const existingDevice = devices.find((device) => device.isCurrentDevice);
+        const registeredDevice = existingDevice ? undefined : await registerDevice.mutateAsync();
+        const currentDeviceID = existingDevice?.id ?? registeredDevice?.deviceId;
+        if (!currentDeviceID) throw new Error('The browser encryption device could not be initialized.');
         const envelope = await e2eeCryptoEngine.encryptMessage({
           chatId: activeChat.id,
           senderId: user.id,
-          senderDeviceId: currentDevice.id,
+          senderDeviceId: currentDeviceID,
           plaintext: content,
           contentType: message.contentType,
           recipientUserIds: activeChat.members.map((member) => member.userId),
@@ -577,7 +605,7 @@ export const ChatsView: React.FC = () => {
         toast.error('Message edit failed', error instanceof Error ? error.message : 'The encrypted edit was rejected.');
       }
     })();
-  }, [activeChat, devices, queryClient, toast, user]);
+  }, [activeChat, devices, queryClient, registerDevice, toast, user]);
 
   const reactMutation = useMutation({
     mutationFn: async ({ messageId, emoji, remove }: { messageId: string; emoji: string; remove: boolean }) => {
@@ -608,15 +636,6 @@ export const ChatsView: React.FC = () => {
     onError: error => toast.error('Не удалось открыть чат', error instanceof Error ? error.message : 'Сервер отклонил создание диалога.'),
   });
   const startDirect = useCallback((profile: BackendPublicProfile) => createMutation.mutate({ type: 'DIRECT', title: profile.displayName || profile.username, trustedChat: true, encryptionProtocol: 'TRUSTED_CHAT', participantIds: [profile.id] }), [createMutation]);
-  const registerDevice = useMutation({
-    mutationFn: () => cryptoApi.registerCurrentDevice('GAPAK Web Device'),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['security', 'devices'] });
-      void queryClient.invalidateQueries({ queryKey: ['security', 'current-device'] });
-      toast.success('Device registered', 'This browser is now bound to a backend-issued GAPAK device ID and its agreement pre-key.');
-    },
-    onError: (error) => toast.error('Device registration failed', error instanceof Error ? error.message : 'The backend rejected device registration.'),
-  });
   const revokeDevice = useMutation({
     mutationFn: (deviceId: string) => chatsApi.revokeDevice(deviceId),
     onSuccess: () => {
