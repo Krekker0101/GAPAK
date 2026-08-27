@@ -99,17 +99,28 @@ func (r *Repository) CanViewProfile(ctx context.Context, viewerID, targetUserID 
 		       EXISTS (
 		         SELECT 1 FROM trusted_circle_memberships tcm
 		         WHERE tcm.owner_id = $2 AND tcm.member_id = $1
+		       ),
+		       EXISTS (
+		         SELECT 1
+		         FROM chat_members viewer_member
+		         JOIN chat_members target_member ON target_member.chat_id = viewer_member.chat_id
+		         WHERE viewer_member.user_id = $1 AND target_member.user_id = $2
+		           AND viewer_member.deleted_at IS NULL AND viewer_member.left_at IS NULL
+		           AND target_member.deleted_at IS NULL AND target_member.left_at IS NULL
 		       )
 		FROM users u
 		JOIN user_privacy_settings ups ON ups.user_id = u.id
 		WHERE u.id = $2 AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL`
 	var visibility string
-	var connected, trusted bool
-	if err := r.db.QueryRow(ctx, query, viewerID, targetUserID).Scan(&visibility, &connected, &trusted); err != nil {
+	var connected, trusted, sharedChat bool
+	if err := r.db.QueryRow(ctx, query, viewerID, targetUserID).Scan(&visibility, &connected, &trusted, &sharedChat); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, apperrors.ErrNotFound
 		}
 		return false, err
+	}
+	if sharedChat {
+		return true, nil
 	}
 	switch enums.ProfileVisibility(visibility) {
 	case enums.ProfileVisibilityPublic:
@@ -125,13 +136,15 @@ func (r *Repository) CanViewProfile(ctx context.Context, viewerID, targetUserID 
 
 func (r *Repository) SearchPublicProfiles(ctx context.Context, viewerID, queryText string, limit int) ([]PublicProfileRecord, error) {
 	const query = `
-		SELECT u.id, u.username, u.display_name, u.bio, u.avatar_file_id, u.role, u.is_anonymous,
+		SELECT u.id, u.username, u.display_name,
+		       CASE WHEN ups.profile_visibility = 'PUBLIC' THEN u.bio ELSE NULL END,
+		       CASE WHEN ups.profile_visibility = 'PUBLIC' THEN u.avatar_file_id ELSE NULL END,
+		       u.role, u.is_anonymous,
 		       ups.profile_visibility, ups.searchable_by_username
 		FROM users u
 		JOIN user_privacy_settings ups ON ups.user_id = u.id
 		WHERE u.id <> $1 AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL
 		  AND u.is_anonymous = false
-		  AND ups.profile_visibility = 'PUBLIC'
 		  AND ups.searchable_by_username = true
 		  AND (u.username ILIKE '%' || $2 || '%' OR u.display_name ILIKE '%' || $2 || '%')
 		ORDER BY CASE WHEN LOWER(u.username) = LOWER($2) THEN 0 ELSE 1 END,

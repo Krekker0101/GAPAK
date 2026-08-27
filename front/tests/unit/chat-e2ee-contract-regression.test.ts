@@ -20,6 +20,12 @@ test('a persisted message restores immutable signed client metadata', () => {
   assert.doesNotMatch(canonicalFields?.[1] ?? '', /keyEnvelopes/);
 });
 
+test('persisted encrypted history can be decrypted again after a cache refresh', () => {
+  const source = readFileSync('src/domains/chats/crypto/E2EECryptoEngine.ts', 'utf8');
+  assert.doesNotMatch(source, /markMessageSeen|Duplicate or replayed message rejected/);
+  assert.match(source, /crypto\.subtle\.verify/);
+});
+
 test('chat attachments are signed, mapped to the backend, and downloaded only through playback grants', () => {
   const cryptoSource = readFileSync('src/domains/chats/crypto/E2EECryptoEngine.ts', 'utf8');
   const messageSource = readFileSync('src/domains/chats/MessageItem.tsx', 'utf8');

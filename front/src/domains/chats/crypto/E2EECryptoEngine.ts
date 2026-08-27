@@ -403,8 +403,10 @@ export class E2EECryptoEngineService {
     const messageKey = await crypto.subtle.importKey('raw', wrappedKeyPlaintext, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
     const aad = utf8(canonicalJson({ protocolVersion: GAPAK_E2EE_PROTOCOL_VERSION, chatId: envelope.chatId, senderId: envelope.senderId, senderDeviceId: envelope.senderDeviceId, senderKeyId: envelope.senderKeyId, messageId: envelope.id, ratchetCounter: envelope.ratchetCounter, keyVersion: envelope.keyVersion, contentType: envelope.contentType, createdAt: envelope.createdAt }));
     const plaintext = await decryptWithKey(messageKey, envelope.ciphertext, envelope.nonce, aad);
-    const seen = await this.markMessageSeen(targetDeviceId, envelope.id);
-    if (!seen) throw new DecryptionError('Duplicate or replayed message rejected');
+    // Persisted history is expected to be decrypted repeatedly after cache
+    // invalidation, reload, reactions and receipt updates. Transport replay is
+    // rejected by server IDs/sequences and RealtimeEventRouter; treating a
+    // second read of the same durable message as an attack corrupts history.
     const voiceAttachment = envelope.attachments?.find(attachment => attachment.type === 'voice');
     return {
       id: envelope.id,
@@ -423,10 +425,6 @@ export class E2EECryptoEngineService {
     };
   }
 
-  private async markMessageSeen(deviceId: string, messageId: string): Promise<boolean> {
-    const { deviceKeyStore } = await import('../../../shared/security/deviceKeyStore');
-    return deviceKeyStore.markMessageSeen(deviceId, messageId);
-  }
 }
 
 export const e2eeCryptoEngine = new E2EECryptoEngineService();

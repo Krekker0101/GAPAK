@@ -1,84 +1,37 @@
-/**
- * Chat Header Component
- * GAPAK Realtime E2EE Messenger
- *
- * Header displaying active chat metadata, E2EE security indicator, typing presence,
- * trusted devices trigger, pinned messages toggle, and interactive test suite trigger.
- */
-
 import React from 'react';
-import {
-  Shield,
-  Lock,
-  Users,
-} from 'lucide-react';
-import { Chat, UserPresenceData } from '../../shared/types';
-import { Avatar, Badge, IconButton } from '../../shared/design-system/primitives';
+import { ArrowLeft, MoreVertical, PanelRight, Search, ShieldCheck, X } from 'lucide-react';
+import type { Chat, UserPresenceData } from '../../shared/types';
+import { Avatar, IconButton } from '../../shared/design-system/primitives';
 
 interface ChatHeaderProps {
   chat: Chat;
   presence?: UserPresenceData;
   typingText?: string;
+  searchQuery: string;
+  searchOpen: boolean;
+  onSearchChange: (value: string) => void;
+  onSearchOpenChange: (open: boolean) => void;
+  onBack: () => void;
+  onToggleDetails: () => void;
   onOpenDevicesModal: () => void;
 }
 
-export const ChatHeader: React.FC<ChatHeaderProps> = ({
-  chat,
-  presence,
-  typingText,
-  onOpenDevicesModal,
-}) => {
-  const getChatTypeBadge = () => {
-    switch (chat.type) {
-      case 'DIRECT':
-        return <Badge variant="neutral">Direct E2EE</Badge>;
-      case 'GROUP':
-        return <Badge variant="brand">Group ({chat.members.length})</Badge>;
-      case 'CHANNEL':
-        return <Badge variant="success">Channel Broadcast</Badge>;
-      case 'BROADCAST':
-        return <Badge variant="warning">Broadcast List</Badge>;
-    }
-  };
+export const ChatHeader: React.FC<ChatHeaderProps> = ({ chat, presence, typingText, searchQuery, searchOpen, onSearchChange, onSearchOpenChange, onBack, onToggleDetails, onOpenDevicesModal }) => {
+  const closeSearch = () => { onSearchOpenChange(false); onSearchChange(''); };
 
-  return (
-    <div className="p-3 bg-surface border-b border-subtle flex items-center justify-between gap-3 shrink-0">
-      {/* Title & Avatar */}
-      <div className="flex items-center gap-3 min-w-0">
-        <Avatar name={chat.title || 'Chat'} src={chat.avatarUrl} size="md" />
-
-        <div className="space-y-0.5 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="font-bold text-sm text-primary truncate">{chat.title}</h2>
-            {getChatTypeBadge()}
-          </div>
-
-          <div className="flex items-center gap-2 text-xs text-tertiary">
-            {typingText ? (
-              <span className="text-indigo-400 font-semibold animate-pulse">{typingText}</span>
-            ) : presence?.status === 'online' ? (
-              <span className="text-emerald-400 font-medium flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-[var(--radius-pill)] bg-emerald-400 animate-ping" />
-                Online
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-tertiary">
-                <Lock className="w-3 h-3 text-emerald-400" />
-                E2EE Active
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Action Buttons */}
-      <div className="flex items-center gap-1 shrink-0">
-        <IconButton
-          icon={<Shield className="w-4 h-4 text-indigo-400" />}
-          ariaLabel="Trusted devices"
-          onClick={onOpenDevicesModal}
-        />
-      </div>
+  return <header className="relative flex min-h-[72px] shrink-0 items-center justify-between gap-3 border-b border-subtle bg-surface/95 px-3 backdrop-blur-xl sm:px-4">
+    <div className="flex min-w-0 items-center gap-2.5">
+      <IconButton icon={<ArrowLeft className="h-5 w-5" />} ariaLabel="Назад к чатам" onClick={onBack} className="lg:hidden" />
+      <div className="relative"><Avatar name={chat.title || 'Chat'} src={chat.avatarUrl} size="md" />{presence?.status === 'online' && <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[var(--color-surface)] bg-emerald-400" />}</div>
+      <div className="min-w-0"><h2 className="truncate text-[15px] font-bold text-primary sm:text-base">{chat.title}</h2><p className={`truncate text-xs ${typingText ? 'font-medium text-indigo-400' : presence?.status === 'online' ? 'text-emerald-500' : 'text-tertiary'}`}>{typingText || (presence?.status === 'online' ? 'в сети' : presence?.status === 'away' ? 'неактивен' : presence?.status === 'offline' ? 'не в сети' : chat.type === 'DIRECT' ? 'защищённый чат' : `${chat.members.length} участников`)}</p></div>
     </div>
-  );
+
+    <div className="flex min-w-0 items-center justify-end gap-1">
+      {searchOpen && <div className="absolute left-3 right-3 top-[76px] z-30 flex h-11 items-center gap-2 rounded-2xl border border-subtle bg-surface px-3 shadow-xl md:static md:h-10 md:w-48 md:bg-app md:shadow-none xl:w-64"><Search className="h-4 w-4 text-muted" /><input autoFocus value={searchQuery} onChange={event => onSearchChange(event.target.value)} placeholder="Поиск в чате" className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted" /><button type="button" onClick={closeSearch} aria-label="Закрыть поиск"><X className="h-4 w-4 text-muted" /></button></div>}
+      <IconButton icon={<Search className="h-5 w-5" />} ariaLabel="Поиск в чате" onClick={() => searchOpen ? closeSearch() : onSearchOpenChange(true)} />
+      <IconButton icon={<ShieldCheck className="h-5 w-5" />} ariaLabel="Защищённые устройства" onClick={onOpenDevicesModal} className="hidden sm:inline-flex" />
+      <IconButton icon={<PanelRight className="h-5 w-5" />} ariaLabel="Информация о чате" onClick={onToggleDetails} />
+      <IconButton icon={<MoreVertical className="h-5 w-5" />} ariaLabel="Дополнительные действия" onClick={onToggleDetails} className="hidden sm:inline-flex" />
+    </div>
+  </header>;
 };

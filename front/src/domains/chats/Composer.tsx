@@ -40,20 +40,48 @@ export const Composer: React.FC<ComposerProps> = ({
   const [isProcessingVoice, setIsProcessingVoice] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const activeChatIdRef = useRef(chatId);
   const recordingStartedAtRef = useRef(0);
   const recordingChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => () => {
     const recorder = recorderRef.current;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+    }
     if (recorder && recorder.state !== 'inactive') recorder.stop();
     recorder?.stream.getTracks().forEach(track => track.stop());
   }, []);
 
+  useEffect(() => {
+    activeChatIdRef.current = chatId;
+    const recorder = recorderRef.current;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      if (recorder.state !== 'inactive') recorder.stop();
+      recorder.stream.getTracks().forEach(track => track.stop());
+      recorderRef.current = null;
+    }
+    recordingChunksRef.current = [];
+    setIsRecording(false);
+    setIsProcessingVoice(false);
+    setVoiceError(null);
+    setAttachments([]);
+    setShowUploads(false);
+  }, [chatId]);
+
   const startVoiceRecording = async () => {
+    const recordingChatId = chatId;
     let stream: MediaStream | null = null;
     try {
       setVoiceError(null);
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (activeChatIdRef.current !== recordingChatId) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
       const mimeType = ['audio/webm', 'audio/ogg'].find(type => MediaRecorder.isTypeSupported(type)) ?? '';
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       recordingChunksRef.current = [];
@@ -64,7 +92,7 @@ export const Composer: React.FC<ComposerProps> = ({
         const durationSeconds = Math.max(1, Math.round((Date.now() - recordingStartedAtRef.current) / 1000));
         recorder.stream.getTracks().forEach(track => track.stop());
         setIsRecording(false);
-        if (!chunks.length) { setVoiceError('The microphone produced no audio data.'); return; }
+        if (!chunks.length) { setVoiceError('Микрофон не записал аудиоданные.'); return; }
         void (async () => {
           setIsProcessingVoice(true);
           try {
@@ -75,15 +103,23 @@ export const Composer: React.FC<ComposerProps> = ({
             const uploadId = await globalUploadManager.startUpload(file, 'CHAT_ATTACHMENT');
             const completed = await globalUploadManager.waitForCompletion(uploadId);
             if (!completed.mediaId) throw new Error('Voice upload completed without a media ID.');
+            if (activeChatIdRef.current !== recordingChatId) return;
             const sizes = chunks.map(chunk => chunk.size);
             const maxSize = Math.max(1, ...sizes);
             const waveform = Array.from({ length: 32 }, (_, index) => Math.max(16, Math.round(((sizes[index % sizes.length] ?? 1) / maxSize) * 100)));
             const voice: EncryptedAttachment = { id: completed.mediaId, mediaFileId: completed.mediaId, name: file.name, type: 'voice', sizeBytes: file.size, mimeType: file.type, durationSeconds, waveform };
-            setAttachments(current => [...current.filter(item => item.mediaFileId !== voice.mediaFileId), voice]);
+            setAttachments(current => {
+              const withoutDuplicate = current.filter(item => item.mediaFileId !== voice.mediaFileId);
+              if (withoutDuplicate.length >= 20) {
+                setVoiceError('К одному сообщению можно прикрепить не более 20 файлов.');
+                return current;
+              }
+              return [...withoutDuplicate, voice];
+            });
           } catch (error) {
-            setVoiceError(error instanceof Error ? error.message : 'Voice upload failed.');
+            if (activeChatIdRef.current === recordingChatId) setVoiceError(error instanceof Error ? error.message : 'Не удалось загрузить голосовое сообщение.');
           } finally {
-            setIsProcessingVoice(false);
+            if (activeChatIdRef.current === recordingChatId) setIsProcessingVoice(false);
           }
         })();
       };
@@ -92,7 +128,7 @@ export const Composer: React.FC<ComposerProps> = ({
       setIsRecording(true);
     } catch (error) {
       stream?.getTracks().forEach(track => track.stop());
-      setVoiceError(error instanceof Error ? error.message : 'Microphone access was denied.');
+      setVoiceError(error instanceof Error ? error.message : 'Нет доступа к микрофону.');
     }
   };
 
@@ -102,12 +138,16 @@ export const Composer: React.FC<ComposerProps> = ({
 
   useEffect(() => {
     setText(editingMessage?.content ?? messageCacheManager.getDraft(chatId));
+    if (editingMessage) {
+      setAttachments([]);
+      setShowUploads(false);
+    }
   }, [chatId, editingMessage]);
 
   const handleTextChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = event.target.value;
     setText(value);
-    messageCacheManager.setDraft(chatId, value);
+    if (!editingMessage) messageCacheManager.setDraft(chatId, value);
     onTyping();
   };
 
@@ -134,11 +174,11 @@ export const Composer: React.FC<ComposerProps> = ({
   };
 
   return (
-    <div className="space-y-2 border-t border-subtle bg-surface p-3">
+    <div className="space-y-2 border-t border-subtle bg-surface px-3 pb-3 pt-2 sm:px-4">
       {replyingTo && (
         <div className="flex items-center justify-between rounded-[var(--radius-xl)] border border-subtle bg-app p-2.5 text-xs">
           <div className="max-w-md space-y-0.5">
-            <span className="font-semibold text-indigo-400">Replying to {replyingTo.sender.displayName}</span>
+            <span className="font-semibold text-indigo-400">Ответ для {replyingTo.sender.displayName}</span>
             <p className="truncate text-secondary">{replyingTo.content}</p>
           </div>
           <IconButton icon={<X className="h-4 w-4 text-tertiary" />} ariaLabel="Cancel reply" onClick={onCancelReply} size="sm" />
@@ -148,26 +188,20 @@ export const Composer: React.FC<ComposerProps> = ({
       {editingMessage && (
         <div className="flex items-center justify-between rounded-[var(--radius-xl)] border border-subtle bg-app p-2.5 text-xs">
           <div className="max-w-md space-y-0.5">
-            <span className="font-semibold text-indigo-400">Editing message</span>
+            <span className="font-semibold text-indigo-400">Редактирование сообщения</span>
             <p className="truncate text-secondary">{editingMessage.content}</p>
           </div>
           <IconButton icon={<X className="h-4 w-4 text-tertiary" />} ariaLabel="Cancel edit" onClick={onCancelEdit} size="sm" />
         </div>
       )}
 
-      <div className="flex items-end gap-2">
+      <div className="mx-auto flex max-w-4xl items-end gap-2 rounded-[22px] border border-default bg-app p-1.5 shadow-lg shadow-indigo-950/5 focus-within:border-indigo-500/50">
         <IconButton
           icon={<Paperclip className="h-4 w-4" />}
-          ariaLabel="Attach a file"
+          ariaLabel="Прикрепить файл"
           onClick={() => setShowUploads(value => !value)}
         />
-        <IconButton
-          icon={isRecording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-          ariaLabel={isRecording ? 'Stop voice recording' : 'Record a voice message'}
-          onClick={isRecording ? stopVoiceRecording : () => void startVoiceRecording()}
-          disabled={Boolean(editingMessage) || isProcessingVoice}
-        />
-        <div className="flex flex-1 items-center gap-2 rounded-[var(--radius-2xl)] border border-subtle bg-app p-2 focus-within:border-indigo-500/50">
+        <div className="flex min-h-10 flex-1 items-center gap-2 px-1">
           <textarea
             value={text}
             onChange={handleTextChange}
@@ -177,39 +211,48 @@ export const Composer: React.FC<ComposerProps> = ({
                 handleSend();
               }
             }}
-            placeholder={editingMessage ? 'Edit encrypted message...' : 'Type an end-to-end encrypted message...'}
+            placeholder={editingMessage ? 'Изменить сообщение…' : 'Напишите сообщение…'}
+            maxLength={5000}
             rows={1}
-            className="max-h-24 w-full resize-none bg-transparent text-sm text-primary outline-none placeholder-slate-500"
+            className="max-h-28 w-full resize-none bg-transparent py-2 text-sm text-primary outline-none placeholder:text-muted"
           />
         </div>
+        <IconButton icon={isRecording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />} ariaLabel={isRecording ? 'Остановить запись' : 'Записать голосовое сообщение'} onClick={isRecording ? stopVoiceRecording : () => void startVoiceRecording()} disabled={Boolean(editingMessage) || isProcessingVoice} className={isRecording ? 'bg-rose-500/10 text-rose-500' : ''} />
         <button
           type="button"
           aria-label="Send message"
           disabled={(!text.trim() && attachments.length === 0) || isRecording || isProcessingVoice}
           onClick={handleSend}
-          className="rounded-[var(--radius-2xl)] bg-indigo-600 p-3 text-white shadow-token-lg transition-all hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 p-3 text-white shadow-lg shadow-indigo-600/25 transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Send className="h-5 w-5" />
         </button>
       </div>
-      {(isRecording || isProcessingVoice || voiceError) && <p className={`text-xs ${voiceError ? 'text-rose-400' : 'text-secondary'}`}>{voiceError ?? (isRecording ? 'Recording… press stop when finished.' : 'Uploading and validating voice message…')}</p>}
+      {(isRecording || isProcessingVoice || voiceError) && <p className={`mx-auto max-w-4xl px-2 text-xs ${voiceError ? 'text-rose-400' : 'text-secondary'}`}>{voiceError ?? (isRecording ? 'Идёт запись… нажмите стоп, когда закончите.' : 'Загрузка и проверка голосового сообщения…')}</p>}
       {showUploads && !editingMessage && (
-        <MediaUploadSubsystem
+        <div className="mx-auto max-w-4xl rounded-3xl border border-subtle bg-surface-subtle p-2"><MediaUploadSubsystem
           compact
           context="CHAT_ATTACHMENT"
-          onMediaReady={(item: MediaUploadItem) => setAttachments(current => current.some(att => att.mediaFileId === item.id) ? current : [...current, {
-            id: item.id,
-            mediaFileId: item.id,
-            name: item.fileName,
-            type: item.mimeType.startsWith('image/') ? 'image' : item.mimeType.startsWith('video/') ? 'video' : item.mimeType.startsWith('audio/') ? 'audio' : 'document',
-            sizeBytes: item.fileSize,
-            mimeType: item.mimeType,
-            encryptedBlobUrl: item.previewUrl,
-          }])}
-        />
+          onMediaReady={(item: MediaUploadItem) => setAttachments(current => {
+            if (current.some(attachment => attachment.mediaFileId === item.id)) return current;
+            if (current.length >= 20) {
+              setVoiceError('К одному сообщению можно прикрепить не более 20 файлов.');
+              return current;
+            }
+            return [...current, {
+              id: item.id,
+              mediaFileId: item.id,
+              name: item.fileName,
+              type: item.mimeType.startsWith('image/') ? 'image' : item.mimeType.startsWith('video/') ? 'video' : item.mimeType.startsWith('audio/') ? 'audio' : 'document',
+              sizeBytes: item.fileSize,
+              mimeType: item.mimeType,
+              encryptedBlobUrl: item.previewUrl,
+            }];
+          })}
+        /></div>
       )}
       {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div className="mx-auto flex max-w-4xl flex-wrap gap-2">
           {attachments.map(attachment => (
             <span key={attachment.mediaFileId} className="flex items-center gap-1 rounded-full border border-subtle px-2 py-1 text-xs">
               <span className="max-w-48 truncate">{attachment.name}</span>

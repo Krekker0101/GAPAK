@@ -24,3 +24,19 @@ func TestCanGrantChatRole(t *testing.T) {
 		}
 	}
 }
+
+func TestCanSendToChat(t *testing.T) {
+	if !canSendToChat(enums.ChatTypeDirect, enums.ChatRoleMember) || !canSendToChat(enums.ChatTypeGroup, enums.ChatRoleMember) {
+		t.Fatal("members must be able to send in direct and group chats")
+	}
+	for _, chatType := range []enums.ChatType{enums.ChatTypeChannel, enums.ChatTypeBroadcast} {
+		if canSendToChat(chatType, enums.ChatRoleMember) {
+			t.Fatalf("regular members must not publish to %s", chatType)
+		}
+		for _, role := range []enums.ChatMemberRole{enums.ChatRoleOwner, enums.ChatRoleAdmin, enums.ChatRoleModerator} {
+			if !canSendToChat(chatType, role) {
+				t.Fatalf("role %s must be able to publish to %s", role, chatType)
+			}
+		}
+	}
+}

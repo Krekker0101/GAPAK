@@ -22,14 +22,11 @@ import {
   Pause,
   Download,
   FileText,
-  MapPin,
-  User,
   Smile,
   RotateCcw,
-  Sparkles,
 } from 'lucide-react';
 import { ChatMessage, EncryptedAttachment } from '../../shared/types';
-import { Avatar, Badge, IconButton } from '../../shared/design-system/primitives';
+import { Avatar, IconButton } from '../../shared/design-system/primitives';
 import { MentionText } from '../../shared/text/MentionText';
 import { mediaApi } from '../media/api/mediaApi';
 
@@ -45,11 +42,11 @@ const ChatAttachmentView: React.FC<{ attachment: EncryptedAttachment; isMe: bool
     return () => { active = false; };
   }, [attachment.encryptedBlobUrl, attachment.mediaFileId]);
 
-  if (error) return <div className="p-2 text-xs text-rose-300">Attachment access expired or was denied.</div>;
-  if (attachment.type === 'image') return url ? <img src={url} alt={attachment.name} onClick={() => onOpenImage(url)} className="max-h-60 w-full cursor-pointer rounded-[var(--radius-xl)] object-cover hover:opacity-90" /> : <div className="p-4 text-xs">Authorizing image…</div>;
-  if (attachment.type === 'video') return url ? <video src={url} controls preload="metadata" className="max-h-72 w-full rounded-[var(--radius-xl)]" /> : <div className="p-4 text-xs">Authorizing video…</div>;
-  if (attachment.type === 'audio' || attachment.type === 'voice') return url ? <audio src={url} controls preload="metadata" className="w-full min-w-64" /> : <div className="p-4 text-xs">Authorizing audio…</div>;
-  return <div className={`flex items-center justify-between rounded-[var(--radius-xl)] p-2.5 text-xs ${isMe ? 'bg-indigo-700/50' : 'bg-app'}`}><div className="flex min-w-0 items-center gap-2"><FileText className="h-4 w-4 shrink-0 text-indigo-400" /><div className="min-w-0"><p className="max-w-[150px] truncate font-semibold">{attachment.name}</p><p className="text-[10px] opacity-75">{(attachment.sizeBytes / 1024).toFixed(1)} KB · protected</p></div></div>{url && <a href={url} download={attachment.name} aria-label={`Download ${attachment.name}`}><Download className="h-3.5 w-3.5" /></a>}</div>;
+  if (error) return <div className="p-2 text-xs text-rose-300">Доступ к вложению завершён или запрещён.</div>;
+  if (attachment.type === 'image') return url ? <img src={url} alt={attachment.name} loading="lazy" decoding="async" onClick={() => onOpenImage(url)} className="max-h-72 w-full cursor-pointer rounded-2xl object-cover hover:opacity-90" /> : <div className="p-4 text-xs">Открываем изображение…</div>;
+  if (attachment.type === 'video') return url ? <video src={url} controls preload="metadata" className="max-h-72 w-full rounded-2xl" /> : <div className="p-4 text-xs">Открываем видео…</div>;
+  if (attachment.type === 'audio' || attachment.type === 'voice') return url ? <audio src={url} controls preload="metadata" className="w-full min-w-64" /> : <div className="p-4 text-xs">Открываем аудио…</div>;
+  return <div className={`flex items-center justify-between rounded-[var(--radius-xl)] p-2.5 text-xs ${isMe ? 'bg-indigo-700/50' : 'bg-app'}`}><div className="flex min-w-0 items-center gap-2"><FileText className="h-4 w-4 shrink-0 text-indigo-400" /><div className="min-w-0"><p className="max-w-[150px] truncate font-semibold">{attachment.name}</p><p className="text-[10px] opacity-75">{(attachment.sizeBytes / 1024).toFixed(1)} KB · защищено</p></div></div>{url && <a href={url} download={attachment.name} target="_blank" rel="noopener noreferrer" aria-label={`Скачать ${attachment.name}`}><Download className="h-3.5 w-3.5" /></a>}</div>;
 };
 
 interface MessageItemProps {
@@ -98,7 +95,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             className="flex items-center gap-1 text-rose-400 hover:underline text-[10px]"
           >
             <AlertCircle className="w-3 h-3" />
-            <span>Failed</span>
+            <span>Ошибка</span>
           </button>
         );
       case 'retrying':
@@ -114,10 +111,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         <div className="max-w-sm p-3 bg-rose-950/40 border border-rose-500/30 rounded-[var(--radius-2xl)] space-y-1 text-xs text-rose-200">
           <div className="flex items-center gap-2 font-semibold">
             <KeyRound className="w-4 h-4 text-rose-400" />
-            <span>Decryption Error</span>
+            <span>Ошибка расшифровки</span>
           </div>
           <p className="text-[11px] text-rose-300/80">
-            Unable to authenticate or decrypt this message with the GAPAK E2EE protocol.
+            Не удалось проверить подлинность или расшифровать сообщение.
           </p>
         </div>
       </div>
@@ -128,7 +125,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     return (
       <div className={`flex my-2 ${isMe ? 'justify-end' : 'justify-start'}`}>
         <div className="p-2.5 bg-surface border border-subtle rounded-[var(--radius-xl)] text-xs text-muted italic">
-          This message was deleted
+          Сообщение удалено
         </div>
       </div>
     );
@@ -146,7 +143,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         />
       )}
 
-      <div className={`max-w-[75%] sm:max-w-md space-y-1 ${isMe ? 'items-end' : 'items-start'}`}>
+      <div className={`max-w-[82%] space-y-1 sm:max-w-[72%] lg:max-w-xl ${isMe ? 'items-end' : 'items-start'}`}>
         {/* Sender Name in Group */}
         {!isMe && (
           <span className="text-[11px] font-semibold text-tertiary pl-1">
@@ -156,17 +153,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
         {/* Message Bubble Container */}
         <div
-          className={`relative p-3 rounded-[var(--radius-2xl)] shadow-token-md transition-all ${
+          className={`relative rounded-[20px] px-3.5 py-2.5 shadow-sm transition-all ${
             isMe
-              ? 'bg-indigo-600 text-white rounded-tr-xs'
-              : 'bg-surface border border-subtle text-primary rounded-tl-xs'
+              ? 'rounded-br-md bg-gradient-to-br from-indigo-500 to-violet-700 text-white shadow-indigo-900/10'
+              : 'rounded-bl-md border border-subtle bg-surface text-primary'
           } ${message.pinned ? 'ring-1 ring-amber-500/50' : ''}`}
         >
           {/* Pinned Indicator */}
           {message.pinned && (
             <div className="flex items-center gap-1 text-[10px] text-amber-400 font-medium mb-1">
               <Pin className="w-3 h-3 fill-amber-400" />
-              <span>Pinned Message</span>
+              <span>Закреплено</span>
             </div>
           )}
 
@@ -233,7 +230,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           <div className={`flex items-center gap-1.5 justify-end text-[10px] mt-1 ${
             isMe ? 'text-indigo-200' : 'text-tertiary'
           }`}>
-            <span>{message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Sending…'}</span>
+            <span>{message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Отправка…'}</span>
             {isMe && renderStateIcon()}
           </div>
         </div>
@@ -261,7 +258,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       </div>
 
       {/* Hover Quick Actions Bar */}
-      <div className={`opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 self-center ${
+      <div className={`flex items-center gap-1 self-center opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 ${
         isMe ? 'flex-row-reverse' : 'flex-row'
       }`}>
         <IconButton
@@ -314,7 +311,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               className="w-full text-left px-2.5 py-1.5 rounded-[var(--radius-lg)] hover:bg-surface-muted flex items-center gap-2 text-primary"
             >
               <Pin className="w-3.5 h-3.5 text-amber-400" />
-              <span>{message.pinned ? 'Unpin Message' : 'Pin Message'}</span>
+              <span>{message.pinned ? 'Открепить' : 'Закрепить'}</span>
             </button>
             {isMe && (
               <>
@@ -325,19 +322,19 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                     className="w-full text-left px-2.5 py-1.5 rounded-[var(--radius-lg)] hover:bg-surface-muted flex items-center gap-2 text-primary"
                   >
                     <FileText className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>Edit</span>
+                    <span>Изменить</span>
                   </button>
                 )}
                 <button
                   type="button"
                   onClick={() => {
-                    onDelete(message.id);
+                    if (window.confirm('Удалить это сообщение для всех участников?')) onDelete(message.id);
                     setShowMenu(false);
                   }}
                   className="w-full text-left px-2.5 py-1.5 rounded-[var(--radius-lg)] hover:bg-rose-500/10 flex items-center gap-2 text-rose-400"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Delete</span>
+                  <span>Удалить</span>
                 </button>
               </>
             )}

@@ -14,7 +14,7 @@ type CreateChatRequest struct {
 	EncryptionProtocol string                 `json:"encryptionProtocol" validate:"omitempty,oneof=SIGNAL OMEMO TRUSTED_CHAT NONE"`
 	TrustedChat        bool                   `json:"trustedChat"`
 	MessageTTLSeconds  *int                   `json:"messageTtlSeconds" validate:"omitempty,min=1"`
-	ParticipantIDs     []string               `json:"participantIds" validate:"required,min=1,dive,uuid"`
+	ParticipantIDs     []string               `json:"participantIds" validate:"required,min=1,max=99,dive,uuid"`
 	Metadata           map[string]interface{} `json:"metadata"`
 }
 
@@ -45,8 +45,8 @@ type SendMessageRequest struct {
 	ReplyToMessageID    string                      `json:"replyToMessageId" validate:"omitempty,uuid"`
 	ForwardedFromID     string                      `json:"forwardedFromId" validate:"omitempty,uuid"`
 	ExpiresInSeconds    *int                        `json:"expiresInSeconds" validate:"omitempty,min=1,max=604800"` // Max 7 days
-	Attachments         []CreateAttachmentRequest   `json:"attachments"`
-	KeyEnvelopes        []MessageKeyEnvelopeRequest `json:"keyEnvelopes" validate:"required,min=1,max=100,dive"`
+	Attachments         []CreateAttachmentRequest   `json:"attachments" validate:"max=20,dive"`
+	KeyEnvelopes        []MessageKeyEnvelopeRequest `json:"keyEnvelopes" validate:"required,min=1,max=500,dive"`
 }
 
 type MessageKeyEnvelopeRequest struct {
@@ -84,7 +84,7 @@ type EditMessageRequest struct {
 	AssociatedData      string                      `json:"associatedData" validate:"omitempty,max=4096"`
 	RatchetCounter      *int64                      `json:"ratchetCounter" validate:"omitempty,min=0"`
 	AuthenticationTag   string                      `json:"authenticationTag" validate:"required,len=128"`
-	KeyEnvelopes        []MessageKeyEnvelopeRequest `json:"keyEnvelopes" validate:"omitempty,max=100,dive"`
+	KeyEnvelopes        []MessageKeyEnvelopeRequest `json:"keyEnvelopes" validate:"omitempty,max=500,dive"`
 }
 
 type RegisterTrustedDeviceRequest struct {
@@ -161,7 +161,7 @@ type ListMessagesQuery struct {
 	Cursor          string `query:"cursor"`   // ISO 8601 timestamp
 	CursorID        string `query:"cursorId"` // Message ID for tie-breaking
 	Limit           int    `query:"limit" validate:"omitempty,min=1,max=100"`
-	Before          bool   `query:"before"` // true = get messages before cursor (newer), false = after cursor (older)
+	Before          bool   `query:"before"` // true = older than cursor, false = newer than cursor
 	WithReplies     bool   `query:"withReplies"`
 	WithAttachments bool   `query:"withAttachments"`
 }
@@ -197,8 +197,16 @@ type ChatResponse struct {
 	LastSequenceNumber int64                   `json:"lastSequenceNumber"`
 	MemberCount        int                     `json:"memberCount"`
 	UnreadCount        int64                   `json:"unreadCount"`
+	DirectPeer         *DirectPeerResponse     `json:"directPeer,omitempty"`
 	CreatedAt          time.Time               `json:"createdAt"`
 	UpdatedAt          time.Time               `json:"updatedAt"`
+}
+
+type DirectPeerResponse struct {
+	ID           string  `json:"id"`
+	Username     string  `json:"username"`
+	DisplayName  string  `json:"displayName"`
+	AvatarFileID *string `json:"avatarFileId,omitempty"`
 }
 
 type MessagePreviewResponse struct {

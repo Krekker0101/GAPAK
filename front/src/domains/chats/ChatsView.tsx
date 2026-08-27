@@ -7,8 +7,9 @@ import { MessageTimeline } from './MessageTimeline';
 import { Composer } from './Composer';
 import { TrustedDevicesModal } from './TrustedDevicesModal';
 import { CreateChatModal } from './CreateChatModal';
-import { Chat as ClientChat, ChatMessage, E2EEMessageEnvelope, EncryptedAttachment, MessageContentType, TrustedDevice as ClientTrustedDevice, UserProfile } from '../../shared/types';
-import type { Chat as BackendChat, ChatMember as BackendChatMember, Message as BackendMessage, TrustedDevice as BackendTrustedDevice } from '../../shared/api/backendContracts';
+import { ChatDetailsPanel } from './ChatDetailsPanel';
+import { Chat as ClientChat, ChatMessage, E2EEMessageEnvelope, EncryptedAttachment, MessageContentType, TrustedDevice as ClientTrustedDevice, UserPresenceData, UserProfile } from '../../shared/types';
+import type { BackendPublicProfile, Chat as BackendChat, ChatMember as BackendChatMember, Message as BackendMessage, TrustedDevice as BackendTrustedDevice } from '../../shared/api/backendContracts';
 import { chatsApi } from './api/chatsApi';
 import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import { e2eeCryptoEngine, DecryptionError } from './crypto/E2EECryptoEngine';
@@ -19,10 +20,18 @@ import { useAuth } from '../auth/AuthContext';
 import { useToast } from '../../shared/ux/ToastContext';
 import { PageError, PageLoading } from '../../pages/common';
 import { usersApi } from '../users/api/usersApi';
+import type { RecipientKeyBundle } from './crypto/CryptoProtocol';
+import { presenceApi } from '../platform/api/platformApi';
 
 type ChatSendPayload = { content: string; contentType: MessageContentType; replyToMessageId?: string; attachments?: EncryptedAttachment[] };
 type MessageCursor = { cursor?: string; cursorId?: string };
 type DecryptedMessagesPage = ChatMessage[] & { nextCursor?: string; nextCursorId?: string; hasMore: boolean };
+type CurrentCryptoDevice = Awaited<ReturnType<typeof cryptoApi.getCurrentDevice>>;
+type DecryptionBatch = {
+  currentDevice: Promise<CurrentCryptoDevice>;
+  senderBundles: Map<string, Promise<RecipientKeyBundle[]>>;
+  signal?: AbortSignal;
+};
 
 const pageWithMessages = (messages: ChatMessage[], source?: DecryptedMessagesPage): DecryptedMessagesPage => Object.assign(messages, {
   ...(source?.nextCursor ? { nextCursor: source.nextCursor } : {}),
@@ -48,7 +57,7 @@ const emojiToReaction: Record<string, string> = {
 const mapChat = (chat: BackendChat, members: ClientChat['members'] = []): ClientChat => ({
   id: chat.id,
   type: chat.type,
-  title: chat.title ?? `${chat.type.toLowerCase()} chat`,
+  title: chat.type === 'DIRECT' && chat.directPeer ? chat.directPeer.displayName : chat.title ?? `${chat.type.toLowerCase()} chat`,
   description: chat.description ?? undefined,
   members,
   unreadCount: chat.unreadCount,
@@ -57,6 +66,11 @@ const mapChat = (chat: BackendChat, members: ClientChat['members'] = []): Client
   ephemeralTimerSeconds: chat.messageTtlSeconds ?? undefined,
   createdAt: chat.createdAt,
   updatedAt: chat.updatedAt,
+  directPeer: chat.directPeer ? {
+    id: chat.directPeer.id,
+    username: chat.directPeer.username,
+    displayName: chat.directPeer.displayName,
+  } : undefined,
 });
 
 export const ChatsView: React.FC = () => {
@@ -67,11 +81,16 @@ export const ChatsView: React.FC = () => {
   const toast = useToast();
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
-  const [typingUser, setTypingUser] = useState<string | null>(null);
+  const [typingUsers, setTypingUsers] = useState<Map<string, string>>(() => new Map());
   const [isDevicesModalOpen, setIsDevicesModalOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [showMobileChat, setShowMobileChat] = useState(Boolean(conversationId));
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [messageSearch, setMessageSearch] = useState('');
+  const [messageSearchOpen, setMessageSearchOpen] = useState(false);
   const [expiryClock, setExpiryClock] = useState(() => Date.now());
-  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const outboundTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inboundTypingTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const outboundByClientMessageId = useRef(new Map<string, { chatId: string; request: import('./api/chatsApi').SendMessageRequest }>());
 
   useEffect(() => {
@@ -98,15 +117,22 @@ export const ChatsView: React.FC = () => {
     queryFn: ({ signal }) => chatsApi.list({}, signal),
   });
   const chats = useMemo(() => (chatsQuery.data ?? []).map((chat) => mapChat(chat)), [chatsQuery.data]);
-  const activeChatId = conversationId ?? chats[0]?.id;
-  const activeBackendChat = (chatsQuery.data ?? []).find((chat) => chat.id === activeChatId);
+  const requestedBackendChat = (chatsQuery.data ?? []).find((chat) => chat.id === conversationId);
+  const activeBackendChat = requestedBackendChat ?? (!conversationId ? chatsQuery.data?.[0] : undefined);
+  const activeChatId = activeBackendChat?.id;
 
   const membersQuery = useQuery<ClientChat['members']>({
     queryKey: ['chat', 'members', activeChatId],
     enabled: Boolean(activeChatId && user),
     queryFn: async ({ signal }) => {
-      const members = await chatsApi.members(activeChatId!, {}, signal);
+      const members: BackendChatMember[] = [];
+      for (let offset = 0; ; offset += 100) {
+        const page = await chatsApi.members(activeChatId!, { limit: 100, offset }, signal);
+        members.push(...page);
+        if (page.length < 100) break;
+      }
       return Promise.all(members.filter((member) => !member.leftAt).map(async (member: BackendChatMember) => {
+        const directPeer = activeBackendChat?.directPeer?.id === member.userId ? activeBackendChat.directPeer : undefined;
         const profile = member.userId === user!.id
           ? user!
           : await usersApi.profile(member.userId, signal).then((item) => ({
@@ -115,7 +141,16 @@ export const ChatsView: React.FC = () => {
               displayName: item.displayName,
               role: clientRole(item.role),
               isAnonymous: item.isAnonymous,
-            }));
+            })).catch((error) => {
+              if (signal.aborted) throw error;
+              return {
+                id: member.userId,
+                username: directPeer?.username || `user-${member.userId.slice(0, 8)}`,
+                displayName: member.nickname || directPeer?.displayName || 'Недоступный пользователь',
+                role: 'user' as const,
+                isAnonymous: false,
+              };
+            });
         return {
           id: member.id,
           userId: member.userId,
@@ -128,10 +163,63 @@ export const ChatsView: React.FC = () => {
     },
   });
   const activeChat = useMemo(() => activeBackendChat ? mapChat(activeBackendChat, membersQuery.data ?? []) : undefined, [activeBackendChat, membersQuery.data]);
+  const directPeerID = activeChat?.type === 'DIRECT' ? activeChat.directPeer?.id : undefined;
+  const presenceQuery = useQuery({
+    queryKey: ['presence', directPeerID],
+    queryFn: ({ signal }) => presenceApi.get(directPeerID!, signal),
+    enabled: Boolean(directPeerID),
+    retry: false,
+    refetchInterval: 30_000,
+  });
+  const directPresence = useMemo<UserPresenceData | undefined>(() => {
+    const presence = presenceQuery.data;
+    if (!presence?.canViewOnlineStatus) return undefined;
+    return {
+      userId: presence.userId,
+      status: presence.isOnline ? presence.state === 'ACTIVE' ? 'online' : 'away' : 'offline',
+      lastSeen: presence.canViewLastSeen && presence.lastSeenAt ? presence.lastSeenAt : '',
+    };
+  }, [presenceQuery.data]);
+  const currentChatRole = activeChat?.members.find(member => member.userId === user?.id)?.role;
+  const canCurrentUserSend = activeChat?.type !== 'CHANNEL' && activeChat?.type !== 'BROADCAST'
+    || currentChatRole === 'OWNER' || currentChatRole === 'ADMIN';
+  const typingText = useMemo(() => {
+    const names = [...typingUsers.values()];
+    if (names.length === 0) return undefined;
+    if (names.length === 1) return `${names[0]} печатает…`;
+    return `${names.slice(0, 2).join(', ')}${names.length > 2 ? ` и ещё ${names.length - 2}` : ''} печатают…`;
+  }, [typingUsers]);
 
   useEffect(() => {
     if (!conversationId && chats[0]) navigate(`/chats/${encodeURIComponent(chats[0].id)}`, { replace: true });
   }, [conversationId, chats, navigate]);
+
+  useEffect(() => {
+    if (conversationId && chatsQuery.isSuccess && !requestedBackendChat) navigate('/chats', { replace: true });
+  }, [chatsQuery.isSuccess, conversationId, navigate, requestedBackendChat]);
+
+  useEffect(() => {
+    setReplyingTo(null);
+    setEditingMessage(null);
+    setMessageSearch('');
+    setMessageSearchOpen(false);
+    setTypingUsers(new Map());
+    inboundTypingTimersRef.current.forEach(timer => clearTimeout(timer));
+    inboundTypingTimersRef.current.clear();
+    return () => {
+      if (outboundTypingTimerRef.current) clearTimeout(outboundTypingTimerRef.current);
+      outboundTypingTimerRef.current = null;
+      if (activeChatId) realtimeManager.sendTyping(activeChatId, false);
+    };
+  }, [activeChatId]);
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1536px)');
+    const sync = () => setDetailsOpen(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
 
   const currentDeviceQuery = useQuery({
     queryKey: ['security', 'current-device'],
@@ -160,13 +248,18 @@ export const ChatsView: React.FC = () => {
     }));
   }, [devicesQuery.data, currentDeviceQuery.data?.deviceId]);
 
-  const decryptBackendMessage = useCallback(async (message: BackendMessage, chat: ClientChat): Promise<ChatMessage> => {
+  const decryptBackendMessage = useCallback(async (message: BackendMessage, chat: ClientChat, batch?: DecryptionBatch): Promise<ChatMessage> => {
     const member = chat.members.find((candidate) => candidate.userId === message.senderId);
     const sender = member?.user;
     if (!sender) throw new DecryptionError('Message sender is not a member of the chat.');
 
-    const currentDevice = await cryptoApi.getCurrentDevice();
-    const senderBundles = await cryptoApi.recipientBundles([message.senderId]);
+    const currentDevice = await (batch?.currentDevice ?? cryptoApi.getCurrentDevice());
+    let senderBundlesPromise = batch?.senderBundles.get(message.senderId);
+    if (batch && !senderBundlesPromise) {
+      senderBundlesPromise = cryptoApi.recipientBundles([message.senderId], batch.signal);
+      batch.senderBundles.set(message.senderId, senderBundlesPromise);
+    }
+    const senderBundles = await (senderBundlesPromise ?? cryptoApi.recipientBundles([message.senderId]));
     const senderDevice = senderBundles.find((bundle) => bundle.deviceId === message.senderDeviceId);
     if (!senderDevice) throw new DecryptionError('Sender device is not present in the authenticated device bundle.');
     if (senderDevice.verificationStatus !== 'VERIFIED') throw new DecryptionError(`Sender device trust state ${senderDevice.verificationStatus} is not acceptable.`);
@@ -220,15 +313,20 @@ export const ChatsView: React.FC = () => {
 
   const messagesQuery = useInfiniteQuery({
     queryKey: ['chat', 'messages', activeChatId],
-    enabled: Boolean(activeChatId),
+    enabled: Boolean(activeChatId && activeChat && membersQuery.isSuccess),
     initialPageParam: undefined as MessageCursor | undefined,
     queryFn: async ({ pageParam, signal }) => {
       const response = await chatsApi.messagesPage(activeChatId!, { cursor: pageParam?.cursor, cursorId: pageParam?.cursorId, before: true, limit: 50 }, signal);
       if (!activeChat) return pageWithMessages([]);
+      const batch: DecryptionBatch | undefined = response.data.length ? {
+        currentDevice: cryptoApi.getCurrentDevice(signal),
+        senderBundles: new Map(),
+        signal,
+      } : undefined;
       const result: ChatMessage[] = [];
       for (const message of response.data) {
         try {
-          result.push(await decryptBackendMessage(message, activeChat));
+          result.push(await decryptBackendMessage(message, activeChat, batch));
         } catch (error) {
           result.push({
             id: message.id,
@@ -283,6 +381,10 @@ export const ChatsView: React.FC = () => {
   }, [messages]);
   const visibleMessages = useMemo(() => messages.filter(message => !message.expiresAt || Date.parse(message.expiresAt) > expiryClock), [expiryClock, messages]);
   const renderedMessages = useMemo(() => visibleMessages.map((message) => ({ ...message, pinned: pinnedIds.has(message.id) })), [visibleMessages, pinnedIds]);
+  const searchedMessages = useMemo(() => {
+    const query = messageSearch.trim().toLowerCase();
+    return query ? renderedMessages.filter(message => message.content.toLowerCase().includes(query) || message.attachments?.some(attachment => attachment.name.toLowerCase().includes(query))) : renderedMessages;
+  }, [messageSearch, renderedMessages]);
 
   useEffect(() => {
     if (!activeChatId || !user) return;
@@ -300,45 +402,35 @@ export const ChatsView: React.FC = () => {
   }, [activeChatId]);
 
   useEffect(() => {
-    if (!activeChatId || !activeChat) return;
-    return realtimeManager.subscribe('chat.message.created', (event) => {
-      if (event.kind !== 'event' || event.chatId !== activeChatId) return;
-      const backendMessage = event.data as BackendMessage;
-      if (!backendMessage?.id || !backendMessage?.senderDeviceId) return;
-      void (async () => {
-        try {
-          const message = await decryptBackendMessage(backendMessage, activeChat);
-          queryClient.setQueryData(['chat', 'messages', activeChatId], (old: typeof messagesQuery.data | undefined) => {
-            if (!old) return old;
-            const first = old.pages[0] ?? [];
-            const exists = first.some((item) => item.id === message.id || (message.clientMessageId && item.clientMessageId === message.clientMessageId));
-            return exists ? old : { ...old, pages: [pageWithMessages([...first, message], first), ...old.pages.slice(1)] };
-          });
-          queryClient.invalidateQueries({ queryKey: ['chats'] });
-          receiptsBatcher.markAsDelivered(activeChatId, message.id);
-          receiptsBatcher.markAsRead(activeChatId, message.id);
-        } catch (error) {
-          toast.error('Encrypted message unavailable', error instanceof Error ? error.message : 'The message could not be authenticated/decrypted.');
-        }
-      })();
-    });
-  }, [activeChatId, queryClient, messagesQuery.data]);
-
-  useEffect(() => {
     const unsubscribe = realtimeManager.subscribe('chat.typing', (event) => {
       if (event.kind !== 'event' || event.chatId !== activeChatId) return;
       const payload = event.data as { user_id?: string; chat_id?: string; is_typing?: boolean };
-      if (payload.user_id === user?.id) return;
-      setTypingUser(payload.is_typing ? 'Someone is typing…' : null);
-      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-      if (payload.is_typing) typingTimerRef.current = setTimeout(() => setTypingUser(null), 3500);
+      const typingUserID = payload.user_id;
+      if (!typingUserID || typingUserID === user?.id) return;
+      const existingTimer = inboundTypingTimersRef.current.get(typingUserID);
+      if (existingTimer) clearTimeout(existingTimer);
+      const removeTypingUser = () => {
+        inboundTypingTimersRef.current.delete(typingUserID);
+        setTypingUsers(current => {
+          const next = new Map(current);
+          next.delete(typingUserID);
+          return next;
+        });
+      };
+      if (!payload.is_typing) {
+        removeTypingUser();
+        return;
+      }
+      const memberName = activeChat?.members.find(member => member.userId === typingUserID)?.user.displayName || 'Собеседник';
+      setTypingUsers(current => new Map(current).set(typingUserID, memberName));
+      inboundTypingTimersRef.current.set(typingUserID, setTimeout(removeTypingUser, 3500));
     });
     return () => {
       unsubscribe();
-      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-      typingTimerRef.current = null;
+      inboundTypingTimersRef.current.forEach(timer => clearTimeout(timer));
+      inboundTypingTimersRef.current.clear();
     };
-  }, [activeChatId, user?.id]);
+  }, [activeChat, activeChatId, user?.id]);
 
   const sendMutation = useMutation({
     mutationFn: async (input: { payload: ChatSendPayload; optimistic: ChatMessage; envelope: E2EEMessageEnvelope }) => {
@@ -451,8 +543,8 @@ export const ChatsView: React.FC = () => {
   const handleTyping = useCallback(() => {
     if (!activeChatId || !user) return;
     if (!realtimeManager.sendTyping(activeChatId, true)) void chatsApi.typing(activeChatId, 'TYPING');
-    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-    typingTimerRef.current = setTimeout(() => {
+    if (outboundTypingTimerRef.current) clearTimeout(outboundTypingTimerRef.current);
+    outboundTypingTimerRef.current = setTimeout(() => {
       if (!realtimeManager.sendTyping(activeChatId, false)) void chatsApi.typing(activeChatId, 'STOPPED');
     }, 1000);
   }, [activeChatId, user]);
@@ -485,9 +577,10 @@ export const ChatsView: React.FC = () => {
   }, [activeChat, devices, queryClient, toast, user]);
 
   const reactMutation = useMutation({
-    mutationFn: ({ messageId, emoji }: { messageId: string; emoji: string }) => {
+    mutationFn: async ({ messageId, emoji, remove }: { messageId: string; emoji: string; remove: boolean }) => {
       const reactionType = emojiToReaction[emoji] ?? emoji;
-      return chatsApi.react(messageId, reactionType);
+      if (remove) await chatsApi.removeReaction(messageId, reactionType);
+      else await chatsApi.react(messageId, reactionType);
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chat', 'messages', activeChatId] }),
     onError: (error) => toast.error('Reaction failed', error instanceof Error ? error.message : 'The reaction was rejected.'),
@@ -500,7 +593,18 @@ export const ChatsView: React.FC = () => {
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['chat', 'pinned', activeChatId] }),
   });
-  const createMutation = useMutation({ mutationFn: (input: import('./api/chatsApi').CreateChatRequest) => chatsApi.create(input), onSuccess: (chat) => { queryClient.invalidateQueries({ queryKey: ['chats'] }); navigate(`/chats/${encodeURIComponent(chat.id)}`); toast.success('Conversation created', chat.title || 'New conversation'); } });
+  const createMutation = useMutation({
+    mutationFn: (input: import('./api/chatsApi').CreateChatRequest) => chatsApi.create(input),
+    onSuccess: (chat) => {
+      queryClient.setQueryData<BackendChat[]>(['chats'], current => current?.some(item => item.id === chat.id) ? current.map(item => item.id === chat.id ? chat : item) : [chat, ...(current ?? [])]);
+      void queryClient.invalidateQueries({ queryKey: ['chats'] });
+      navigate(`/chats/${encodeURIComponent(chat.id)}`);
+      setShowMobileChat(true);
+      toast.success('Чат открыт', chat.directPeer?.displayName || chat.title || 'Новый диалог');
+    },
+    onError: error => toast.error('Не удалось открыть чат', error instanceof Error ? error.message : 'Сервер отклонил создание диалога.'),
+  });
+  const startDirect = useCallback((profile: BackendPublicProfile) => createMutation.mutate({ type: 'DIRECT', title: profile.displayName || profile.username, trustedChat: true, encryptionProtocol: 'TRUSTED_CHAT', participantIds: [profile.id] }), [createMutation]);
   const registerDevice = useMutation({
     mutationFn: () => cryptoApi.registerCurrentDevice('GAPAK Web Device'),
     onSuccess: () => {
@@ -524,21 +628,26 @@ export const ChatsView: React.FC = () => {
   if (activeChatId && (messagesQuery.isPending || pinnedQuery.isPending)) return <PageLoading label="Loading encrypted messages…" />;
   if (messagesQuery.isError) return <PageError error={messagesQuery.error} onRetry={() => void messagesQuery.refetch()} />;
   if (pinnedQuery.isError) return <PageError error={pinnedQuery.error} onRetry={() => void pinnedQuery.refetch()} />;
-  if (!activeChat) return <div className="h-full flex items-center justify-center text-muted">No conversation selected.</div>;
-
-  return <div className="flex h-full w-full bg-app text-primary overflow-hidden">
-    <ChatSidebar chats={chats} activeChatId={activeChat.id} onSelectChat={(id) => navigate(`/chats/${encodeURIComponent(id)}`)} onOpenCreateModal={() => setIsCreateModalOpen(true)} onOpenDevicesModal={() => setIsDevicesModalOpen(true)} wsState={realtimeManager.getState()} />
-    <div className="flex-1 flex flex-col min-w-0 h-full relative">
-      <ChatHeader chat={activeChat} typingText={typingUser || undefined} onOpenDevicesModal={() => setIsDevicesModalOpen(true)} />
+  return <div className="relative flex h-full w-full overflow-hidden bg-app text-primary">
+    <ChatSidebar chats={chats} activeChatId={activeChat?.id ?? ''} onSelectChat={(id) => { navigate(`/chats/${encodeURIComponent(id)}`); setShowMobileChat(true); }} onStartDirect={startDirect} isCreatingDirect={createMutation.isPending} onOpenCreateModal={() => setIsCreateModalOpen(true)} onOpenDevicesModal={() => setIsDevicesModalOpen(true)} wsState={realtimeManager.getState()} className={showMobileChat ? 'hidden lg:flex' : 'flex'} />
+    {activeChat ? <div className={`${showMobileChat ? 'flex' : 'hidden lg:flex'} relative min-w-0 flex-1 flex-col h-full`}>
+      <ChatHeader chat={activeChat} presence={directPresence} typingText={typingText} searchQuery={messageSearch} searchOpen={messageSearchOpen} onSearchChange={setMessageSearch} onSearchOpenChange={setMessageSearchOpen} onBack={() => setShowMobileChat(false)} onToggleDetails={() => setDetailsOpen(value => !value)} onOpenDevicesModal={() => setIsDevicesModalOpen(true)} />
       <MessageTimeline
-        messages={renderedMessages}
+        messages={searchedMessages}
         currentUser={user!}
         pinnedMessages={renderedMessages.filter((m) => m.pinned)}
         hasMoreBefore={Boolean(messagesQuery.hasNextPage)}
         onLoadMoreBefore={() => void messagesQuery.fetchNextPage()}
-        onReply={(message) => { setEditingMessage(null); setReplyingTo(message); }}
+        onReply={(message) => {
+          if (!canCurrentUserSend) {
+            toast.warning('Ответ недоступен', 'В этом канале публиковать могут только владелец и администраторы.');
+            return;
+          }
+          setEditingMessage(null);
+          setReplyingTo(message);
+        }}
         onEdit={(message) => { setReplyingTo(null); setEditingMessage(message); }}
-        onReact={(id, emoji) => reactMutation.mutate({ messageId: id, emoji })}
+        onReact={(id, emoji) => reactMutation.mutate({ messageId: id, emoji, remove: Boolean(renderedMessages.find(message => message.id === id)?.reactions.find(reaction => reaction.emoji === emoji)?.reactedByMe) })}
         onPin={(id) => pinMutation.mutate(id)}
         onDelete={(id) => deleteMutation.mutate(id)}
         onRetry={(messageId) => {
@@ -555,7 +664,7 @@ export const ChatsView: React.FC = () => {
             .catch((error) => toast.error('Message retry failed', error instanceof Error ? error.message : 'The encrypted message remains failed.'));
         }}
       />
-      <Composer
+      {canCurrentUserSend ? <Composer
         chatId={activeChat.id}
         replyingTo={replyingTo}
         editingMessage={editingMessage}
@@ -564,8 +673,9 @@ export const ChatsView: React.FC = () => {
         onSendMessage={handleSendMessage}
         onEditMessage={handleEditMessage}
         onTyping={handleTyping}
-      />
-    </div>
+      /> : <div className="border-t border-subtle bg-surface px-4 py-4 text-center text-sm text-tertiary">Публиковать здесь могут только владелец и администраторы.</div>}
+    </div> : <div className="hidden min-w-0 flex-1 items-center justify-center bg-[radial-gradient(circle_at_center,var(--color-brand-glow),transparent_30rem)] p-6 lg:flex"><div className="max-w-sm text-center"><div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-brand-soft text-2xl">💬</div><h2 className="text-xl font-bold text-primary">Начните общение</h2><p className="mt-2 text-sm text-tertiary">Найдите пользователя слева — существующий личный чат откроется автоматически, либо будет создан новый.</p></div></div>}
+    {activeChat && detailsOpen && <ChatDetailsPanel chat={activeChat} messages={renderedMessages} onClose={() => setDetailsOpen(false)} onSearch={() => { setMessageSearchOpen(true); if (window.innerWidth < 1536) setDetailsOpen(false); }} onOpenDevices={() => setIsDevicesModalOpen(true)} className="absolute inset-y-0 right-0 z-40 shadow-2xl 2xl:static 2xl:z-auto 2xl:shadow-none" />}
     <TrustedDevicesModal isOpen={isDevicesModalOpen} onClose={() => setIsDevicesModalOpen(false)} devices={devices} onRegisterDevice={() => registerDevice.mutate()} isRegistering={registerDevice.isPending} onRevokeDevice={(id) => revokeDevice.mutate(id)} />
     <CreateChatModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} onCreateChat={(payload) => createMutation.mutate({ type: payload.type, title: payload.title, description: payload.description, trustedChat: true, encryptionProtocol: 'TRUSTED_CHAT', participantIds: payload.memberIds })} />
   </div>;

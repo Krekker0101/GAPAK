@@ -429,6 +429,7 @@ export interface Chat {
   lastSequenceNumber: number;
   memberCount: number;
   unreadCount: number;
+  directPeer?: { id: string; username: string; displayName: string; avatarFileId?: string | null } | null;
   createdAt: string;
   updatedAt: string;
 }

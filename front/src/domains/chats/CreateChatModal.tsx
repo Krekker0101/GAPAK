@@ -32,9 +32,6 @@ import {
   Avatar,
 } from '../../shared/design-system/primitives';
 
-const isPublicProfile = (profile: BackendPublicProfile) =>
-  (profile.privacySettings?.profileVisibility ?? '').toUpperCase() === 'PUBLIC';
-
 const useDebouncedValue = (value: string, delayMs: number) => {
   const [debounced, setDebounced] = useState(value);
   React.useEffect(() => {
@@ -69,6 +66,16 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
   const [discoverSort, setDiscoverSort] = useState<'new' | 'top'>('new');
   const debouncedQuery = useDebouncedValue(searchQuery.trim(), 300);
 
+  React.useEffect(() => {
+    if (isOpen) return;
+    setSelectedType('DIRECT');
+    setTitle('');
+    setDescription('');
+    setParticipantInput('');
+    setPickedUsers([]);
+    setSearchQuery('');
+  }, [isOpen]);
+
   const manualIds = participantInput.split(',').map((value) => value.trim()).filter(Boolean);
   const pickedIds = pickedUsers.map((u) => u.id);
   const selectedUserIds = useMemo(
@@ -91,20 +98,23 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
 
   const isSearching = debouncedQuery.length >= 2;
   const rawResults = isSearching ? (searchResultsQuery.data ?? []) : (discoverQuery.data ?? []);
-  // Only ever surface public accounts here — this picker is not the place to leak private profiles.
-  const suggestions = rawResults.filter((profile) => isPublicProfile(profile) && !pickedIds.includes(profile.id));
+  const suggestions = rawResults.filter((profile) => !pickedIds.includes(profile.id));
   const suggestionsLoading = isSearching ? searchResultsQuery.isFetching : discoverQuery.isFetching;
   const suggestionsError = isSearching ? searchResultsQuery.isError : discoverQuery.isError;
 
   const togglePick = (profile: BackendPublicProfile) => {
-    setPickedUsers((prev) => (prev.some((u) => u.id === profile.id) ? prev.filter((u) => u.id !== profile.id) : [...prev, profile]));
+    setParticipantInput('');
+    setPickedUsers((prev) => {
+      if (prev.some((u) => u.id === profile.id)) return prev.filter((u) => u.id !== profile.id);
+      return selectedType === 'DIRECT' ? [profile] : [...prev, profile];
+    });
   };
 
   const handleCreate = () => {
     if (selectedUserIds.length === 0) return;
     onCreateChat({
       type: selectedType,
-      title: title || (selectedType === 'DIRECT' ? 'New conversation' : 'New Chat'),
+      title: title || (selectedType === 'DIRECT' ? pickedUsers[0]?.displayName || pickedUsers[0]?.username : 'Новый чат'),
       description,
       memberIds: selectedUserIds,
     });
@@ -114,7 +124,7 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="md">
       <ModalHeader>
-        <h3 className="font-bold text-base text-primary">Create New Conversation</h3>
+        <h3 className="font-bold text-base text-primary">Новый чат</h3>
       </ModalHeader>
 
       <ModalBody className="space-y-4">
@@ -123,26 +133,26 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
           {[
             {
               type: 'DIRECT' as ChatType,
-              label: 'Direct Chat',
-              desc: '1-on-1 Private E2EE',
+              label: 'Личный чат',
+              desc: 'Один на один, E2EE',
               icon: <MessageSquare className="w-4 h-4 text-indigo-400" />,
             },
             {
               type: 'GROUP' as ChatType,
-              label: 'Group Chat',
-              desc: 'Multi-member with roles',
+              label: 'Группа',
+              desc: 'Общение с участниками',
               icon: <Users className="w-4 h-4 text-purple-400" />,
             },
             {
               type: 'CHANNEL' as ChatType,
-              label: 'Channel',
-              desc: 'Broadcast channel',
+              label: 'Канал',
+              desc: 'Публикации для подписчиков',
               icon: <Radio className="w-4 h-4 text-emerald-400" />,
             },
             {
               type: 'BROADCAST' as ChatType,
-              label: 'Broadcast List',
-              desc: '1-to-many direct list',
+              label: 'Рассылка',
+              desc: 'Сообщение нескольким людям',
               icon: <Megaphone className="w-4 h-4 text-amber-400" />,
             },
           ].map((item) => (
@@ -151,6 +161,10 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
               type="button"
               onClick={() => {
                 setSelectedType(item.type);
+                if (item.type === 'DIRECT') {
+                  setPickedUsers((current) => current.slice(0, 1));
+                  setParticipantInput('');
+                }
               }}
               className={`p-3 rounded-[var(--radius-xl)] border text-left transition-all flex flex-col justify-between ${
                 selectedType === item.type
@@ -174,14 +188,14 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
         {selectedType !== 'DIRECT' && (
           <div className="space-y-3 pt-2">
             <Input
-              label="Conversation Title"
-              placeholder="e.g. GAPAK Core Architecture"
+              label="Название"
+              placeholder="Например, Команда GAPAK"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
             <Input
-              label="Description (Optional)"
-              placeholder="Brief description or guidelines..."
+              label="Описание (необязательно)"
+              placeholder="О чём этот чат"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
@@ -190,13 +204,13 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
 
         {/* Members Selection */}
         <div className="space-y-2 pt-2">
-          <label className="text-xs font-mono uppercase tracking-wider text-tertiary">Find people</label>
+          <label className="text-xs font-mono uppercase tracking-wider text-tertiary">Выберите участников</label>
 
           <div className="p-2 bg-app border border-subtle rounded-[var(--radius-xl)] flex items-center gap-2 text-xs">
             <Search className="w-4 h-4 text-muted shrink-0" />
             <input
               type="text"
-              placeholder="Search by username…"
+              placeholder="Поиск по имени пользователя…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-transparent text-primary placeholder-slate-500 outline-none"
@@ -229,14 +243,14 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
                 onClick={() => setDiscoverSort('new')}
                 className={`px-2.5 py-1 rounded-[var(--radius-lg)] flex items-center gap-1 transition-colors ${discoverSort === 'new' ? 'bg-indigo-600 text-white font-bold' : 'bg-surface-glass text-tertiary hover:text-primary'}`}
               >
-                <Sparkles className="w-3 h-3" /> New accounts
+                <Sparkles className="w-3 h-3" /> Новые
               </button>
               <button
                 type="button"
                 onClick={() => setDiscoverSort('top')}
                 className={`px-2.5 py-1 rounded-[var(--radius-lg)] flex items-center gap-1 transition-colors ${discoverSort === 'top' ? 'bg-indigo-600 text-white font-bold' : 'bg-surface-glass text-tertiary hover:text-primary'}`}
               >
-                <TrendingUp className="w-3 h-3" /> Top accounts
+                <TrendingUp className="w-3 h-3" /> Популярные
               </button>
             </div>
           )}
@@ -244,14 +258,14 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
           {/* Results list */}
           <div className="max-h-40 overflow-y-auto space-y-1 rounded-[var(--radius-xl)] border border-subtle p-1.5 bg-surface">
             {suggestionsLoading && (
-              <p className="text-[11px] text-muted px-2 py-2">Loading…</p>
+              <p className="text-[11px] text-muted px-2 py-2">Загрузка…</p>
             )}
             {!suggestionsLoading && suggestionsError && (
-              <p className="text-[11px] text-rose-400 px-2 py-2">Couldn't load {isSearching ? 'search results' : 'recommendations'} right now.</p>
+              <p className="text-[11px] text-rose-400 px-2 py-2">Не удалось загрузить {isSearching ? 'результаты поиска' : 'рекомендации'}.</p>
             )}
             {!suggestionsLoading && !suggestionsError && suggestions.length === 0 && (
               <p className="text-[11px] text-muted px-2 py-2">
-                {isSearching ? 'No public accounts match that username.' : 'No public accounts to recommend right now.'}
+                {isSearching ? 'Пользователь с таким именем не найден.' : 'Пока нет рекомендаций.'}
               </p>
             )}
             {!suggestionsLoading && !suggestionsError && suggestions.map((profile) => (
@@ -271,28 +285,28 @@ export const CreateChatModal: React.FC<CreateChatModalProps> = ({
             ))}
           </div>
 
-          <details className="text-[10px] text-muted">
-            <summary className="cursor-pointer select-none">Add by raw user ID instead</summary>
+          {selectedType !== 'DIRECT' && <details className="text-[10px] text-muted">
+            <summary className="cursor-pointer select-none">Добавить по ID пользователя</summary>
             <Input
               className="mt-2"
-              placeholder="Paste one or more backend user IDs, comma-separated"
+              placeholder="ID пользователей через запятую"
               value={participantInput}
               onChange={(e) => setParticipantInput(e.target.value)}
             />
-          </details>
+          </details>}
         </div>
       </ModalBody>
 
       <ModalFooter>
         <Button variant="ghost" onClick={onClose}>
-          Cancel
+          Отмена
         </Button>
         <Button
           variant="primary"
           onClick={handleCreate}
-          disabled={selectedType === 'DIRECT' && selectedUserIds.length === 0}
+          disabled={selectedUserIds.length === 0 || (selectedType === 'DIRECT' && selectedUserIds.length !== 1)}
         >
-          Create Conversation
+          {selectedType === 'DIRECT' ? 'Начать общение' : 'Создать чат'}
         </Button>
       </ModalFooter>
     </Modal>

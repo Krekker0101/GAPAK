@@ -87,11 +87,15 @@ export class RealtimeEventRouter {
     }
 
     if (event.kind === 'event') {
-      if (event.chatId) {
-        this.queryClient.invalidateQueries({ queryKey: ['chat', 'messages', event.chatId] });
-        if (event.type === 'chat.pin.changed') this.queryClient.invalidateQueries({ queryKey: ['chat', 'pinned', event.chatId] });
+      if (!event.chatId || event.type === 'chat.typing') return;
+      if (event.type === 'chat.pin.changed') {
+        this.queryClient.invalidateQueries({ queryKey: ['chat', 'pinned', event.chatId] });
+        return;
       }
-      this.queryClient.invalidateQueries({ queryKey: ['chats'] });
+      this.queryClient.invalidateQueries({ queryKey: ['chat', 'messages', event.chatId] });
+      if (event.type === 'chat.message.created' || event.type === 'chat.message.edited' || event.type === 'chat.message.deleted' || event.type === 'chat.read_receipt') {
+        this.queryClient.invalidateQueries({ queryKey: ['chats'] });
+      }
     }
   }
 

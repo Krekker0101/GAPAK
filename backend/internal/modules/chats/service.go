@@ -63,33 +63,68 @@ func NewService(repo *Repository) *Service {
 // ============================================================================
 
 func (s *Service) CreateChat(ctx context.Context, userID string, req CreateChatRequest) (ChatResponse, error) {
-	if len(req.ParticipantIDs) == 0 {
+	if req.Type == string(enums.ChatTypeDirect) && len(req.ParticipantIDs) == 1 && req.ParticipantIDs[0] == userID {
+		return ChatResponse{}, apperrors.New(400, "chats.direct_self_forbidden", "A direct chat requires another user")
+	}
+	// Normalize participant IDs before touching the database. Duplicate IDs and
+	// the creator in participantIds otherwise cause unique-key failures or a
+	// misleading one-member conversation.
+	participants := make([]string, 0, len(req.ParticipantIDs))
+	seen := map[string]struct{}{userID: {}}
+	for _, participantID := range req.ParticipantIDs {
+		if _, exists := seen[participantID]; exists {
+			continue
+		}
+		seen[participantID] = struct{}{}
+		participants = append(participants, participantID)
+	}
+	if len(participants) == 0 {
 		return ChatResponse{}, apperrors.New(400, "chats.no_participants", "At least one participant is required")
 	}
+	req.ParticipantIDs = participants
 	req.EncryptionProtocol = strings.ToUpper(strings.TrimSpace(req.EncryptionProtocol))
 	if req.TrustedChat {
 		req.EncryptionProtocol = string(enums.EncryptionProtocolTrustedChat)
 	}
 	if req.EncryptionProtocol == "" {
-		req.EncryptionProtocol = string(enums.EncryptionProtocolSignal)
+		req.EncryptionProtocol = string(enums.EncryptionProtocolTrustedChat)
 	}
-	if req.EncryptionProtocol == string(enums.EncryptionProtocolNone) {
-		return ChatResponse{}, apperrors.New(400, "chats.encryption_required", "Chats must use end-to-end encrypted payloads")
+	if req.EncryptionProtocol != string(enums.EncryptionProtocolTrustedChat) {
+		return ChatResponse{}, apperrors.New(400, "chats.e2ee.protocol_required", "Chats must use the GAPAK E2EE protocol")
 	}
 
-	// For direct chats, check if chat already exists
+	// Chat and membership creation is one transaction. This prevents orphaned
+	// chats when a participant is unavailable or a membership insert fails.
+	tx, err := s.repo.Begin(ctx)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+	repoTx := s.repo.WithTx(tx)
+
+	// For direct chats, serialize the pair and return the existing chat.
 	if req.Type == string(enums.ChatTypeDirect) {
 		if len(req.ParticipantIDs) != 1 {
 			return ChatResponse{}, apperrors.New(400, "chats.direct_one_participant", "Direct chats can only have one participant")
 		}
+		if err := repoTx.LockDirectChatPair(ctx, userID, req.ParticipantIDs[0]); err != nil {
+			return ChatResponse{}, err
+		}
 
-		existingChat, err := s.repo.GetChatByMembers(ctx, []string{userID, req.ParticipantIDs[0]})
+		existingChat, err := repoTx.GetChatByMembers(ctx, []string{userID, req.ParticipantIDs[0]})
 		if err == nil {
 			return s.toChatResponse(ctx, existingChat, userID)
 		}
 		if !errors.Is(err, apperrors.ErrNotFound) {
 			return ChatResponse{}, err
 		}
+	}
+	activeParticipants, err := repoTx.CountActiveUsersForShare(ctx, req.ParticipantIDs)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	if activeParticipants != len(req.ParticipantIDs) {
+		return ChatResponse{}, apperrors.New(400, "chats.participant_unavailable", "One or more chat participants are unavailable")
 	}
 
 	chat := &model.Chat{
@@ -105,7 +140,7 @@ func (s *Service) CreateChat(ctx context.Context, userID string, req CreateChatR
 		LastSequenceNumber: 0,
 	}
 
-	createdChat, err := s.repo.CreateChat(ctx, chat)
+	createdChat, err := repoTx.CreateChat(ctx, chat)
 	if err != nil {
 		return ChatResponse{}, err
 	}
@@ -116,25 +151,30 @@ func (s *Service) CreateChat(ctx context.Context, userID string, req CreateChatR
 		UserID: userID,
 		Role:   enums.ChatRoleOwner,
 	}
-	if _, err := s.repo.AddChatMember(ctx, member); err != nil {
+	if _, err := repoTx.AddChatMember(ctx, member); err != nil {
 		return ChatResponse{}, err
 	}
 
 	// Add other participants
 	for _, participantID := range req.ParticipantIDs {
-		if participantID == userID {
-			continue
-		}
 		member := &model.ChatMember{
 			ChatID: createdChat.ID,
 			UserID: participantID,
 			Role:   enums.ChatRoleMember,
 		}
-		if _, err := s.repo.AddChatMember(ctx, member); err != nil {
+		if _, err := repoTx.AddChatMember(ctx, member); err != nil {
 			return ChatResponse{}, err
 		}
 	}
-
+	// Member count is maintained by a database trigger; re-read it before the
+	// transaction commits instead of returning the stale zero from INSERT.
+	createdChat, err = repoTx.GetChat(ctx, createdChat.ID)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ChatResponse{}, err
+	}
 	return s.toChatResponse(ctx, createdChat, userID)
 }
 
@@ -239,6 +279,9 @@ func (s *Service) GetChatMembers(ctx context.Context, chatID, userID string, que
 		return nil, err
 	}
 
+	if query.Limit == 0 {
+		query.Limit = 100
+	}
 	members, err := s.repo.ListChatMembers(ctx, chatID, query.Role, query.Limit, query.Offset)
 	if err != nil {
 		return nil, err
@@ -310,6 +353,13 @@ func canGrantChatRole(actor, requested enums.ChatMemberRole) bool {
 	}
 }
 
+func canSendToChat(chatType enums.ChatType, role enums.ChatMemberRole) bool {
+	if chatType != enums.ChatTypeChannel && chatType != enums.ChatTypeBroadcast {
+		return true
+	}
+	return role == enums.ChatRoleOwner || role == enums.ChatRoleAdmin || role == enums.ChatRoleModerator
+}
+
 func (s *Service) RemoveChatMember(ctx context.Context, chatID, targetUserID, requestingUserID string) error {
 	requestingMember, err := s.repo.GetChatMember(ctx, chatID, requestingUserID)
 	if err != nil {
@@ -339,12 +389,19 @@ func (s *Service) RemoveChatMember(ctx context.Context, chatID, targetUserID, re
 // ============================================================================
 
 func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req SendMessageRequest) (MessageResponse, error) {
-	if err := s.repo.AssertChatMembership(ctx, chatID, userID); err != nil {
+	member, err := s.repo.GetChatMember(ctx, chatID, userID)
+	if err != nil {
 		return MessageResponse{}, err
 	}
 	chat, err := s.repo.GetChat(ctx, chatID)
 	if err != nil {
 		return MessageResponse{}, err
+	}
+	if chat.EncryptionProtocol != enums.EncryptionProtocolTrustedChat {
+		return MessageResponse{}, apperrors.New(409, "chats.e2ee.chat_protocol_mismatch", "Chat must be migrated to the GAPAK E2EE protocol before sending")
+	}
+	if !canSendToChat(chat.Type, member.Role) {
+		return MessageResponse{}, apperrors.New(403, "chats.posting_forbidden", "Only chat managers can publish to channels and broadcast lists")
 	}
 	if strings.TrimSpace(req.Content) != "" {
 		return MessageResponse{}, apperrors.New(400, "chats.plaintext_rejected", "Plaintext message content is not accepted by the server")
@@ -813,15 +870,28 @@ func (s *Service) GetMessages(ctx context.Context, chatID, userID string, query 
 		HasMore: len(messages) >= query.Limit,
 	}
 
-	if len(messages) > 0 {
-		lastMessage := messages[len(messages)-1]
+	if cursorMessage := messagePageCursor(messages, query.Before); cursorMessage != nil {
+		// A "before" page is returned in chronological order even though SQL
+		// selects the newest matching rows first. Its continuation cursor must
+		// therefore use the oldest row, otherwise the next page overlaps almost
+		// completely and advances by only one message.
 		// Use millisecond precision (matching the DB TIMESTAMP(3)) to avoid skipping messages.
-		cursorStr := lastMessage.SentAt.UTC().Format("2006-01-02T15:04:05.000Z07:00")
+		cursorStr := cursorMessage.SentAt.UTC().Format("2006-01-02T15:04:05.000Z07:00")
 		pagination.NextCursor = &cursorStr
-		pagination.NextCursorID = &lastMessage.ID
+		pagination.NextCursorID = &cursorMessage.ID
 	}
 
 	return response, pagination, nil
+}
+
+func messagePageCursor(messages []*model.Message, before bool) *model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	if before {
+		return messages[0]
+	}
+	return messages[len(messages)-1]
 }
 
 func (s *Service) GetMessageVersions(ctx context.Context, messageID, userID string) ([]MessageVersionResponse, error) {
@@ -1366,6 +1436,12 @@ func (s *Service) toChatResponse(ctx context.Context, chat *model.Chat, userID s
 	if err := s.repo.db.QueryRow(ctx, unreadQuery, chat.ID, member.JoinedAt, member.LastReadMessageID, userID).Scan(&unreadCount); err != nil {
 		unreadCount = 0
 	}
+	var directPeer *DirectPeerResponse
+	if chat.Type == enums.ChatTypeDirect {
+		if peer, peerErr := s.repo.GetDirectChatPeer(ctx, chat.ID, userID); peerErr == nil {
+			directPeer = &DirectPeerResponse{ID: peer.ID, Username: peer.Username, DisplayName: peer.DisplayName, AvatarFileID: peer.AvatarFileID}
+		}
+	}
 
 	return ChatResponse{
 		ID:                 chat.ID,
@@ -1383,6 +1459,7 @@ func (s *Service) toChatResponse(ctx context.Context, chat *model.Chat, userID s
 		LastSequenceNumber: chat.LastSequenceNumber,
 		MemberCount:        chat.MemberCount,
 		UnreadCount:        unreadCount,
+		DirectPeer:         directPeer,
 		CreatedAt:          chat.CreatedAt,
 		UpdatedAt:          chat.UpdatedAt,
 	}, nil

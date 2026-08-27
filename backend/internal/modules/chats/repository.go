@@ -50,6 +50,13 @@ type TrustedDeviceRecipient struct {
 	DeviceID string
 }
 
+type DirectChatPeer struct {
+	ID           string
+	Username     string
+	DisplayName  string
+	AvatarFileID *string
+}
+
 // allowedUpdateColumns defines which columns can be set via the generic Update* helpers.
 var allowedUpdateColumns = map[string]map[string]struct{}{
 	"chats": {
@@ -188,7 +195,7 @@ func (r *Repository) GetChatByMembers(ctx context.Context, memberIDs []string) (
 		  AND EXISTS (
 		  	SELECT 1 FROM chat_members cm
 		  	WHERE cm.chat_id = c.id
-		  	AND cm.user_id = ANY($1)
+		  AND cm.user_id = ANY($1::uuid[])
 		  	AND cm.deleted_at IS NULL
 		  	AND cm.left_at IS NULL
 		  	GROUP BY cm.chat_id
@@ -198,6 +205,37 @@ func (r *Repository) GetChatByMembers(ctx context.Context, memberIDs []string) (
 	`
 
 	return r.scanChat(r.db.QueryRow(ctx, query, memberIDs))
+}
+
+// LockDirectChatPair serializes creation of a direct chat for the same two
+// users. Without this transaction-scoped lock, simultaneous requests from two
+// devices can both miss GetChatByMembers and create duplicate conversations.
+func (r *Repository) LockDirectChatPair(ctx context.Context, firstUserID, secondUserID string) error {
+	if firstUserID > secondUserID {
+		firstUserID, secondUserID = secondUserID, firstUserID
+	}
+	key := "direct-chat:" + firstUserID + ":" + secondUserID
+	_, err := r.db.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, key)
+	return err
+}
+
+// CountActiveUsersForShare verifies participants while keeping their rows
+// stable until chat creation commits.
+func (r *Repository) CountActiveUsersForShare(ctx context.Context, userIDs []string) (int, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id
+		FROM users
+		WHERE id = ANY($1::uuid[]) AND account_status = 'ACTIVE' AND deleted_at IS NULL
+		FOR SHARE`, userIDs)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		count++
+	}
+	return count, rows.Err()
 }
 
 func (r *Repository) UpdateChat(ctx context.Context, chatID string, updates map[string]interface{}) (*model.Chat, error) {
@@ -288,6 +326,29 @@ func (r *Repository) ListUserChats(ctx context.Context, userID string, limit, of
 	return chats, rows.Err()
 }
 
+func (r *Repository) GetDirectChatPeer(ctx context.Context, chatID, viewerID string) (*DirectChatPeer, error) {
+	const query = `
+		SELECT u.id, u.username, u.display_name, u.avatar_file_id
+		FROM chat_members cm
+		JOIN users u ON u.id = cm.user_id AND u.deleted_at IS NULL AND u.account_status = 'ACTIVE'
+		WHERE cm.chat_id = $1 AND cm.user_id <> $2
+		  AND cm.deleted_at IS NULL AND cm.left_at IS NULL
+		ORDER BY cm.joined_at ASC
+		LIMIT 1`
+	var peer DirectChatPeer
+	var avatarFileID sql.NullString
+	if err := r.db.QueryRow(ctx, query, chatID, viewerID).Scan(&peer.ID, &peer.Username, &peer.DisplayName, &avatarFileID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	if avatarFileID.Valid {
+		peer.AvatarFileID = &avatarFileID.String
+	}
+	return &peer, nil
+}
+
 // ============================================================================
 // CHAT MEMBER OPERATIONS
 // ============================================================================
@@ -330,7 +391,7 @@ func (r *Repository) GetChatMember(ctx context.Context, chatID, userID string) (
 		       is_muted, mute_until, last_read_message_id, last_read_at,
 		       created_at, updated_at, deleted_at
 		FROM chat_members
-		WHERE chat_id = $1 AND user_id = $2 AND deleted_at IS NULL
+		WHERE chat_id = $1 AND user_id = $2 AND deleted_at IS NULL AND left_at IS NULL
 	`
 
 	return r.scanChatMember(r.db.QueryRow(ctx, query, chatID, userID))
@@ -385,6 +446,9 @@ func (r *Repository) RemoveChatMember(ctx context.Context, chatID, userID string
 }
 
 func (r *Repository) ListChatMembers(ctx context.Context, chatID string, role string, limit, offset int) ([]*model.ChatMember, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
 	query := `
 		SELECT id, chat_id, user_id, role, nickname, joined_at, left_at,
 		       is_muted, mute_until, last_read_message_id, last_read_at,

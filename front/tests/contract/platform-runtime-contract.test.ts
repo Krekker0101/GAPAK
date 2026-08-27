@@ -61,14 +61,16 @@ test('incremental sync advances and persists backend cursors without a fixed pag
   assert.doesNotMatch(sync, /page < 20/);
 });
 
-test('chat UI exposes only implemented outbound encrypted content and device registration uses backend binding', () => {
+test('chat UI exposes backend-supported encrypted text, attachment and voice content and device registration uses backend binding', () => {
   const composer = read('src/domains/chats/Composer.tsx');
   const devices = read('src/domains/security/components/DevicesSection.tsx');
   const media = read('src/domains/media/api/mediaApi.ts');
-  assert.match(composer, /contentType: 'TEXT'/);
-  assert.doesNotMatch(composer, /Paperclip|startVoiceRecording|encryptAttachment|ephemeralTimer/);
+  assert.match(composer, /contentType: attachments\.length === 1/);
+  assert.match(composer, /Paperclip/);
+  assert.match(composer, /startVoiceRecording/);
+  assert.match(composer, /MediaUploadSubsystem/);
+  assert.doesNotMatch(composer, /encryptAttachment|ephemeralTimer/);
   assert.match(devices, /cryptoApi\.registerCurrentDevice/);
   assert.doesNotMatch(devices, /web_\$\{crypto\.randomUUID|e2eeCryptoEngine\.registerCurrentDevice/);
   assert.doesNotMatch(media, /UnsupportedMediaContractError|Promise<never>|list:\s*async|albums:\s*async/);
 });
-

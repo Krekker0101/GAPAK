@@ -34,6 +34,7 @@ export interface Chat {
   ephemeralTimerSeconds?: number;
   createdAt: string;
   updatedAt: string;
+  directPeer?: Pick<UserProfile, 'id' | 'username' | 'displayName' | 'avatarUrl'>;
 }
 
 // --- Message Content & States ---

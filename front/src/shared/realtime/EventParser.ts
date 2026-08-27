@@ -69,10 +69,10 @@ export function parseRealtimeFrame(raw: unknown): RealtimeEvent {
         : undefined;
     const messageId = typeof frame.messageId === 'string'
       ? frame.messageId
-      : typeof data?.id === 'string'
-        ? data.id
-        : typeof data?.messageId === 'string'
-          ? data.messageId
+      : typeof data?.messageId === 'string'
+        ? data.messageId
+        : typeof data?.id === 'string'
+          ? data.id
           : undefined;
 
     let sequence: number | undefined;

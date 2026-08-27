@@ -1,164 +1,95 @@
-/**
- * Chat Sidebar Component
- * GAPAK Realtime E2EE Messenger
- *
- * Filterable conversation list with unread counters, online status indicators,
- * encryption badges, and quick triggers for new chat and device security console.
- */
-
-import React, { useState } from 'react';
-import {
-  Search,
-  Plus,
-  Shield,
-  MessageSquare,
-  Users,
-  Radio,
-  Megaphone,
-  Lock,
-} from 'lucide-react';
-import { Chat, ChatType } from '../../shared/types';
-import { Avatar, Badge, IconButton, Button } from '../../shared/design-system/primitives';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Loader2, MessageCircle, Radio, Search, ShieldCheck, SquarePen, UsersRound, X } from 'lucide-react';
+import type { BackendPublicProfile } from '../../shared/api/backendContracts';
+import type { Chat, ChatType } from '../../shared/types';
+import { Avatar, IconButton } from '../../shared/design-system/primitives';
+import { usersApi } from '../users/api/usersApi';
 
 interface ChatSidebarProps {
   chats: Chat[];
   activeChatId: string;
   onSelectChat: (chatId: string) => void;
+  onStartDirect: (profile: BackendPublicProfile) => void;
   onOpenCreateModal: () => void;
   onOpenDevicesModal: () => void;
+  isCreatingDirect?: boolean;
   wsState: string;
+  className?: string;
 }
 
-export const ChatSidebar: React.FC<ChatSidebarProps> = ({
-  chats,
-  activeChatId,
-  onSelectChat,
-  onOpenCreateModal,
-  onOpenDevicesModal,
-  wsState,
-}) => {
+const chatPreview = (chat: Chat) => {
+  if (chat.lastMessage?.content) return chat.lastMessage.content;
+  if (chat.type === 'DIRECT') return 'Личная защищённая переписка';
+  if (chat.type === 'GROUP') return `${chat.members.length || ''} участников · E2EE`;
+  if (chat.type === 'CHANNEL') return 'Обновления канала';
+  return 'Защищённая рассылка';
+};
+
+export const ChatSidebar: React.FC<ChatSidebarProps> = ({ chats, activeChatId, onSelectChat, onStartDirect, onOpenCreateModal, onOpenDevicesModal, isCreatingDirect = false, wsState, className = '' }) => {
   const [filter, setFilter] = useState<'ALL' | ChatType>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
 
-  const filteredChats = chats.filter((c) => {
-    if (filter !== 'ALL' && c.type !== filter) return false;
-    if (searchQuery && !c.title?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
-    return true;
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(searchQuery.trim()), 280);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  const peopleQuery = useQuery({
+    queryKey: ['users', 'chat-search', debouncedQuery],
+    queryFn: ({ signal }) => usersApi.search(debouncedQuery, 8, signal),
+    enabled: debouncedQuery.length >= 2,
+    staleTime: 30_000,
   });
 
-  return (
-    <div className="w-full sm:w-80 md:w-88 border-r border-subtle bg-surface flex flex-col h-full shrink-0">
-      {/* Header Bar */}
-      <div className="p-3 border-b border-subtle space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h1 className="font-bold text-base text-primary">Messages</h1>
-            <span
-              className={`w-2 h-2 rounded-[var(--radius-pill)] ${
-                wsState === 'CONNECTED' ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'
-              }`}
-            />
-          </div>
+  const filteredChats = useMemo(() => chats.filter(chat => {
+    if (filter !== 'ALL' && chat.type !== filter) return false;
+    if (!searchQuery.trim()) return true;
+    const needle = searchQuery.trim().toLowerCase();
+    return `${chat.title ?? ''} ${chat.directPeer?.username ?? ''}`.toLowerCase().includes(needle);
+  }), [chats, filter, searchQuery]);
 
-          <div className="flex items-center gap-1">
-            <IconButton
-              icon={<Shield className="w-4 h-4 text-indigo-400" />}
-              ariaLabel="Device security"
-              onClick={onOpenDevicesModal}
-            />
-            <IconButton
-              icon={<Plus className="w-4 h-4 text-white" />}
-              ariaLabel="New chat"
-              onClick={onOpenCreateModal}
-            />
-          </div>
-        </div>
-
-        {/* Search Bar */}
-        <div className="p-2 bg-app border border-subtle rounded-[var(--radius-xl)] flex items-center gap-2 text-xs">
-          <Search className="w-4 h-4 text-muted" />
-          <input
-            type="text"
-            placeholder="Search messages or keys..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-transparent text-primary placeholder-slate-500 outline-none"
-          />
-        </div>
-
-        {/* Filter Chips */}
-        <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[11px] font-mono">
-          {[
-            { id: 'ALL', label: 'All' },
-            { id: 'DIRECT', label: 'Direct' },
-            { id: 'GROUP', label: 'Groups' },
-            { id: 'CHANNEL', label: 'Channels' },
-            { id: 'BROADCAST', label: 'Lists' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setFilter(tab.id as 'ALL' | ChatType)}
-              className={`px-2.5 py-1 rounded-[var(--radius-lg)] transition-colors shrink-0 ${
-                filter === tab.id
-                  ? 'bg-indigo-600 text-white font-bold'
-                  : 'bg-surface-glass text-tertiary hover:text-primary'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+  return <aside className={`h-full w-full shrink-0 flex-col overflow-hidden border-r border-subtle bg-surface lg:w-[340px] 2xl:w-[360px] ${className}`}>
+    <div className="border-b border-subtle px-4 pb-3 pt-4">
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2.5"><span className="bg-gradient-to-r from-indigo-500 to-purple-500 bg-clip-text text-2xl font-black tracking-tight text-transparent">GAPAK</span><span className={`h-2 w-2 rounded-full ${wsState === 'CONNECTED' ? 'bg-emerald-400' : 'animate-pulse bg-amber-400'}`} title={wsState} /></div>
+        <IconButton icon={<SquarePen className="h-4 w-4" />} ariaLabel="Новый чат" onClick={onOpenCreateModal} className="border border-subtle bg-surface-soft" />
       </div>
-
-      {/* Conversations List */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        {filteredChats.length === 0 ? (
-          <div className="p-8 text-center text-xs text-muted">
-            No conversations found in this filter.
-          </div>
-        ) : (
-          filteredChats.map((chat) => {
-            const isActive = chat.id === activeChatId;
-            return (
-              <div
-                key={chat.id}
-                onClick={() => onSelectChat(chat.id)}
-                className={`p-3 rounded-[var(--radius-2xl)] cursor-pointer transition-all border ${
-                  isActive
-                    ? 'bg-indigo-950/40 border-indigo-500/40'
-                    : 'bg-surface-glass border-transparent hover:bg-surface-strong'
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <Avatar name={chat.title || 'Chat'} src={chat.avatarUrl} size="md" className="shrink-0" />
-
-                  <div className="flex-1 min-w-0 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-xs text-primary truncate">{chat.title}</span>
-                      <span className="text-[10px] text-muted font-mono">
-                        {new Date(chat.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-1">
-                      <p className="text-xs text-tertiary truncate">
-                        {chat.lastMessage ? chat.lastMessage.content : 'Encrypted session established'}
-                      </p>
-
-                      {chat.unreadCount > 0 && (
-                        <span className="px-1.5 py-0.5 bg-indigo-600 text-white text-[10px] font-bold rounded-[var(--radius-pill)] shrink-0">
-                          {chat.unreadCount}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })
-        )}
+      <div className="flex h-11 items-center gap-2 rounded-2xl border border-subtle bg-app px-3 shadow-sm focus-within:border-indigo-500/60 focus-within:ring-2 focus-within:ring-indigo-500/10">
+        <Search className="h-4 w-4 shrink-0 text-muted" />
+        <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Найти чат или пользователя" aria-label="Поиск чатов и пользователей" className="min-w-0 flex-1 bg-transparent text-sm text-primary outline-none placeholder:text-muted" />
+        {searchQuery && <button type="button" onClick={() => setSearchQuery('')} aria-label="Очистить поиск" className="rounded-full p-1 text-muted hover:bg-surface-muted hover:text-primary"><X className="h-3.5 w-3.5" /></button>}
+      </div>
+      <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1">
+        {([['ALL', 'Все'], ['DIRECT', 'Личные'], ['GROUP', 'Группы'], ['CHANNEL', 'Каналы']] as const).map(([id, label]) => <button key={id} type="button" onClick={() => setFilter(id)} className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition ${filter === id ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20' : 'bg-surface-soft text-secondary hover:bg-surface-hover hover:text-primary'}`}>{label}</button>)}
       </div>
     </div>
-  );
+
+    <div className="flex-1 overflow-y-auto px-2 py-2">
+      {debouncedQuery.length >= 2 && <section className="mb-3">
+        <div className="flex items-center justify-between px-2 py-1.5"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">Пользователи</span>{peopleQuery.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />}</div>
+        {peopleQuery.isError && <p className="px-2 py-2 text-xs text-rose-400">Не удалось выполнить поиск. Попробуйте ещё раз.</p>}
+        {!peopleQuery.isFetching && !peopleQuery.isError && (peopleQuery.data ?? []).length === 0 && <p className="px-2 py-2 text-xs text-muted">Пользователь не найден</p>}
+        {(peopleQuery.data ?? []).map(profile => <button key={profile.id} type="button" disabled={isCreatingDirect} onClick={() => onStartDirect(profile)} className="group flex w-full items-center gap-3 rounded-2xl px-2.5 py-2 text-left transition hover:bg-brand-soft disabled:opacity-60"><Avatar name={profile.displayName || profile.username} size="md" /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-primary">{profile.displayName || profile.username}</span><span className="block truncate text-xs text-tertiary">@{profile.username}</span></span><MessageCircle className="h-4 w-4 text-indigo-400 opacity-0 transition group-hover:opacity-100" /></button>)}
+        <div className="mx-2 mt-2 border-b border-subtle" />
+      </section>}
+
+      <div className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">Сообщения</div>
+      {filteredChats.length === 0 ? <div className="mx-2 mt-4 rounded-2xl border border-dashed border-default p-6 text-center"><MessageCircle className="mx-auto mb-2 h-6 w-6 text-muted" /><p className="text-sm font-medium text-secondary">Чаты не найдены</p><p className="mt-1 text-xs text-muted">Найдите пользователя выше или создайте новый чат.</p></div> : filteredChats.map(chat => {
+        const active = chat.id === activeChatId;
+        return <button key={chat.id} type="button" onClick={() => onSelectChat(chat.id)} className={`mb-1 flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-left transition ${active ? 'bg-gradient-to-r from-indigo-600/18 to-purple-500/10 ring-1 ring-inset ring-indigo-500/25' : 'hover:bg-surface-soft'}`}>
+          <div className="relative shrink-0"><Avatar name={chat.title || 'Chat'} src={chat.avatarUrl} size="md" /></div>
+          <span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className="truncate text-sm font-semibold text-primary">{chat.title}</span><span className="shrink-0 text-[10px] text-muted">{new Date(chat.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></span><span className="mt-0.5 flex items-center justify-between gap-2"><span className={`truncate text-xs ${active ? 'text-indigo-400' : 'text-tertiary'}`}>{chatPreview(chat)}</span>{chat.unreadCount > 0 && <span className="min-w-5 rounded-full bg-indigo-600 px-1.5 py-0.5 text-center text-[10px] font-bold text-white">{chat.unreadCount > 99 ? '99+' : chat.unreadCount}</span>}</span></span>
+        </button>;
+      })}
+    </div>
+
+    <div className="flex items-center justify-around border-t border-subtle bg-surface-subtle px-3 py-2">
+      <button type="button" className="rounded-xl bg-indigo-600 p-2.5 text-white" aria-label="Сообщения"><MessageCircle className="h-4 w-4" /></button>
+      <button type="button" onClick={onOpenCreateModal} className="rounded-xl p-2.5 text-tertiary hover:bg-surface-muted hover:text-primary" aria-label="Найти людей"><UsersRound className="h-4 w-4" /></button>
+      <button type="button" className="rounded-xl p-2.5 text-tertiary hover:bg-surface-muted hover:text-primary" aria-label="Каналы" onClick={() => setFilter('CHANNEL')}><Radio className="h-4 w-4" /></button>
+      <button type="button" onClick={onOpenDevicesModal} className="rounded-xl p-2.5 text-tertiary hover:bg-surface-muted hover:text-primary" aria-label="Защищённые устройства"><ShieldCheck className="h-4 w-4" /></button>
+    </div>
+  </aside>;
 };
