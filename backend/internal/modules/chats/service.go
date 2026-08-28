@@ -87,9 +87,16 @@ func (s *Service) CreateChat(ctx context.Context, userID string, req CreateChatR
 		req.EncryptionProtocol = string(enums.EncryptionProtocolTrustedChat)
 	}
 	if req.EncryptionProtocol == "" {
-		req.EncryptionProtocol = string(enums.EncryptionProtocolTrustedChat)
+		if req.Type == string(enums.ChatTypeDirect) {
+			req.EncryptionProtocol = string(enums.EncryptionProtocolNone)
+		} else {
+			req.EncryptionProtocol = string(enums.EncryptionProtocolTrustedChat)
+		}
 	}
-	if req.EncryptionProtocol != string(enums.EncryptionProtocolTrustedChat) {
+	if req.EncryptionProtocol == string(enums.EncryptionProtocolNone) && req.Type != string(enums.ChatTypeDirect) {
+		return ChatResponse{}, apperrors.New(400, "chats.plaintext_direct_only", "Simple messaging is available only for direct chats")
+	}
+	if req.EncryptionProtocol != string(enums.EncryptionProtocolTrustedChat) && req.EncryptionProtocol != string(enums.EncryptionProtocolNone) {
 		return ChatResponse{}, apperrors.New(400, "chats.e2ee.protocol_required", "Chats must use the GAPAK E2EE protocol")
 	}
 
@@ -397,21 +404,38 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 	if err != nil {
 		return MessageResponse{}, err
 	}
-	if chat.EncryptionProtocol != enums.EncryptionProtocolTrustedChat {
-		return MessageResponse{}, apperrors.New(409, "chats.e2ee.chat_protocol_mismatch", "Chat must be migrated to the GAPAK E2EE protocol before sending")
-	}
 	if !canSendToChat(chat.Type, member.Role) {
 		return MessageResponse{}, apperrors.New(403, "chats.posting_forbidden", "Only chat managers can publish to channels and broadcast lists")
 	}
-	if strings.TrimSpace(req.Content) != "" {
-		return MessageResponse{}, apperrors.New(400, "chats.plaintext_rejected", "Plaintext message content is not accepted by the server")
-	}
 	req.EncryptionProtocol = strings.ToUpper(strings.TrimSpace(req.EncryptionProtocol))
-	if req.EncryptionProtocol != string(enums.EncryptionProtocolTrustedChat) {
-		return MessageResponse{}, apperrors.New(400, "chats.e2ee.protocol_required", "Messages must use the GAPAK E2EE protocol")
+	isPlain := chat.EncryptionProtocol == enums.EncryptionProtocolNone
+	if req.EncryptionProtocol != string(chat.EncryptionProtocol) {
+		return MessageResponse{}, apperrors.New(409, "chats.message_protocol_mismatch", "Message protocol does not match the chat protocol")
 	}
-	if err := validateE2EECiphertext(req); err != nil {
-		return MessageResponse{}, err
+	if isPlain {
+		if chat.Type != enums.ChatTypeDirect {
+			return MessageResponse{}, apperrors.New(400, "chats.plaintext_direct_only", "Simple messaging is available only for direct chats")
+		}
+		if strings.TrimSpace(req.Content) == "" && len(req.Attachments) == 0 {
+			return MessageResponse{}, apperrors.New(400, "chats.message_empty", "Message content or an attachment is required")
+		}
+		if req.SenderDeviceID != "" || req.SenderKeyID != "" || req.Ciphertext != "" || req.Nonce != "" || req.AuthenticationTag != "" || len(req.KeyEnvelopes) != 0 {
+			return MessageResponse{}, apperrors.New(400, "chats.simple_message_crypto_fields", "Simple messages must not include E2EE fields")
+		}
+	} else {
+		if strings.TrimSpace(req.Content) != "" {
+			return MessageResponse{}, apperrors.New(400, "chats.plaintext_rejected", "Plaintext message content is not accepted by encrypted chats")
+		}
+		if err := validateE2EECiphertext(req); err != nil {
+			return MessageResponse{}, err
+		}
+		if len(req.KeyEnvelopes) == 0 {
+			return MessageResponse{}, apperrors.New(400, "chats.key_envelopes_required", "Encrypted messages require per-device key envelopes")
+		}
+		expectedSenderKeyID := req.SenderDeviceID + ":identity:v1"
+		if req.SenderKeyID != expectedSenderKeyID {
+			return MessageResponse{}, apperrors.New(400, "chats.e2ee.invalid_sender_key_id", "senderKeyId does not match the authenticated sender device")
+		}
 	}
 	if strings.TrimSpace(req.ReplyToMessageID) != "" {
 		repliedMessage, err := s.repo.GetMessage(ctx, req.ReplyToMessageID)
@@ -421,13 +445,6 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		if repliedMessage.ChatID != chatID {
 			return MessageResponse{}, apperrors.ErrNotFound
 		}
-	}
-	if len(req.KeyEnvelopes) == 0 {
-		return MessageResponse{}, apperrors.New(400, "chats.key_envelopes_required", "Encrypted messages require per-device key envelopes")
-	}
-	expectedSenderKeyID := req.SenderDeviceID + ":identity:v1"
-	if req.SenderKeyID != expectedSenderKeyID {
-		return MessageResponse{}, apperrors.New(400, "chats.e2ee.invalid_sender_key_id", "senderKeyId does not match the authenticated sender device")
 	}
 	mediaIDs := make([]string, 0, len(req.Attachments))
 	thumbnailIDs := make([]string, 0, len(req.Attachments))
@@ -477,7 +494,7 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 		AssociatedData:         nullableString(req.AssociatedData),
 		RatchetCounter:         req.RatchetCounter,
 		AuthenticationTag:      nullableString(req.AuthenticationTag),
-		Content:                nil,
+		Content:                nullableString(req.Content),
 		Metadata:               metadataBytes,
 		ReplyToMessageID:       nullableString(req.ReplyToMessageID),
 		ForwardedFromMessageID: nullableString(req.ForwardedFromID),
@@ -494,15 +511,17 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 
 	repoTx := s.repo.WithTx(tx)
 
-	senderDevice, err := repoTx.GetTrustedDeviceForUpdate(ctx, req.SenderDeviceID)
-	if err != nil {
-		return MessageResponse{}, err
-	}
-	if senderDevice.UserID != userID || senderDevice.RevokedAt != nil || senderDevice.TrustStatus != "TRUSTED" {
-		return MessageResponse{}, apperrors.ErrForbidden
-	}
-	if err := s.validateKeyEnvelopeRecipientsWithRepo(ctx, repoTx, chatID, req.KeyEnvelopes, true); err != nil {
-		return MessageResponse{}, err
+	if !isPlain {
+		senderDevice, err := repoTx.GetTrustedDeviceForUpdate(ctx, req.SenderDeviceID)
+		if err != nil {
+			return MessageResponse{}, err
+		}
+		if senderDevice.UserID != userID || senderDevice.RevokedAt != nil || senderDevice.TrustStatus != "TRUSTED" {
+			return MessageResponse{}, apperrors.ErrForbidden
+		}
+		if err := s.validateKeyEnvelopeRecipientsWithRepo(ctx, repoTx, chatID, req.KeyEnvelopes, true); err != nil {
+			return MessageResponse{}, err
+		}
 	}
 
 	createdMessage, err := repoTx.CreateMessageInTx(ctx, message)
@@ -513,7 +532,7 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 	// already-persisted row in that case. Do not create duplicate envelopes,
 	// attachments, receipts, sequence numbers, or realtime events.
 	if createdMessage.ID != candidateMessageID {
-		same, compareErr := sameEncryptedMessageRequest(ctx, repoTx, createdMessage, req)
+		same, compareErr := sameMessageRequest(ctx, repoTx, createdMessage, req)
 		if compareErr != nil {
 			return MessageResponse{}, compareErr
 		}
@@ -617,29 +636,39 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 	if message.SenderID != userID {
 		return MessageResponse{}, apperrors.ErrForbidden
 	}
-	if req.SenderKeyID != req.SenderDeviceID+":identity:v1" {
-		return MessageResponse{}, apperrors.New(400, "chats.e2ee.invalid_sender_key_id", "senderKeyId does not match the editing sender device")
-	}
 	// Can only edit within 24 hours
 	if time.Since(message.SentAt) > 24*time.Hour {
 		return MessageResponse{}, apperrors.New(400, "chats.edit_expired", "Can only edit messages within 24 hours")
 	}
 
-	if strings.TrimSpace(req.Content) != "" {
-		return MessageResponse{}, apperrors.New(400, "chats.plaintext_rejected", "Plaintext message content is not accepted by the server")
-	}
 	req.EncryptionProtocol = strings.ToUpper(strings.TrimSpace(req.EncryptionProtocol))
-	if req.EncryptionProtocol != "" && req.EncryptionProtocol != string(enums.EncryptionProtocolTrustedChat) {
-		return MessageResponse{}, apperrors.New(400, "chats.e2ee.protocol_required", "Messages must use the GAPAK E2EE protocol")
+	isPlain := message.EncryptionProtocol == enums.EncryptionProtocolNone
+	if req.EncryptionProtocol != string(message.EncryptionProtocol) {
+		return MessageResponse{}, apperrors.New(409, "chats.message_protocol_mismatch", "Edited message protocol does not match the original message")
 	}
-	if err := validateHex(req.Ciphertext, "ciphertext", 16, 25000); err != nil {
-		return MessageResponse{}, err
-	}
-	if err := validateHex(req.Nonce, "nonce", 12, 12); err != nil {
-		return MessageResponse{}, err
-	}
-	if err := validateHex(req.AuthenticationTag, "authenticationTag", 64, 64); err != nil {
-		return MessageResponse{}, err
+	if isPlain {
+		if strings.TrimSpace(req.Content) == "" {
+			return MessageResponse{}, apperrors.New(400, "chats.message_empty", "Edited message content is required")
+		}
+		if req.SenderDeviceID != "" || req.SenderKeyID != "" || req.Ciphertext != "" || req.Nonce != "" || req.AuthenticationTag != "" || len(req.KeyEnvelopes) != 0 {
+			return MessageResponse{}, apperrors.New(400, "chats.simple_message_crypto_fields", "Simple messages must not include E2EE fields")
+		}
+	} else {
+		if strings.TrimSpace(req.Content) != "" {
+			return MessageResponse{}, apperrors.New(400, "chats.plaintext_rejected", "Plaintext content is not accepted by encrypted chats")
+		}
+		if req.SenderKeyID != req.SenderDeviceID+":identity:v1" {
+			return MessageResponse{}, apperrors.New(400, "chats.e2ee.invalid_sender_key_id", "senderKeyId does not match the editing sender device")
+		}
+		if err := validateHex(req.Ciphertext, "ciphertext", 16, 25000); err != nil {
+			return MessageResponse{}, err
+		}
+		if err := validateHex(req.Nonce, "nonce", 12, 12); err != nil {
+			return MessageResponse{}, err
+		}
+		if err := validateHex(req.AuthenticationTag, "authenticationTag", 64, 64); err != nil {
+			return MessageResponse{}, err
+		}
 	}
 
 	// Wrap version, update and envelopes in a transaction for consistency.
@@ -651,15 +680,17 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 
 	repoTx := s.repo.WithTx(tx)
 
-	device, err := repoTx.GetTrustedDeviceForUpdate(ctx, req.SenderDeviceID)
-	if err != nil {
-		return MessageResponse{}, err
-	}
-	if device.UserID != userID || device.RevokedAt != nil || device.TrustStatus != "TRUSTED" {
-		return MessageResponse{}, apperrors.ErrForbidden
-	}
-	if err := s.validateKeyEnvelopeRecipientsWithRepo(ctx, repoTx, message.ChatID, req.KeyEnvelopes, true); err != nil {
-		return MessageResponse{}, err
+	if !isPlain {
+		device, err := repoTx.GetTrustedDeviceForUpdate(ctx, req.SenderDeviceID)
+		if err != nil {
+			return MessageResponse{}, err
+		}
+		if device.UserID != userID || device.RevokedAt != nil || device.TrustStatus != "TRUSTED" {
+			return MessageResponse{}, apperrors.ErrForbidden
+		}
+		if err := s.validateKeyEnvelopeRecipientsWithRepo(ctx, repoTx, message.ChatID, req.KeyEnvelopes, true); err != nil {
+			return MessageResponse{}, err
+		}
 	}
 
 	// Create version before editing
@@ -676,15 +707,18 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 	}
 
 	updates := map[string]interface{}{
-		"sender_device_id":     req.SenderDeviceID,
+		"sender_device_id":     nullableString(req.SenderDeviceID),
 		"sender_key_id":        req.SenderKeyID,
 		"ciphertext":           req.Ciphertext,
 		"nonce":                req.Nonce,
-		"content":              nil,
+		"content":              nullableString(req.Content),
 		"metadata":             req.Metadata,
 		"edited_at":            time.Now().UTC(),
-		"authentication_tag":   req.AuthenticationTag,
-		"encryption_algorithm": gapakE2EEEncryptionAlgorithm,
+		"authentication_tag":   nullableString(req.AuthenticationTag),
+		"encryption_algorithm": req.EncryptionAlgorithm,
+	}
+	if !isPlain {
+		updates["encryption_algorithm"] = gapakE2EEEncryptionAlgorithm
 	}
 	if req.EncryptionProtocol != "" {
 		updates["encryption_protocol"] = strings.ToUpper(strings.TrimSpace(req.EncryptionProtocol))
@@ -700,7 +734,7 @@ func (s *Service) EditMessage(ctx context.Context, messageID, userID string, req
 	if err != nil {
 		return MessageResponse{}, err
 	}
-	if len(req.KeyEnvelopes) > 0 {
+	if !isPlain && len(req.KeyEnvelopes) > 0 {
 		envelopes, err := s.toMessageKeyModels(messageID, req.SenderDeviceID, req.KeyEnvelopes)
 		if err != nil {
 			return MessageResponse{}, err
@@ -1551,7 +1585,7 @@ func (s *Service) toMessageResponse(ctx context.Context, message *model.Message,
 		AssociatedData:       message.AssociatedData,
 		RatchetCounter:       message.RatchetCounter,
 		AuthenticationTag:    message.AuthenticationTag,
-		Content:              nil,
+		Content:              message.Content,
 		KeyEnvelopes:         keyEnvelopeResponses,
 		Metadata:             bytesToMetadata(message.Metadata),
 		ReplyToMessageID:     message.ReplyToMessageID,
@@ -1782,6 +1816,42 @@ func (s *Service) validateKeyEnvelopeRecipientsWithRepo(ctx context.Context, rep
 		}
 	}
 	return nil
+}
+
+func sameMessageRequest(ctx context.Context, repo *Repository, message *model.Message, req SendMessageRequest) (bool, error) {
+	if message.EncryptionProtocol == enums.EncryptionProtocolNone {
+		metadata, err := metadataToBytes(req.Metadata)
+		if err != nil {
+			return false, err
+		}
+		if req.EncryptionProtocol == string(enums.EncryptionProtocolNone) &&
+			message.Type == enums.MessageType(req.Type) &&
+			nullableStringValue(message.Content) == req.Content &&
+			string(message.Metadata) == string(metadata) &&
+			nullableStringValue(message.ReplyToMessageID) == req.ReplyToMessageID {
+			// Continue below only when the basic payload is equal so attachments
+			// can be compared without accepting a conflicting idempotent retry.
+		} else {
+			return false, nil
+		}
+		attachments, err := repo.GetAttachmentsByMessage(ctx, message.ID)
+		if err != nil {
+			return false, err
+		}
+		if len(attachments) != len(req.Attachments) {
+			return false, nil
+		}
+		for i, reqAtt := range req.Attachments {
+			att := attachments[i]
+			if att.MediaFileID != reqAtt.MediaFileID || string(att.Kind) != reqAtt.Kind ||
+				nullableStringValue(att.FileName) != reqAtt.FileName || nullableStringValue(att.MimeType) != reqAtt.MimeType ||
+				att.SizeBytes != reqAtt.SizeBytes {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+	return sameEncryptedMessageRequest(ctx, repo, message, req)
 }
 
 func sameEncryptedMessageRequest(ctx context.Context, repo *Repository, message *model.Message, req SendMessageRequest) (bool, error) {

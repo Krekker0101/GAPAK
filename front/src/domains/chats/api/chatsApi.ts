@@ -27,7 +27,7 @@ export interface CreateChatRequest {
 }
 
 export type EditMessageRequest = Pick<SendMessageRequest,
-  'senderDeviceId' | 'senderKeyId' | 'ciphertext' | 'nonce' | 'authenticationTag' | 'metadata' | 'encryptionProtocol' |
+  'senderDeviceId' | 'senderKeyId' | 'ciphertext' | 'nonce' | 'authenticationTag' | 'content' | 'metadata' | 'encryptionProtocol' |
   'encryptionAlgorithm' | 'associatedData' | 'ratchetCounter' | 'keyEnvelopes'>;
 
 export const chatsApi = {

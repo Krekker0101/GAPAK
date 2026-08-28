@@ -21,6 +21,15 @@ test('ordinary chat initializes browser encryption automatically without a Trust
   assert.match(apiSource, /idempotencyKey: crypto\.randomUUID\(\), retryCount: 0/);
 });
 
+test('ordinary direct messages do not depend on recipient pre-key registration', () => {
+  const source = readFileSync('src/domains/chats/ChatsView.tsx', 'utf8');
+  assert.match(source, /plainMessageRequest/);
+  assert.match(source, /encryptionProtocol: 'NONE'/);
+  assert.match(source, /if \(activeChat\.isEncrypted\)/);
+  assert.match(source, /message\.encryptionProtocol === 'NONE'/);
+  assert.match(source, /trustedChat: false/);
+});
+
 test('a persisted message restores immutable signed client metadata', () => {
   const source = readFileSync('src/domains/chats/crypto/E2EECryptoEngine.ts', 'utf8');
   assert.match(source, /metadataMessageId/);

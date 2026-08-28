@@ -8,8 +8,8 @@ import { Composer } from './Composer';
 import { TrustedDevicesModal } from './TrustedDevicesModal';
 import { CreateChatModal } from './CreateChatModal';
 import { ChatDetailsPanel } from './ChatDetailsPanel';
-import { Chat as ClientChat, ChatMessage, E2EEMessageEnvelope, EncryptedAttachment, MessageContentType, TrustedDevice as ClientTrustedDevice, UserPresenceData, UserProfile } from '../../shared/types';
-import type { BackendPublicProfile, Chat as BackendChat, ChatMember as BackendChatMember, Message as BackendMessage, TrustedDevice as BackendTrustedDevice } from '../../shared/api/backendContracts';
+import { Chat as ClientChat, ChatMessage, EncryptedAttachment, MessageContentType, TrustedDevice as ClientTrustedDevice, UserPresenceData, UserProfile } from '../../shared/types';
+import type { BackendPublicProfile, Chat as BackendChat, ChatMember as BackendChatMember, Message as BackendMessage, SendMessageRequest, TrustedDevice as BackendTrustedDevice } from '../../shared/api/backendContracts';
 import { chatsApi } from './api/chatsApi';
 import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import { e2eeCryptoEngine, DecryptionError } from './crypto/E2EECryptoEngine';
@@ -37,6 +37,29 @@ const pageWithMessages = (messages: ChatMessage[], source?: DecryptedMessagesPag
   ...(source?.nextCursor ? { nextCursor: source.nextCursor } : {}),
   ...(source?.nextCursorId ? { nextCursorId: source.nextCursorId } : {}),
   hasMore: source?.hasMore ?? false,
+});
+
+const plainMessageRequest = (payload: ChatSendPayload, clientMessageId: string): SendMessageRequest => ({
+  clientMessageId,
+  type: payload.contentType,
+  content: payload.content,
+  ciphertext: '',
+  nonce: '',
+  senderKeyId: '',
+  encryptionProtocol: 'NONE',
+  replyToMessageId: payload.replyToMessageId,
+  attachments: payload.attachments?.map(attachment => ({
+    mediaFileId: attachment.mediaFileId,
+    kind: attachment.type.toUpperCase() as NonNullable<SendMessageRequest['attachments']>[number]['kind'],
+    fileName: attachment.name,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+    durationSeconds: attachment.durationSeconds,
+    metadata: {
+      ...(attachment.nonce ? { nonce: attachment.nonce } : {}),
+      ...(attachment.waveform ? { waveform: attachment.waveform } : {}),
+    },
+  })),
 });
 
 const clientRole = (role: string): UserProfile['role'] => {
@@ -266,6 +289,54 @@ export const ChatsView: React.FC = () => {
     const sender = member?.user;
     if (!sender) throw new DecryptionError('Message sender is not a member of the chat.');
 
+    if (message.encryptionProtocol === 'NONE') {
+      const reactionGroups = new Map<string, { users: string[]; reactedByMe: boolean }>();
+      for (const reaction of message.reactions ?? []) {
+        const current = reactionGroups.get(reaction.reactionType) ?? { users: [], reactedByMe: false };
+        current.users.push(reaction.userId);
+        if (reaction.userId === user?.id) current.reactedByMe = true;
+        reactionGroups.set(reaction.reactionType, current);
+      }
+      const otherRead = (message.readReceipts ?? []).some(receipt => receipt.userId !== message.senderId);
+      const otherDelivered = (message.deliveryReceipts ?? []).some(receipt => receipt.userId !== message.senderId);
+      return {
+        id: message.id,
+        clientMessageId: message.clientMessageId,
+        chatId: message.chatId,
+        sender,
+        senderKeyId: 'simple-message',
+        content: message.content ?? '',
+        contentType: message.type as MessageContentType,
+        createdAt: message.createdAt || message.sentAt,
+        updatedAt: message.updatedAt,
+        expiresAt: message.expiresAt ?? undefined,
+        replyToMessageId: message.replyToMessageId ?? undefined,
+        state: message.deletedAt ? 'deleted' : message.editedAt ? 'edited' : message.senderId === user?.id
+          ? otherRead ? 'read' : otherDelivered ? 'delivered' : 'sent'
+          : 'delivered',
+        pinned: message.isPinned,
+        readByUserIds: (message.readReceipts ?? []).map(receipt => receipt.userId),
+        deliveredToUserIds: (message.deliveryReceipts ?? []).map(receipt => receipt.userId),
+        reactions: [...reactionGroups.entries()].map(([reactionType, value]) => ({
+          emoji: reactionToEmoji[reactionType] ?? reactionType,
+          count: value.users.length,
+          users: value.users,
+          reactedByMe: value.reactedByMe,
+        })),
+        attachments: (message.attachments ?? []).map(attachment => ({
+          id: attachment.id,
+          mediaFileId: attachment.mediaFileId,
+          name: attachment.fileName ?? 'attachment',
+          type: attachment.kind.toLowerCase() as EncryptedAttachment['type'],
+          sizeBytes: attachment.sizeBytes,
+          mimeType: attachment.mimeType ?? 'application/octet-stream',
+          nonce: typeof attachment.metadata?.nonce === 'string' ? attachment.metadata.nonce : undefined,
+          durationSeconds: attachment.durationSeconds ?? undefined,
+          waveform: Array.isArray(attachment.metadata?.waveform) ? attachment.metadata.waveform.filter((value): value is number => typeof value === 'number') : undefined,
+        })),
+      };
+    }
+
     const currentDevice = await (batch?.currentDevice ?? cryptoApi.getCurrentDevice());
     let senderBundlesPromise = batch?.senderBundles.get(message.senderId);
     if (batch && !senderBundlesPromise) {
@@ -331,7 +402,8 @@ export const ChatsView: React.FC = () => {
     queryFn: async ({ pageParam, signal }) => {
       const response = await chatsApi.messagesPage(activeChatId!, { cursor: pageParam?.cursor, cursorId: pageParam?.cursorId, before: true, limit: 50 }, signal);
       if (!activeChat) return pageWithMessages([]);
-      const batch: DecryptionBatch | undefined = response.data.length ? {
+      const hasEncryptedMessages = response.data.some(message => message.encryptionProtocol !== 'NONE');
+      const batch: DecryptionBatch | undefined = hasEncryptedMessages ? {
         currentDevice: cryptoApi.getCurrentDevice(signal),
         senderBundles: new Map(),
         signal,
@@ -446,16 +518,13 @@ export const ChatsView: React.FC = () => {
   }, [activeChat, activeChatId, user?.id]);
 
   const sendMutation = useMutation({
-    mutationFn: async (input: { payload: ChatSendPayload; optimistic: ChatMessage; envelope: E2EEMessageEnvelope }) => {
+    mutationFn: async (input: { payload: ChatSendPayload; optimistic: ChatMessage; request: SendMessageRequest }) => {
       if (!activeChatId) throw new Error('No conversation selected');
-      const request = e2eeCryptoEngine.toBackendSendMessageRequest({
-        ...input.envelope,
-        clientMessageId: input.optimistic.clientMessageId ?? input.optimistic.id,
-        replyToMessageId: input.payload.replyToMessageId,
-      });
+      const request = input.request;
       outboundByClientMessageId.current.set(input.optimistic.id, { chatId: activeChatId, request });
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        await messageSendQueue.enqueue(activeChatId, request);
+        if (request.encryptionProtocol === 'TRUSTED_CHAT') await messageSendQueue.enqueue(activeChatId, request);
+        else throw new Error('Simple messages require a network connection.');
         return { kind: 'queued' as const, message: input.optimistic };
       }
       try {
@@ -480,7 +549,7 @@ export const ChatsView: React.FC = () => {
     onSuccess: async (serverMessage, variables) => {
       if ('kind' in serverMessage && serverMessage.kind === 'queued') return;
       const acknowledged = serverMessage as BackendMessage;
-      outboundByClientMessageId.current.delete(variables.optimistic.clientMessageId ?? variables.optimistic.id);
+      outboundByClientMessageId.current.delete(variables.optimistic.id);
       if (!activeChatId || !activeChat) return;
       try {
         const decrypted = await decryptBackendMessage(acknowledged, activeChat);
@@ -511,24 +580,33 @@ export const ChatsView: React.FC = () => {
   const handleSendMessage = useCallback(async (payload: ChatSendPayload) => {
     if (!activeChat || !user) return;
     try {
-      const existingDevice = devices.find((device) => device.isCurrentDevice);
-      const registeredDevice = existingDevice ? undefined : await registerDevice.mutateAsync();
-      const currentDeviceID = existingDevice?.id ?? registeredDevice?.deviceId;
-      if (!currentDeviceID) throw new Error('The browser encryption device could not be initialized.');
       const clientMessageId = crypto.randomUUID();
-      const envelope = await e2eeCryptoEngine.encryptMessage({
-        chatId: activeChat.id,
-        senderId: user.id,
-        senderDeviceId: currentDeviceID,
-        plaintext: payload.content,
-        contentType: payload.contentType,
-        // Include every active device of the sender as well. Otherwise the
-        // sender cannot decrypt the acknowledgement, history after reload, or
-        // the same message on another authenticated device.
-        recipientUserIds: activeChat.members.map((member) => member.userId),
-        replyToMessageId: payload.replyToMessageId,
-        attachments: payload.attachments,
-      });
+      let request: SendMessageRequest;
+      let senderKeyId = 'simple-message';
+      if (activeChat.isEncrypted) {
+        const existingDevice = devices.find((device) => device.isCurrentDevice);
+        const registeredDevice = existingDevice ? undefined : await registerDevice.mutateAsync();
+        const currentDeviceID = existingDevice?.id ?? registeredDevice?.deviceId;
+        if (!currentDeviceID) throw new Error('The browser encryption device could not be initialized.');
+        const envelope = await e2eeCryptoEngine.encryptMessage({
+          chatId: activeChat.id,
+          senderId: user.id,
+          senderDeviceId: currentDeviceID,
+          plaintext: payload.content,
+          contentType: payload.contentType,
+          recipientUserIds: activeChat.members.map(member => member.userId),
+          replyToMessageId: payload.replyToMessageId,
+          attachments: payload.attachments,
+        });
+        senderKeyId = envelope.senderKeyId;
+        request = e2eeCryptoEngine.toBackendSendMessageRequest({
+          ...envelope,
+          clientMessageId,
+          replyToMessageId: payload.replyToMessageId,
+        });
+      } else {
+        request = plainMessageRequest(payload, clientMessageId);
+      }
       const optimistic: ChatMessage = {
         // clientMessageId is the only client-generated correlation identifier;
         // server message ID and server timestamps are populated only after acknowledgement.
@@ -536,7 +614,7 @@ export const ChatsView: React.FC = () => {
         clientMessageId,
         chatId: activeChat.id,
         sender: user,
-        senderKeyId: envelope.senderKeyId,
+        senderKeyId,
         content: payload.content,
         contentType: payload.contentType,
         state: 'sending',
@@ -545,10 +623,10 @@ export const ChatsView: React.FC = () => {
         attachments: payload.attachments,
         replyTo: replyingTo || undefined,
       };
-      await sendMutation.mutateAsync({ payload, optimistic, envelope });
+      await sendMutation.mutateAsync({ payload, optimistic, request });
       setReplyingTo(null);
     } catch (error) {
-      toast.error('Encrypted message not sent', error instanceof Error ? error.message : 'The GAPAK E2EE send pipeline failed closed.');
+      toast.error('Message not sent', error instanceof Error ? error.message : 'The message could not be sent.');
     }
   }, [activeChat, user, sendMutation, replyingTo, devices, registerDevice]);
 
@@ -565,6 +643,14 @@ export const ChatsView: React.FC = () => {
     if (!activeChat || !user) return;
     void (async () => {
       try {
+        if (!activeChat.isEncrypted) {
+          await chatsApi.editMessage(message.id, {
+            senderDeviceId: '', senderKeyId: '', ciphertext: '', nonce: '', authenticationTag: '',
+            content, encryptionProtocol: 'NONE',
+          });
+          await queryClient.invalidateQueries({ queryKey: ['chat', 'messages', activeChat.id] });
+          return;
+        }
         const existingDevice = devices.find((device) => device.isCurrentDevice);
         const registeredDevice = existingDevice ? undefined : await registerDevice.mutateAsync();
         const currentDeviceID = existingDevice?.id ?? registeredDevice?.deviceId;
@@ -615,7 +701,7 @@ export const ChatsView: React.FC = () => {
     },
     onError: error => toast.error('Не удалось открыть чат', error instanceof Error ? error.message : 'Сервер отклонил создание диалога.'),
   });
-  const startDirect = useCallback((profile: BackendPublicProfile) => createMutation.mutate({ type: 'DIRECT', title: profile.displayName || profile.username, trustedChat: true, encryptionProtocol: 'TRUSTED_CHAT', participantIds: [profile.id] }), [createMutation]);
+  const startDirect = useCallback((profile: BackendPublicProfile) => createMutation.mutate({ type: 'DIRECT', title: profile.displayName || profile.username, trustedChat: false, encryptionProtocol: 'NONE', participantIds: [profile.id] }), [createMutation]);
   const revokeDevice = useMutation({
     mutationFn: (deviceId: string) => chatsApi.revokeDevice(deviceId),
     onSuccess: () => {
@@ -655,7 +741,7 @@ export const ChatsView: React.FC = () => {
         onRetry={(messageId) => {
           const pending = outboundByClientMessageId.current.get(messageId);
           if (!pending) {
-            toast.warning('Retry unavailable', 'The encrypted envelope is no longer available in this browser session.');
+            toast.warning('Retry unavailable', 'The message data is no longer available in this browser session.');
             return;
           }
           void chatsApi.sendMessage(pending.chatId, pending.request)
@@ -663,7 +749,7 @@ export const ChatsView: React.FC = () => {
               outboundByClientMessageId.current.delete(messageId);
               queryClient.invalidateQueries({ queryKey: ['chat', 'messages', pending.chatId] });
             })
-            .catch((error) => toast.error('Message retry failed', error instanceof Error ? error.message : 'The encrypted message remains failed.'));
+            .catch((error) => toast.error('Message retry failed', error instanceof Error ? error.message : 'The message remains failed.'));
         }}
       />
       {canCurrentUserSend ? <Composer
@@ -679,6 +765,13 @@ export const ChatsView: React.FC = () => {
     </div> : <div className="hidden min-w-0 flex-1 items-center justify-center bg-[radial-gradient(circle_at_center,var(--color-brand-glow),transparent_30rem)] p-6 lg:flex"><div className="max-w-sm text-center"><div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-brand-soft text-2xl">💬</div><h2 className="text-xl font-bold text-primary">Начните общение</h2><p className="mt-2 text-sm text-tertiary">Найдите пользователя слева — существующий личный чат откроется автоматически, либо будет создан новый.</p></div></div>}
     {activeChat && detailsOpen && <ChatDetailsPanel chat={activeChat} messages={renderedMessages} onClose={() => setDetailsOpen(false)} onSearch={() => { setMessageSearchOpen(true); if (window.innerWidth < 1536) setDetailsOpen(false); }} onOpenDevices={() => setIsDevicesModalOpen(true)} className="absolute inset-y-0 right-0 z-40 shadow-2xl 2xl:static 2xl:z-auto 2xl:shadow-none" />}
     <TrustedDevicesModal isOpen={isDevicesModalOpen} onClose={() => setIsDevicesModalOpen(false)} devices={devices} onRegisterDevice={() => registerDevice.mutate()} isRegistering={registerDevice.isPending} onRevokeDevice={(id) => revokeDevice.mutate(id)} />
-    <CreateChatModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} onCreateChat={(payload) => createMutation.mutate({ type: payload.type, title: payload.title, description: payload.description, trustedChat: true, encryptionProtocol: 'TRUSTED_CHAT', participantIds: payload.memberIds })} />
+    <CreateChatModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} onCreateChat={(payload) => createMutation.mutate({
+      type: payload.type,
+      title: payload.title,
+      description: payload.description,
+      trustedChat: payload.type !== 'DIRECT',
+      encryptionProtocol: payload.type === 'DIRECT' ? 'NONE' : 'TRUSTED_CHAT',
+      participantIds: payload.memberIds,
+    })} />
   </div>;
 };
