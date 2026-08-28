@@ -291,7 +291,7 @@ func policyCreatesNotification(eventType EventType) bool {
 }
 func suppressSelfNotification(eventType EventType) bool {
 	switch eventType {
-	case UserUpdated, MessageCreated, MessageEdited, MessageDeleted, MessageReactionCreated, MessageReactionRemoved, MessageRead, StoryReactionCreated, StoryViewed, MediaReady:
+	case UserUpdated, MessageCreated, MessageEdited, MessageDeleted, MessageReactionCreated, MessageReactionRemoved, MessageRead, StoryReactionCreated, StoryViewed, MediaReady, TrustedDeviceAdded, TrustedDeviceRevoked:
 		return true
 	default:
 		return false

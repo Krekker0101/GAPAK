@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 
 	apperrors "github.com/gapak/backend/internal/platform/errors"
 	"github.com/gapak/backend/internal/platform/httpx"
@@ -52,6 +53,15 @@ func registerBaseRoutes(app *fiber.App, deps Dependencies) {
 		if err := deps.DB.Ping(ctx); err != nil {
 			return apperrors.New(fiber.StatusServiceUnavailable, "health.postgres_unavailable", "PostgreSQL is unavailable")
 		}
+		missingRelations, err := missingRequiredRelations(ctx, deps.DB)
+		if err != nil {
+			return apperrors.Wrap(err, fiber.StatusServiceUnavailable, "health.schema_check_failed", "Database schema could not be verified")
+		}
+		if len(missingRelations) > 0 {
+			err := apperrors.New(fiber.StatusServiceUnavailable, "health.schema_incomplete", "Required database migrations have not been applied")
+			err.Details = map[string]any{"missing_relations": missingRelations}
+			return err
+		}
 
 		if !deps.Config.Redis.Enabled {
 			dependencies["redis"]["status"] = "disabled"
@@ -87,6 +97,37 @@ func registerBaseRoutes(app *fiber.App, deps Dependencies) {
 			"postgres_pool": poolSnapshot(deps.Observability),
 		}, c.GetRespHeader(fiber.HeaderXRequestID), nil))
 	})
+}
+
+func missingRequiredRelations(ctx context.Context, db interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}) ([]string, error) {
+	required := []string{
+		"public.domain_events",
+		"public.http_idempotency_records",
+		"public.schema_migrations",
+		"public.trusted_chat_devices",
+		"public.trusted_chat_prekeys",
+		"public.trusted_chat_message_key_envelopes",
+	}
+	rows, err := db.Query(ctx, `
+		SELECT relation_name
+		FROM unnest($1::text[]) AS required(relation_name)
+		WHERE to_regclass(relation_name) IS NULL
+		ORDER BY relation_name`, required)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	missing := make([]string, 0)
+	for rows.Next() {
+		var relation string
+		if err := rows.Scan(&relation); err != nil {
+			return nil, err
+		}
+		missing = append(missing, relation)
+	}
+	return missing, rows.Err()
 }
 
 func poolSnapshot(obs *observability.Registry) map[string]any {

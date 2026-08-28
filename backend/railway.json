@@ -1,7 +1,7 @@
 {
   "deploy": {
     "preDeployCommand": "/usr/local/bin/gapak-migrate",
-    "healthcheckPath": "/health/live",
+    "healthcheckPath": "/health/ready",
     "healthcheckTimeout": 60
   }
 }

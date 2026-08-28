@@ -96,7 +96,10 @@ export const cryptoApi = {
     const response = await httpClient.post<BackendTrustedDevice>(
       '/chats/trusted-devices',
       { deviceName, identityKeyPublic, signingKeyPublic },
-      { idempotencyKey: crypto.randomUUID() },
+      // A server-side schema/transaction failure cannot be repaired by three
+      // immediate browser retries. Keep one idempotent attempt and surface the
+      // request ID; the user can retry after the backend recovers.
+      { idempotencyKey: crypto.randomUUID(), retryCount: 0 },
     );
 
     if (!response?.id) throw new E2EEBackendContractError('Backend did not return the registered device ID.');
