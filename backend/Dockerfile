@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 ARG GO_VERSION=1.26.6
 ARG RUNTIME_VERSION=3.21
 

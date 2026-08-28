@@ -8,6 +8,7 @@ import { authManager } from '../../shared/api/authManager';
 import { telemetry } from '../../shared/telemetry/telemetry';
 import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import { deviceCryptoManager } from '../chats/crypto/DeviceCryptoManager';
+import { cryptoApi } from '../chats/api/cryptoApi';
 import type { BackendAuthUser, BackendProfile } from '../../shared/api/backendContracts';
 
 export interface AuthContextValue {
@@ -116,6 +117,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [queryClient]);
 
   useEffect(() => { void hydrateSession(); }, [hydrateSession]);
+  useEffect(() => {
+    if (state !== 'AUTHENTICATED' || !user) return;
+    // Prepare the recipient pre-key on every authenticated browser, even when
+    // the user has not opened Chats yet. Other users can then send while this
+    // account is on any application page.
+    void cryptoApi.ensureCurrentDevice().catch((setupError) => {
+      telemetry.trackError('Background secure messaging setup failed', setupError);
+    });
+  }, [state, user?.id]);
   useEffect(() => {
     const handleCrossTabLogout = () => {
       authManager.clearSession();

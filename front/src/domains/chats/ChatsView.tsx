@@ -13,7 +13,7 @@ import type { BackendPublicProfile, Chat as BackendChat, ChatMember as BackendCh
 import { chatsApi } from './api/chatsApi';
 import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import { e2eeCryptoEngine, DecryptionError } from './crypto/E2EECryptoEngine';
-import { cryptoApi, CurrentDeviceNotRegisteredError, trustState } from './api/cryptoApi';
+import { cryptoApi, trustState } from './api/cryptoApi';
 import { receiptsBatcher } from './transport/ReceiptsBatcher';
 import { messageSendQueue } from './transport/MessageSendQueue';
 import { useAuth } from '../auth/AuthContext';
@@ -94,8 +94,6 @@ export const ChatsView: React.FC = () => {
   const outboundTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inboundTypingTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const outboundByClientMessageId = useRef(new Map<string, { chatId: string; request: import('./api/chatsApi').SendMessageRequest }>());
-  const deviceRegistrationPromiseRef = useRef<Promise<{ deviceId: string }> | null>(null);
-  const automaticDeviceRegistrationAttemptedRef = useRef(false);
 
   useEffect(() => {
     const flush = () => {
@@ -228,7 +226,7 @@ export const ChatsView: React.FC = () => {
 
   const currentDeviceQuery = useQuery({
     queryKey: ['security', 'current-device'],
-    queryFn: () => cryptoApi.getCurrentDevice(),
+    queryFn: () => cryptoApi.ensureCurrentDevice(),
     retry: false,
   });
 
@@ -253,20 +251,8 @@ export const ChatsView: React.FC = () => {
     }));
   }, [devicesQuery.data, currentDeviceQuery.data?.deviceId]);
 
-  const registerCurrentBrowser = useCallback(() => {
-    if (!deviceRegistrationPromiseRef.current) {
-      deviceRegistrationPromiseRef.current = cryptoApi.getCurrentDevice()
-        .catch((error) => {
-          if (!(error instanceof CurrentDeviceNotRegisteredError)) throw error;
-          return cryptoApi.registerCurrentDevice('GAPAK Web Device');
-        })
-        .finally(() => { deviceRegistrationPromiseRef.current = null; });
-    }
-    return deviceRegistrationPromiseRef.current;
-  }, []);
-
   const registerDevice = useMutation({
-    mutationFn: registerCurrentBrowser,
+    mutationFn: () => cryptoApi.ensureCurrentDevice(),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['security', 'devices'] });
       void queryClient.invalidateQueries({ queryKey: ['security', 'current-device'] });
@@ -274,12 +260,6 @@ export const ChatsView: React.FC = () => {
     },
     onError: (error) => toast.error('Secure messaging setup failed', error instanceof Error ? error.message : 'The backend rejected automatic device registration.'),
   });
-
-  useEffect(() => {
-    if (!(currentDeviceQuery.error instanceof CurrentDeviceNotRegisteredError) || automaticDeviceRegistrationAttemptedRef.current) return;
-    automaticDeviceRegistrationAttemptedRef.current = true;
-    registerDevice.mutate();
-  }, [currentDeviceQuery.error, registerDevice]);
 
   const decryptBackendMessage = useCallback(async (message: BackendMessage, chat: ClientChat, batch?: DecryptionBatch): Promise<ChatMessage> => {
     const member = chat.members.find((candidate) => candidate.userId === message.senderId);

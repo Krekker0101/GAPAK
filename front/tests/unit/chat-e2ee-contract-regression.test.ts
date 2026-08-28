@@ -12,7 +12,10 @@ test('backend TRUSTED devices map to the frontend verified policy state', () => 
 test('ordinary chat initializes browser encryption automatically without a Trusted Devices prompt', () => {
   const source = readFileSync('src/domains/chats/ChatsView.tsx', 'utf8');
   const apiSource = readFileSync('src/domains/chats/api/cryptoApi.ts', 'utf8');
-  assert.match(source, /CurrentDeviceNotRegisteredError/);
+  const authSource = readFileSync('src/domains/auth/AuthContext.tsx', 'utf8');
+  assert.match(apiSource, /CurrentDeviceNotRegisteredError/);
+  assert.match(apiSource, /currentDeviceSetupPromise/);
+  assert.match(authSource, /cryptoApi\.ensureCurrentDevice\(\)/);
   assert.match(source, /registerDevice\.mutateAsync\(\)/);
   assert.doesNotMatch(source, /Register this device first|Open Trusted Devices and register this browser/);
   assert.match(apiSource, /idempotencyKey: crypto\.randomUUID\(\), retryCount: 0/);

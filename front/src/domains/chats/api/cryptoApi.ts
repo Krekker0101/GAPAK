@@ -50,6 +50,8 @@ interface RecipientBundleResponse {
   oneTimePreKey?: { publicKey?: string; signature?: string | null; keyId?: string };
 }
 
+let currentDeviceSetupPromise: Promise<{ deviceId: string }> | null = null;
+
 /**
  * The backend calls an authenticated, non-revoked GAPAK device TRUSTED while
  * the UI historically calls the same state VERIFIED. Keep that translation at
@@ -183,6 +185,22 @@ export const cryptoApi = {
       keyVersion: 1,
       localDeviceId: local.deviceId,
     };
+  },
+
+  /**
+   * Resolves or registers this browser exactly once across auth hydration,
+   * chat loading and a simultaneous first send.
+   */
+  ensureCurrentDevice() {
+    if (!currentDeviceSetupPromise) {
+      currentDeviceSetupPromise = cryptoApi.getCurrentDevice()
+        .catch((error) => {
+          if (!(error instanceof CurrentDeviceNotRegisteredError)) throw error;
+          return cryptoApi.registerCurrentDevice('GAPAK Web Device');
+        })
+        .finally(() => { currentDeviceSetupPromise = null; });
+    }
+    return currentDeviceSetupPromise;
   },
 
   async recipientBundles(userIds: string[], signal?: AbortSignal): Promise<RecipientKeyBundle[]> {
