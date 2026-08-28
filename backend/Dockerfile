@@ -42,12 +42,15 @@ COPY --from=builder /out/gapak-api /usr/local/bin/gapak-api
 COPY --from=builder /out/gapak-worker /usr/local/bin/gapak-worker
 COPY --from=builder /out/gapak-migrate /usr/local/bin/gapak-migrate
 COPY --from=builder /out/gapak-admin /usr/local/bin/gapak-admin
+COPY docker/entrypoint.sh /usr/local/bin/gapak-entrypoint
 COPY docs ./docs
 COPY db ./db
 COPY .env.example ./.env.example
+
+RUN chmod 0555 /usr/local/bin/gapak-entrypoint
 
 USER gapak
 
 EXPOSE 8080 9091
 
-ENTRYPOINT ["/usr/local/bin/gapak-api"]
+ENTRYPOINT ["/usr/local/bin/gapak-entrypoint"]

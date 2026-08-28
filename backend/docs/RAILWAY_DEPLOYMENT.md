@@ -24,6 +24,10 @@ Start command:
 
 `/usr/local/bin/gapak-worker`
 
+The image also detects a Railway service name containing `worker`. As a more
+explicit alternative, set `GAPAK_PROCESS=worker`; this prevents the worker
+service from accidentally starting the API when its Start Command is empty.
+
 ### gapak-migrate
 Build command: leave empty / use Railway's normal Docker build.
 
