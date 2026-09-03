@@ -123,6 +123,8 @@ export interface ChatMessage {
   chatId: string;
   sender: UserProfile;
   senderKeyId: string;
+  /** Protocol of this specific message; old E2EE messages may live in a chat later switched to simple mode. */
+  isEncrypted?: boolean;
   content: string; // Decrypted text
   contentType: MessageContentType;
   state: MessageState;

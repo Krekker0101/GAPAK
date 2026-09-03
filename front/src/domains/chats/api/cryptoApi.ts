@@ -1,4 +1,4 @@
-import { httpClient } from '../../../shared/api/httpClient';
+import { ApiError, httpClient } from '../../../shared/api/httpClient';
 import { deviceCryptoManager } from '../crypto/DeviceCryptoManager';
 import { backendTrustState, GAPAK_E2EE_PROTOCOL_VERSION, RecipientKeyBundle } from '../crypto/CryptoProtocol';
 import { JsonWebKeyValidation } from '../crypto/JsonWebKeyValidation';
@@ -50,7 +50,19 @@ interface RecipientBundleResponse {
   oneTimePreKey?: { publicKey?: string; signature?: string | null; keyId?: string };
 }
 
-let currentDeviceSetupPromise: Promise<{ deviceId: string }> | null = null;
+interface CurrentDeviceIdentity {
+  deviceId: string;
+  userId: string;
+  identityKeyId: string;
+  identityPublicKey: JsonWebKey;
+  signingPublicKey: JsonWebKey;
+  agreementPublicKey: JsonWebKey;
+  verificationStatus: RecipientKeyBundle['verificationStatus'];
+  keyVersion: number;
+  localDeviceId: string;
+}
+
+let currentDeviceSetupPromise: Promise<CurrentDeviceIdentity> | null = null;
 
 /**
  * The backend calls an authenticated, non-revoked GAPAK device TRUSTED while
@@ -84,6 +96,46 @@ const findAgreementPublicKey = (device: CurrentRecipientDevice, response?: Recip
   return parseOptionalJsonWebKey(device.oneTimePreKey?.publicKey ?? response?.oneTimePreKey?.publicKey, 'oneTimePreKey.publicKey');
 };
 
+const publishAgreementPreKey = async (deviceId: string, agreementPublicJwk: JsonWebKey) => {
+  const preKeyId = `${deviceId}:agreement:v1`;
+  const preKeyData = canonicalJson({
+    protocolVersion: GAPAK_E2EE_PROTOCOL_VERSION,
+    deviceId,
+    keyId: preKeyId,
+    publicKey: agreementPublicJwk,
+    keyVersion: 1,
+  });
+  const signature = await deviceCryptoManager.sign(deviceId, utf8(preKeyData));
+  await httpClient.post(
+    `/chats/trusted-devices/${encodeURIComponent(deviceId)}/pre-keys`,
+    {
+      keyId: preKeyId,
+      publicKey: JSON.stringify(agreementPublicJwk),
+      signature,
+      oneTime: false,
+    },
+    { idempotencyKey: crypto.randomUUID() },
+  );
+};
+
+const currentDeviceHasPublishedPreKey = async (userId: string, deviceId: string): Promise<boolean> => {
+  let response: RecipientBundleResponse;
+  try {
+    response = await httpClient.get<RecipientBundleResponse>(`/chats/pre-key-bundles/${encodeURIComponent(userId)}`);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return false;
+    throw error;
+  }
+  const devices = Array.isArray(response.devices) ? response.devices : response.device ? [response.device] : [];
+  const current = devices.find(device => device.id === deviceId);
+  if (!current) return false;
+  try {
+    return Boolean(findAgreementPublicKey(current, devices.length === 1 ? response : undefined));
+  } catch {
+    return false;
+  }
+};
+
 export const cryptoApi = {
   /**
    * Registers a browser device using only the backend-supported fields.
@@ -108,35 +160,18 @@ export const cryptoApi = {
     const deviceId = response.id;
     const bound = await deviceCryptoManager.bindServerDeviceId(deviceId, unbound);
 
-    const preKeyId = `${deviceId}:agreement:v1`;
-    const preKeyData = canonicalJson({
-      protocolVersion: GAPAK_E2EE_PROTOCOL_VERSION,
-      deviceId,
-      keyId: preKeyId,
-      publicKey: bound.agreementPublicJwk,
-      keyVersion: 1,
-    });
-    const signature = await deviceCryptoManager.sign(deviceId, utf8(preKeyData));
-
-    await httpClient.post(
-      `/chats/trusted-devices/${encodeURIComponent(deviceId)}/pre-keys`,
-      {
-        keyId: preKeyId,
-        publicKey: JSON.stringify(bound.agreementPublicJwk),
-        signature,
-        oneTime: false,
-      },
-      { idempotencyKey: crypto.randomUUID() },
-    );
+    await publishAgreementPreKey(deviceId, bound.agreementPublicJwk);
 
     return {
       deviceId,
+      userId: response.userId,
       identityKeyId: bound.identityKeyId,
       identityPublicKey: bound.identityPublicJwk,
       signingPublicKey: bound.signingPublicJwk,
       agreementPublicKey: bound.agreementPublicJwk,
       verificationStatus: trustState(response.trustStatus),
       keyVersion: 1,
+      localDeviceId: deviceId,
     };
   },
 
@@ -178,9 +213,11 @@ export const cryptoApi = {
     const local = await deviceCryptoManager.getIdentity(localId);
     return {
       deviceId: server.id,
+      userId: server.userId,
       identityKeyId: `${server.id}:identity:v1`,
       identityPublicKey: parseJsonWebKey(server.identityKeyPublic, 'identityKeyPublic'),
       signingPublicKey: parseJsonWebKey(server.signingKeyPublic, 'signingKeyPublic'),
+      agreementPublicKey: local.agreementPublicJwk,
       verificationStatus: trustState(server.trustStatus),
       keyVersion: 1,
       localDeviceId: local.deviceId,
@@ -194,6 +231,12 @@ export const cryptoApi = {
   ensureCurrentDevice() {
     if (!currentDeviceSetupPromise) {
       currentDeviceSetupPromise = cryptoApi.getCurrentDevice()
+        .then(async (device) => {
+          if (!await currentDeviceHasPublishedPreKey(device.userId, device.deviceId)) {
+            await publishAgreementPreKey(device.deviceId, device.agreementPublicKey);
+          }
+          return device;
+        })
         .catch((error) => {
           if (!(error instanceof CurrentDeviceNotRegisteredError)) throw error;
           return cryptoApi.registerCurrentDevice('GAPAK Web Device');

@@ -15,6 +15,8 @@ test('ordinary chat initializes browser encryption automatically without a Trust
   const authSource = readFileSync('src/domains/auth/AuthContext.tsx', 'utf8');
   assert.match(apiSource, /CurrentDeviceNotRegisteredError/);
   assert.match(apiSource, /currentDeviceSetupPromise/);
+  assert.match(apiSource, /currentDeviceHasPublishedPreKey/);
+  assert.match(apiSource, /publishAgreementPreKey/);
   assert.match(authSource, /cryptoApi\.ensureCurrentDevice\(\)/);
   assert.match(source, /registerDevice\.mutateAsync\(\)/);
   assert.doesNotMatch(source, /Register this device first|Open Trusted Devices and register this browser/);
@@ -23,11 +25,20 @@ test('ordinary chat initializes browser encryption automatically without a Trust
 
 test('ordinary direct messages do not depend on recipient pre-key registration', () => {
   const source = readFileSync('src/domains/chats/ChatsView.tsx', 'utf8');
+  const timeline = readFileSync('src/domains/chats/MessageTimeline.tsx', 'utf8');
   assert.match(source, /plainMessageRequest/);
   assert.match(source, /encryptionProtocol: 'NONE'/);
   assert.match(source, /if \(activeChat\.isEncrypted\)/);
   assert.match(source, /message\.encryptionProtocol === 'NONE'/);
   assert.match(source, /trustedChat: false/);
+  assert.match(source, /message\.isEncrypted === false/);
+  assert.match(timeline, /isEncrypted \? 'Сообщения защищены сквозным шифрованием' : 'Обычная личная переписка'/);
+});
+
+test('deployed chat permissions allow first-party voice recording', () => {
+  const config = readFileSync('vercel.json', 'utf8');
+  assert.match(config, /microphone=\(self\)/);
+  assert.match(config, /camera=\(self\)/);
 });
 
 test('a persisted message restores immutable signed client metadata', () => {

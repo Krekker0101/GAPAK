@@ -22,6 +22,12 @@ func TestLoadMigrationsRejectsDuplicateVersions(t *testing.T) {
 	}
 }
 
+func TestRepositoryMigrationsHaveUniqueVersions(t *testing.T) {
+	if _, err := LoadMigrations(filepath.Join("..", "..", "..", "db", "migrations")); err != nil {
+		t.Fatalf("repository migrations must be loadable: %v", err)
+	}
+}
+
 func TestParseMigrationName(t *testing.T) {
 	version, name := parseMigrationName("20260809000000_distributed_state_hardening.sql")
 	if version != "20260809000000" || name != "distributed_state_hardening" {

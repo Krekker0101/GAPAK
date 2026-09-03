@@ -20,6 +20,7 @@ import { Button } from '../../shared/design-system/primitives';
 
 interface MessageTimelineProps {
   messages: ChatMessage[];
+  isEncrypted: boolean;
   currentUser: UserProfile;
   pinnedMessages: ChatMessage[];
   hasMoreBefore: boolean;
@@ -34,6 +35,7 @@ interface MessageTimelineProps {
 
 export const MessageTimeline: React.FC<MessageTimelineProps> = ({
   messages,
+  isEncrypted,
   currentUser,
   pinnedMessages,
   hasMoreBefore,
@@ -136,11 +138,11 @@ export const MessageTimeline: React.FC<MessageTimelineProps> = ({
           </div>
         )}
 
-        {/* E2EE Info Header */}
+        {/* Conversation security mode */}
         <div className="my-4 max-w-md rounded-full border border-indigo-500/15 bg-brand-soft px-4 py-2 text-center">
           <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-indigo-400">
             <Sparkles className="w-3 h-3" />
-            <span>Сообщения защищены сквозным шифрованием</span>
+            <span>{isEncrypted ? 'Сообщения защищены сквозным шифрованием' : 'Обычная личная переписка'}</span>
           </div>
         </div>
 

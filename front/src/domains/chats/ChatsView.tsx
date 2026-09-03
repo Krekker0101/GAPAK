@@ -305,6 +305,7 @@ export const ChatsView: React.FC = () => {
         chatId: message.chatId,
         sender,
         senderKeyId: 'simple-message',
+        isEncrypted: false,
         content: message.content ?? '',
         contentType: message.type as MessageContentType,
         createdAt: message.createdAt || message.sentAt,
@@ -337,7 +338,7 @@ export const ChatsView: React.FC = () => {
       };
     }
 
-    const currentDevice = await (batch?.currentDevice ?? cryptoApi.getCurrentDevice());
+    const currentDevice = await (batch?.currentDevice ?? cryptoApi.ensureCurrentDevice());
     let senderBundlesPromise = batch?.senderBundles.get(message.senderId);
     if (batch && !senderBundlesPromise) {
       senderBundlesPromise = cryptoApi.recipientBundles([message.senderId], batch.signal);
@@ -377,6 +378,7 @@ export const ChatsView: React.FC = () => {
           : 'delivered';
     return {
       ...decrypted,
+      isEncrypted: true,
       id: message.id,
       clientMessageId: message.clientMessageId,
       createdAt: message.createdAt || message.sentAt,
@@ -404,7 +406,7 @@ export const ChatsView: React.FC = () => {
       if (!activeChat) return pageWithMessages([]);
       const hasEncryptedMessages = response.data.some(message => message.encryptionProtocol !== 'NONE');
       const batch: DecryptionBatch | undefined = hasEncryptedMessages ? {
-        currentDevice: cryptoApi.getCurrentDevice(signal),
+        currentDevice: cryptoApi.ensureCurrentDevice(),
         senderBundles: new Map(),
         signal,
       } : undefined;
@@ -531,8 +533,10 @@ export const ChatsView: React.FC = () => {
         return await chatsApi.sendMessage(activeChatId, request);
       } catch (error) {
         if (error instanceof TypeError || (typeof navigator !== 'undefined' && !navigator.onLine)) {
-          await messageSendQueue.enqueue(activeChatId, request);
-          return { kind: 'queued' as const, message: input.optimistic };
+          if (request.encryptionProtocol === 'TRUSTED_CHAT') {
+            await messageSendQueue.enqueue(activeChatId, request);
+            return { kind: 'queued' as const, message: input.optimistic };
+          }
         }
         throw error;
       }
@@ -573,7 +577,6 @@ export const ChatsView: React.FC = () => {
         if (!old) return old;
         return { ...old, pages: old.pages.map((page, index) => index === 0 ? pageWithMessages(page.map((m) => m.id === variables.optimistic.id ? { ...m, state: 'failed' as const } : m), page) : page) };
       });
-      toast.error('Message failed', 'The server rejected the message. You can retry it from the message menu.');
     },
   });
 
@@ -615,6 +618,7 @@ export const ChatsView: React.FC = () => {
         chatId: activeChat.id,
         sender: user,
         senderKeyId,
+        isEncrypted: activeChat.isEncrypted,
         content: payload.content,
         contentType: payload.contentType,
         state: 'sending',
@@ -643,7 +647,7 @@ export const ChatsView: React.FC = () => {
     if (!activeChat || !user) return;
     void (async () => {
       try {
-        if (!activeChat.isEncrypted) {
+        if (message.isEncrypted === false) {
           await chatsApi.editMessage(message.id, {
             senderDeviceId: '', senderKeyId: '', ciphertext: '', nonce: '', authenticationTag: '',
             content, encryptionProtocol: 'NONE',
@@ -722,6 +726,7 @@ export const ChatsView: React.FC = () => {
       <ChatHeader chat={activeChat} presence={directPresence} typingText={typingText} searchQuery={messageSearch} searchOpen={messageSearchOpen} onSearchChange={setMessageSearch} onSearchOpenChange={setMessageSearchOpen} onBack={() => setShowMobileChat(false)} onToggleDetails={() => setDetailsOpen(value => !value)} onOpenDevicesModal={() => setIsDevicesModalOpen(true)} />
       <MessageTimeline
         messages={searchedMessages}
+        isEncrypted={activeChat.isEncrypted}
         currentUser={user!}
         pinnedMessages={renderedMessages.filter((m) => m.pinned)}
         hasMoreBefore={Boolean(messagesQuery.hasNextPage)}

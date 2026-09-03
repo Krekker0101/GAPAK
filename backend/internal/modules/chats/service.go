@@ -537,7 +537,7 @@ func (s *Service) SendMessage(ctx context.Context, chatID, userID string, req Se
 			return MessageResponse{}, compareErr
 		}
 		if !same {
-			return MessageResponse{}, apperrors.New(409, "chats.e2ee.replay_conflict", "clientMessageId was already used for a different encrypted message")
+			return MessageResponse{}, apperrors.New(409, "chats.message.replay_conflict", "clientMessageId was already used for a different message")
 		}
 		return s.toMessageResponse(ctx, createdMessage, userID, nil, nil, nil)
 	}
