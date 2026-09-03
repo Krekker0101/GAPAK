@@ -25,6 +25,8 @@ type Migration struct {
 	Checksum string
 }
 
+var migrationFileNamePattern = regexp.MustCompile(`^[0-9]+_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
+
 // querier is the subset of *pgxpool.Pool / *pgxpool.Conn needed for migrations.
 type querier interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
@@ -326,11 +328,17 @@ func LoadMigrations(dir string) ([]Migration, error) {
 		if filepath.Ext(entry.Name()) != ".sql" {
 			continue
 		}
+		if !migrationFileNamePattern.MatchString(entry.Name()) {
+			return nil, fmt.Errorf("invalid migration filename %q: expected <numeric-version>_<lowercase-name>.sql", entry.Name())
+		}
 
 		fullPath := filepath.Join(dir, entry.Name())
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
 			return nil, fmt.Errorf("read migration %s: %w", fullPath, err)
+		}
+		if strings.TrimSpace(string(content)) == "" {
+			return nil, fmt.Errorf("migration %s is empty", fullPath)
 		}
 
 		version, name := parseMigrationName(entry.Name())

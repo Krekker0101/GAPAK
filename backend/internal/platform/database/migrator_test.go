@@ -22,6 +22,32 @@ func TestLoadMigrationsRejectsDuplicateVersions(t *testing.T) {
 	}
 }
 
+func TestLoadMigrationsRejectsInvalidFilename(t *testing.T) {
+	dir := t.TempDir()
+	invalidPath := filepath.Join(dir, "migration_without_version.sql")
+	if err := os.WriteFile(invalidPath, []byte("SELECT 1;"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadMigrations(dir)
+	if err == nil || !strings.Contains(err.Error(), "invalid migration filename") {
+		t.Fatalf("expected invalid filename error, got %v", err)
+	}
+}
+
+func TestLoadMigrationsRejectsEmptySQL(t *testing.T) {
+	dir := t.TempDir()
+	emptyPath := filepath.Join(dir, "0001_empty.sql")
+	if err := os.WriteFile(emptyPath, []byte(" \n\t"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadMigrations(dir)
+	if err == nil || !strings.Contains(err.Error(), "is empty") {
+		t.Fatalf("expected empty migration error, got %v", err)
+	}
+}
+
 func TestRepositoryMigrationsHaveUniqueVersions(t *testing.T) {
 	if _, err := LoadMigrations(filepath.Join("..", "..", "..", "db", "migrations")); err != nil {
 		t.Fatalf("repository migrations must be loadable: %v", err)
