@@ -95,7 +95,13 @@ func validConfig() Config {
 			HashSecret: "12345678901234567890123456789012",
 		},
 		Storage: StorageConfig{
+			Provider:               "s3",
 			LocalRootPath:          "./var/storage",
+			Endpoint:               "https://account-id.r2.cloudflarestorage.com",
+			Region:                 "auto",
+			AccessKeyID:            "test-access-key",
+			SecretAccessKey:        "test-secret-key",
+			Bucket:                 "gapak-media-test",
 			SigningSecret:          "12345678901234567890123456789012",
 			MultipartPartSizeBytes: 8 * 1024 * 1024,
 			MaxUploadBytes:         32 * 1024 * 1024,
@@ -110,6 +116,47 @@ func validConfig() Config {
 			BaseRetry:   5 * time.Second,
 			MaxRetry:    30 * time.Minute,
 		},
+	}
+}
+
+func validProductionConfig() Config {
+	cfg := validConfig()
+	cfg.App.Environment = "production"
+	cfg.App.BaseURL = "https://api.gapak.example"
+	cfg.App.CORSOrigins = []string{"https://app.gapak.example"}
+	cfg.OAuth.FrontendRedirectURL = "https://app.gapak.example"
+	cfg.Redis.Enabled = true
+	cfg.Redis.URL = "redis://redis.internal:6379/0"
+	cfg.Security.JWTAccessSecret = "production-access-secret-12345678901234567890"
+	cfg.Security.JWTRefreshSecret = "production-refresh-secret-12345678901234567890"
+	cfg.Security.PasswordPepper = "production-password-pepper-1234567890"
+	cfg.Storage.SigningSecret = "production-storage-signing-secret-1234567890"
+	cfg.Anonymity.HashSecret = "production-anonymity-hash-secret-1234567890"
+	cfg.Security.EncryptionKey = "cHJvZHVjdGlvbi1hZXMta2V5LTEyMzQ1Njc4OTAxMjM="
+	cfg.Security.CookieSecure = true
+	cfg.Security.CookieSameSite = "none"
+	cfg.Security.CookieDomain = ""
+	return cfg
+}
+
+func TestValidateRejectsLocalStorageInProduction(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.gapak.example")
+	cfg := validProductionConfig()
+	cfg.Storage.Provider = "local"
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "STORAGE_PROVIDER must be s3") {
+		t.Fatalf("expected production local storage rejection, got %v", err)
+	}
+}
+
+func TestValidateRejectsIncompleteS3Storage(t *testing.T) {
+	cfg := validConfig()
+	cfg.Storage.AccessKeyID = ""
+
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "STORAGE_ACCESS_KEY_ID") {
+		t.Fatalf("expected missing S3 credentials error, got %v", err)
 	}
 }
 

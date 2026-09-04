@@ -21,6 +21,7 @@
     "test:performance": "node --test --experimental-strip-types tests/performance/*.test.ts tests/phase5-realtime-performance.test.ts",
     "test:all": "node scripts/run-tests.mjs",
     "ci:verify": "npm run lint && npm run typecheck && npm run test:all && npm run build",
+    "cloudflare:r2:cors": "npx --yes wrangler@4.129.0 r2 bucket cors set gapak-media-prod --file ../cloudflare/r2-cors.json --force",
     "test:unit:coverage": "node --test --experimental-strip-types --experimental-test-coverage tests/unit/*.test.ts",
     "test:e2e:required": "GAPAK_E2E_BASE_URL=${GAPAK_E2E_BASE_URL:?GAPAK_E2E_BASE_URL is required} GAPAK_E2E_AUTH_URL=${GAPAK_E2E_AUTH_URL:?GAPAK_E2E_AUTH_URL is required} playwright test"
   },

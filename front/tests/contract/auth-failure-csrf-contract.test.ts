@@ -57,6 +57,7 @@ test('production session cookies use a non-cacheable same-origin API reverse pro
   const documentHeaders = vercel.headers?.find((entry) => entry.source === '/(.*)')?.headers ?? [];
   const csp = documentHeaders.find((header) => header.key.toLowerCase() === 'content-security-policy')?.value ?? '';
   assert.match(csp, /style-src-elem 'self' 'unsafe-inline' https:\/\/www\.gstatic\.com/);
+  assert.match(csp, /connect-src[^;]*https:\/\/7aa6a9e1c9548cf14963c1d8c59edfc1\.r2\.cloudflarestorage\.com/);
   assert.doesNotMatch(csp, /script-src[^;]*gstatic/);
 });
 

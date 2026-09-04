@@ -18,6 +18,7 @@ coverage.out
 .env.*
 !.env.example
 !**/.env.example
+!backend/.env.railway.example
 backend/var/
 
 # Logs and OS/editor noise

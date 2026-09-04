@@ -767,8 +767,31 @@ func validate(cfg Config) error {
 	if cfg.Storage.MaxUploadBytes <= 0 {
 		return fmt.Errorf("STORAGE_MAX_UPLOAD_BYTES must be greater than zero")
 	}
-	if strings.TrimSpace(cfg.Storage.LocalRootPath) == "" {
-		return fmt.Errorf("STORAGE_LOCAL_ROOT_PATH cannot be empty")
+	storageProvider := strings.ToLower(strings.TrimSpace(cfg.Storage.Provider))
+	switch storageProvider {
+	case "", "local":
+		if strings.EqualFold(cfg.App.Environment, "production") {
+			return fmt.Errorf("STORAGE_PROVIDER must be s3 in production so API and worker share durable media")
+		}
+		if strings.TrimSpace(cfg.Storage.LocalRootPath) == "" {
+			return fmt.Errorf("STORAGE_LOCAL_ROOT_PATH cannot be empty")
+		}
+	case "s3", "minio":
+		if strings.TrimSpace(cfg.Storage.AccessKeyID) == "" || strings.TrimSpace(cfg.Storage.SecretAccessKey) == "" {
+			return fmt.Errorf("STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY are required for %s storage", storageProvider)
+		}
+		if strings.TrimSpace(cfg.Storage.Bucket) == "" {
+			return fmt.Errorf("STORAGE_BUCKET is required for %s storage", storageProvider)
+		}
+		endpoint, err := url.Parse(strings.TrimSpace(cfg.Storage.Endpoint))
+		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "https" && endpoint.Scheme != "http") || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return fmt.Errorf("STORAGE_ENDPOINT must be an absolute HTTP(S) URL without credentials, query, or fragment")
+		}
+		if strings.TrimSpace(cfg.Storage.Region) == "" {
+			return fmt.Errorf("STORAGE_REGION is required for %s storage", storageProvider)
+		}
+	default:
+		return fmt.Errorf("unsupported STORAGE_PROVIDER: %s", cfg.Storage.Provider)
 	}
 	if cfg.Storage.MultipartPartSizeBytes <= 0 {
 		return fmt.Errorf("STORAGE_MULTIPART_PART_SIZE_BYTES must be greater than zero")

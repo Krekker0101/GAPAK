@@ -20,13 +20,14 @@ import (
 // S3Storage implements Service (presigned URLs) and ObjectStore for any
 // S3-compatible object storage (AWS S3, MinIO, Cloudflare R2, etc.).
 type S3Storage struct {
-	cfg    config.StorageConfig
-	client *minio.Client
+	cfg             config.StorageConfig
+	client          *minio.Client
+	playbackGateway *LocalStorage
 }
 
 func NewS3Storage(cfg config.StorageConfig) (*S3Storage, error) {
 	if cfg.AccessKeyID == "" || cfg.SecretAccessKey == "" {
-		return nil, fmt.Errorf("s3 storage requires ACCESS_KEY_ID and SECRET_ACCESS_KEY")
+		return nil, fmt.Errorf("s3 storage requires STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY")
 	}
 
 	endpoint := cfg.Endpoint
@@ -43,7 +44,7 @@ func NewS3Storage(cfg config.StorageConfig) (*S3Storage, error) {
 		return nil, err
 	}
 
-	return &S3Storage{cfg: cfg, client: client}, nil
+	return &S3Storage{cfg: cfg, client: client, playbackGateway: NewLocalStorage(cfg)}, nil
 }
 
 func (s *S3Storage) Provider() string {
@@ -88,6 +89,13 @@ func (s *S3Storage) PresignUploadPart(req UploadPartRequest) SignedRequest {
 }
 
 func (s *S3Storage) PresignPlayback(req PlaybackRequest) SignedRequest {
+	// HLS playlists contain references to other playlists and segments. Route
+	// them through the protected application gateway, which authorizes and
+	// rewrites every child URI. Ordinary objects can use R2 directly.
+	if strings.HasSuffix(strings.ToLower(req.ObjectKey), ".m3u8") {
+		return s.playbackGateway.PresignPlayback(req)
+	}
+
 	expiresAt := req.ExpiresAt.UTC()
 	if expiresAt.Before(time.Now().UTC()) {
 		return SignedRequest{Method: "GET", URL: "", Headers: map[string]string{}, ExpiresAt: time.Time{}}

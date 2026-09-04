@@ -101,4 +101,18 @@ After changing any `VITE_*` variable, trigger a new Vercel deployment because Vi
 
 ## Media note
 
-`STORAGE_PROVIDER=local` is acceptable for development only. A Railway API service and a separately deployed worker do not share arbitrary container filesystems. For production media processing, use a shared object store and configure both services with the same bucket/credentials. Do not treat a local container filesystem as durable media storage.
+`STORAGE_PROVIDER=local` is acceptable for development only. A Railway API service and a separately deployed worker do not share arbitrary container filesystems. Production configuration now rejects local storage to prevent uploads that disappear or cannot be processed by the worker.
+
+The production Cloudflare R2 bucket is `gapak-media-prod`. Configure both `gapak-api` and `gapak-worker` with the same values:
+
+- `STORAGE_PROVIDER=s3`
+- `STORAGE_ENDPOINT=https://7aa6a9e1c9548cf14963c1d8c59edfc1.r2.cloudflarestorage.com`
+- `STORAGE_REGION=auto`
+- `STORAGE_BUCKET=gapak-media-prod`
+- `STORAGE_ACCESS_KEY_ID=<R2 access key id>`
+- `STORAGE_SECRET_ACCESS_KEY=<R2 secret access key>`
+- the same `STORAGE_SIGNING_SECRET` in both services
+
+Create an R2 API token with Object Read & Write permission scoped only to `gapak-media-prod`, then enter its S3 access key ID and secret directly in Railway. Never commit those credentials. The tracked `backend/.env.railway.example` contains the complete non-secret template.
+
+The bucket stays private. Browsers upload media with short-lived presigned PUT URLs; playback uses authorized grants. HLS playlists are served through the protected backend gateway so their child playlists and segments receive authorized URLs too.
