@@ -46,6 +46,47 @@ func TestLoadMigrationsAcceptsLegacyAllowSimpleDirectChatsFilename(t *testing.T)
 	}
 }
 
+func TestLoadMigrationsDeduplicatesLegacyAndCurrentAllowSimpleDirectChats(t *testing.T) {
+	dir := t.TempDir()
+	const sql = "ALTER TABLE chats ADD COLUMN example BOOLEAN;"
+	files := map[string]string{
+		"20260828000000_repair_mutation_event_dependencies.sql": "SELECT 1;",
+		"20260828000000_allow_simple_direct_chats.sql":          sql,
+		"20260829000000_allow_simple_direct_chats.sql":          sql,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	migrations, err := LoadMigrations(dir)
+	if err != nil {
+		t.Fatalf("byte-identical legacy and current migration files must be deduplicated: %v", err)
+	}
+	if len(migrations) != 2 {
+		t.Fatalf("expected one repair and one allow-simple migration, got %d", len(migrations))
+	}
+}
+
+func TestLoadMigrationsRejectsChangedLegacyAndCurrentMigration(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"20260828000000_allow_simple_direct_chats.sql": "SELECT 1;",
+		"20260829000000_allow_simple_direct_chats.sql": "SELECT 2;",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := LoadMigrations(dir)
+	if err == nil || !strings.Contains(err.Error(), "duplicate migration version") {
+		t.Fatalf("changed duplicate migration must be rejected, got %v", err)
+	}
+}
+
 func TestLoadMigrationsRejectsInvalidFilename(t *testing.T) {
 	dir := t.TempDir()
 	invalidPath := filepath.Join(dir, "migration_without_version.sql")

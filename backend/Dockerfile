@@ -45,6 +45,11 @@ COPY --from=builder /out/gapak-admin /usr/local/bin/gapak-admin
 COPY docker/entrypoint.sh /usr/local/bin/gapak-entrypoint
 COPY docs ./docs
 COPY db ./db
+# A legacy deployment briefly published this migration under 20260828, which
+# conflicts with another migration from that version. Keep the runtime image
+# canonical even when a remote builder restores a stale incremental context.
+RUN rm -f /app/db/migrations/20260828000000_allow_simple_direct_chats.sql \
+    && test -f /app/db/migrations/20260829000000_allow_simple_direct_chats.sql
 COPY .env.example ./.env.example
 
 RUN chmod 0555 /usr/local/bin/gapak-entrypoint

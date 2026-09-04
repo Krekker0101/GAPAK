@@ -371,13 +371,22 @@ func LoadMigrations(dir string) ([]Migration, error) {
 		return migrations[i].Version < migrations[j].Version
 	})
 
-	for i := 1; i < len(migrations); i++ {
-		if migrations[i-1].Version == migrations[i].Version {
-			return nil, fmt.Errorf("duplicate migration version %q: %s and %s", migrations[i].Version, migrations[i-1].Path, migrations[i].Path)
+	deduplicated := migrations[:0]
+	for _, migration := range migrations {
+		if len(deduplicated) > 0 && deduplicated[len(deduplicated)-1].Version == migration.Version {
+			previous := deduplicated[len(deduplicated)-1]
+			if previous.Name == migration.Name && previous.Checksum == migration.Checksum {
+				// A rolling build may contain both the corrected migration filename
+				// and its byte-identical legacy alias. Applying either one produces
+				// the same schema, so keep one canonical migration.
+				continue
+			}
+			return nil, fmt.Errorf("duplicate migration version %q: %s and %s", migration.Version, previous.Path, migration.Path)
 		}
+		deduplicated = append(deduplicated, migration)
 	}
 
-	return migrations, nil
+	return deduplicated, nil
 }
 
 func ensureMigrationTable(ctx context.Context, db querier) error {
