@@ -37,6 +37,12 @@ Start command:
 
 Run the migration service before the API and worker release when the schema changes.
 
+The pre-deploy migration command intentionally loads only `DATABASE_URL` and
+the optional `DATABASE_*` pool settings. It does not require API, OAuth,
+Redis, storage, push, or cookie variables. The command validates the migration
+files embedded in the image before connecting to PostgreSQL, so its logs show
+whether a failure belongs to the image, configuration, connection, or SQL.
+
 ## Required production variables
 
 Set these explicitly in `gapak-api`, `gapak-worker`, and `gapak-migrate` where applicable:

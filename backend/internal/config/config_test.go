@@ -24,6 +24,31 @@ func TestValidateRejectsInvalidEncryptionKeyLength(t *testing.T) {
 	}
 }
 
+func TestLoadDatabaseIgnoresUnrelatedProductionConfiguration(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://user:password@database.internal:5432/gapak")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("REDIS_ENABLED", "false")
+	t.Setenv("JWT_ACCESS_SECRET", "invalid")
+
+	cfg, err := LoadDatabase()
+	if err != nil {
+		t.Fatalf("database-only config must ignore unrelated service settings: %v", err)
+	}
+	if cfg.URL != "postgresql://user:password@database.internal:5432/gapak" {
+		t.Fatalf("unexpected database URL: %q", cfg.URL)
+	}
+}
+
+func TestLoadDatabaseRejectsInvalidPoolSetting(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://user:password@database.internal:5432/gapak")
+	t.Setenv("DATABASE_MAX_OPEN_CONNS", "not-a-number")
+
+	_, err := LoadDatabase()
+	if err == nil || !strings.Contains(err.Error(), "DATABASE_MAX_OPEN_CONNS") {
+		t.Fatalf("expected invalid database pool setting error, got %v", err)
+	}
+}
+
 func validConfig() Config {
 	return Config{
 		App: AppConfig{

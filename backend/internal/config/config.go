@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -200,6 +199,31 @@ type RateLimitConfig struct {
 	AuthMax        int64
 	PasswordWindow time.Duration
 	PasswordMax    int64
+}
+
+// LoadDatabase loads only the settings required by the standalone migration
+// command. A release migration must not depend on unrelated API, OAuth, Redis,
+// storage, push, or cookie configuration being present.
+func LoadDatabase() (DatabaseConfig, error) {
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		return DatabaseConfig{}, fmt.Errorf("failed to load .env file: %w", err)
+	}
+
+	if err := validateDatabaseEnvironment(); err != nil {
+		return DatabaseConfig{}, err
+	}
+
+	cfg := DatabaseConfig{
+		URL:             requireEnv("DATABASE_URL"),
+		MaxOpenConns:    int32(getEnvInt("DATABASE_MAX_OPEN_CONNS", 20)),
+		MinOpenConns:    int32(getEnvInt("DATABASE_MIN_OPEN_CONNS", 5)),
+		MaxConnLifetime: getEnvDuration("DATABASE_MAX_CONN_LIFETIME", 30*time.Minute),
+		MaxConnIdleTime: getEnvDuration("DATABASE_MAX_CONN_IDLE_TIME", 5*time.Minute),
+	}
+	if err := validateDatabaseConfig(cfg); err != nil {
+		return DatabaseConfig{}, err
+	}
+	return cfg, nil
 }
 
 func Load() (Config, error) {
@@ -607,36 +631,50 @@ func validateTypedEnvironment() error {
 	return nil
 }
 
+func validateDatabaseEnvironment() error {
+	for _, key := range []string{"DATABASE_MAX_OPEN_CONNS", "DATABASE_MIN_OPEN_CONNS"} {
+		if raw, ok := os.LookupEnv(key); ok && strings.TrimSpace(raw) != "" {
+			if _, err := strconv.Atoi(strings.TrimSpace(raw)); err != nil {
+				return fmt.Errorf("%s must be a valid integer: %w", key, err)
+			}
+		}
+	}
+	for _, key := range []string{"DATABASE_MAX_CONN_IDLE_TIME", "DATABASE_MAX_CONN_LIFETIME"} {
+		if raw, ok := os.LookupEnv(key); ok && strings.TrimSpace(raw) != "" {
+			if _, err := time.ParseDuration(strings.TrimSpace(raw)); err != nil {
+				return fmt.Errorf("%s must be a valid duration: %w", key, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateDatabaseConfig(cfg DatabaseConfig) error {
+	if strings.TrimSpace(cfg.URL) == "" {
+		return fmt.Errorf("missing required envs: DATABASE_URL")
+	}
+	if cfg.MaxOpenConns <= 0 {
+		return fmt.Errorf("DATABASE_MAX_OPEN_CONNS must be greater than zero")
+	}
+	if cfg.MinOpenConns < 0 {
+		return fmt.Errorf("DATABASE_MIN_OPEN_CONNS cannot be negative")
+	}
+	if cfg.MaxConnLifetime <= 0 || cfg.MaxConnIdleTime <= 0 {
+		return fmt.Errorf("database connection lifetime/idle time must be positive")
+	}
+	if cfg.MinOpenConns > cfg.MaxOpenConns {
+		return fmt.Errorf("DATABASE_MIN_OPEN_CONNS cannot exceed DATABASE_MAX_OPEN_CONNS")
+	}
+	return nil
+}
+
 func validate(cfg Config) error {
 	if err := validateTypedEnvironment(); err != nil {
 		return err
 	}
 
-	required := map[string]string{
-		"DATABASE_URL": cfg.Database.URL,
-	}
-	missing := make([]string, 0)
-	for key, value := range required {
-		if strings.TrimSpace(value) == "" {
-			missing = append(missing, key)
-		}
-	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return fmt.Errorf("missing required envs: %s", strings.Join(missing, ", "))
-	}
-
-	if cfg.Database.MaxOpenConns <= 0 {
-		return fmt.Errorf("DATABASE_MAX_OPEN_CONNS must be greater than zero")
-	}
-	if cfg.Database.MinOpenConns < 0 {
-		return fmt.Errorf("DATABASE_MIN_OPEN_CONNS cannot be negative")
-	}
-	if cfg.Database.MaxConnLifetime <= 0 || cfg.Database.MaxConnIdleTime <= 0 {
-		return fmt.Errorf("database connection lifetime/idle time must be positive")
-	}
-	if cfg.Database.MinOpenConns > cfg.Database.MaxOpenConns {
-		return fmt.Errorf("DATABASE_MIN_OPEN_CONNS cannot exceed DATABASE_MAX_OPEN_CONNS")
+	if err := validateDatabaseConfig(cfg.Database); err != nil {
+		return err
 	}
 	if cfg.HTTP.ReadTimeout <= 0 || cfg.HTTP.WriteTimeout <= 0 || cfg.HTTP.IdleTimeout <= 0 {
 		return fmt.Errorf("HTTP timeouts must be positive")
