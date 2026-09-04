@@ -22,6 +22,30 @@ func TestLoadMigrationsRejectsDuplicateVersions(t *testing.T) {
 	}
 }
 
+func TestLoadMigrationsAcceptsLegacyAllowSimpleDirectChatsFilename(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"20260828000000_repair_mutation_event_dependencies.sql": "SELECT 1;",
+		"20260828000000_allow_simple_direct_chats.sql":          "SELECT 2;",
+	}
+	for name, sql := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(sql), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	migrations, err := LoadMigrations(dir)
+	if err != nil {
+		t.Fatalf("legacy migration filename must remain deployable: %v", err)
+	}
+	if len(migrations) != 2 {
+		t.Fatalf("expected 2 migrations, got %d", len(migrations))
+	}
+	if migrations[0].Version != "20260828000000" || migrations[1].Version != "20260829000000" {
+		t.Fatalf("unexpected corrected versions: %q, %q", migrations[0].Version, migrations[1].Version)
+	}
+}
+
 func TestLoadMigrationsRejectsInvalidFilename(t *testing.T) {
 	dir := t.TempDir()
 	invalidPath := filepath.Join(dir, "migration_without_version.sql")

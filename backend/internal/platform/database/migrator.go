@@ -27,6 +27,14 @@ type Migration struct {
 
 var migrationFileNamePattern = regexp.MustCompile(`^[0-9]+_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
 
+// migrationVersionAliases keeps deployment compatibility with migration files
+// that were briefly published under an already-used version. New repositories
+// contain the corrected filename, but an older build context may still contain
+// the legacy name during a rolling deployment.
+var migrationVersionAliases = map[string]string{
+	"20260828000000_allow_simple_direct_chats.sql": "20260829000000",
+}
+
 // querier is the subset of *pgxpool.Pool / *pgxpool.Conn needed for migrations.
 type querier interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
@@ -342,6 +350,9 @@ func LoadMigrations(dir string) ([]Migration, error) {
 		}
 
 		version, name := parseMigrationName(entry.Name())
+		if correctedVersion, ok := migrationVersionAliases[entry.Name()]; ok {
+			version = correctedVersion
+		}
 		checksum := sha256.Sum256(content)
 
 		migrations = append(migrations, Migration{
