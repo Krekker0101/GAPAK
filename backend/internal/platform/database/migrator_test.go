@@ -191,3 +191,20 @@ func TestRepositoryMigrationsKeepRealDataChanges(t *testing.T) {
 		t.Fatal("trusted E2EE migration contains real data updates and must remain data-changing")
 	}
 }
+
+func TestSimpleDirectMessageMigrationRelaxesOnlyPlaintextProtocols(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "db", "migrations", "20260907000000_fix_simple_message_content_constraints.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(content)
+	if !strings.Contains(sql, "CHECK (encryption_protocol = 'NONE' OR content IS NULL)") {
+		t.Fatal("message content constraint must allow plaintext only for the NONE protocol")
+	}
+	if !strings.Contains(sql, "DROP CONSTRAINT IF EXISTS messages_no_plaintext_content_check") {
+		t.Fatal("migration must replace the stale live message constraint")
+	}
+	if !strings.Contains(sql, "DROP CONSTRAINT IF EXISTS message_versions_no_plaintext_content_check") {
+		t.Fatal("migration must also repair direct-message edit history")
+	}
+}

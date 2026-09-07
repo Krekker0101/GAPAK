@@ -4,6 +4,7 @@ import { ApiError, httpClient } from '../api/httpClient';
 import type { SyncResponse } from '../api/backendContracts';
 import { useAuth } from '../../domains/auth/AuthContext';
 import { telemetry } from '../telemetry/telemetry';
+import { isLocallyUsableSyncCursor } from './syncCursor';
 
 const queryRoots: Record<keyof SyncResponse['changes'], string[]> = {
   users: ['users'],
@@ -28,10 +29,19 @@ export const SyncBridge: React.FC<SyncBridgeProps> = ({ onNotificationsChanged }
   useEffect(() => {
     if (!user) return;
     const storageKey = `gapak.sync.cursor.${user.id}`;
+    const storedAtKey = `${storageKey}.storedAt`;
     const synchronize = () => {
       if (running.current) return running.current;
       running.current = (async () => {
         let cursor = window.sessionStorage.getItem(storageKey) ?? undefined;
+        // Avoid a guaranteed 400 for a cursor that is visibly malformed or
+        // older than the backend's 24-hour TTL. Signature/user validation still
+        // happens server-side, and that error path is reset below as before.
+        if (cursor && !isLocallyUsableSyncCursor(cursor, window.sessionStorage.getItem(storedAtKey))) {
+          window.sessionStorage.removeItem(storageKey);
+          window.sessionStorage.removeItem(storedAtKey);
+          cursor = undefined;
+        }
         const changedRoots = new Set<string>();
         let notificationsChanged = false;
         const seenCursors = new Set<string>();
@@ -44,6 +54,7 @@ export const SyncBridge: React.FC<SyncBridgeProps> = ({ onNotificationsChanged }
               && (error.code === 'sync.cursor_expired' || error.code === 'sync.cursor_invalid');
             if (!canResetCursor) throw error;
             window.sessionStorage.removeItem(storageKey);
+            window.sessionStorage.removeItem(storedAtKey);
             cursor = undefined;
             seenCursors.clear();
             continue;
@@ -64,7 +75,10 @@ export const SyncBridge: React.FC<SyncBridgeProps> = ({ onNotificationsChanged }
             throw new Error('The sync endpoint returned a non-advancing cursor.');
           }
           cursor = nextCursor;
-          if (cursor) window.sessionStorage.setItem(storageKey, cursor);
+          if (cursor) {
+            window.sessionStorage.setItem(storageKey, cursor);
+            window.sessionStorage.setItem(storedAtKey, String(Date.now()));
+          }
           if (!response.hasMore || !response.nextCursor) break;
           seenCursors.add(response.nextCursor);
         }
