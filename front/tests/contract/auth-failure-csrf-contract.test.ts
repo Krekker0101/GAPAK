@@ -50,7 +50,7 @@ test('production session cookies use a non-cacheable same-origin API reverse pro
   const vercel = JSON.parse(read('vercel.json')) as { rewrites?: Array<{ source: string; destination: string }>; headers?: Array<{ source: string; headers: Array<{ key: string; value: string }> }> };
   const runtimeEnv = read('src/shared/config/env.ts');
   assert.equal(vercel.rewrites?.[0]?.source, '/api/v1/:path*');
-  assert.match(vercel.rewrites?.[0]?.destination ?? '', /^https:\/\/gapak-api-production\.up\.railway\.app\/api\/v1/);
+  assert.match(vercel.rewrites?.[0]?.destination ?? '', /^https:\/\/gapak-backend\.vercel\.app\/api\/v1/);
   const apiHeaders = vercel.headers?.find((entry) => entry.source === '/api/v1/:path*')?.headers ?? [];
   assert.ok(apiHeaders.some((header) => header.key.toLowerCase() === 'cache-control' && /no-store/.test(header.value)));
   assert.match(runtimeEnv, /import\.meta\.env\.PROD && !useDirectProductionApi \? '' : configuredApiBaseUrl/);

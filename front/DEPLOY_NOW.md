@@ -11,9 +11,9 @@ No build command changes are required:
 - Install: `npm ci`
 
 Production public endpoints are already included in `.env.production`:
-- API: `https://gapak-api-production.up.railway.app`
-- WebSocket: `wss://gapak-api-production.up.railway.app/ws`
-- Media: `https://gapak-api-production.up.railway.app`
+- API: `https://gapak-backend.vercel.app`
+- WebSocket: `wss://gapak-backend.vercel.app/ws`
+- Media: `https://gapak-backend.vercel.app`
 
 No secrets are included.
 

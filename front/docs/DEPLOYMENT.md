@@ -8,8 +8,8 @@ The production frontend uses public service endpoints and the public Web Push VA
 
 ```env
 VITE_API_BASE_URL=
-VITE_WS_BASE_URL=wss://gapak-api-production.up.railway.app/ws
-VITE_MEDIA_BASE_URL=https://gapak-api-production.up.railway.app
+VITE_WS_BASE_URL=wss://gapak-backend.vercel.app/ws
+VITE_MEDIA_BASE_URL=https://gapak-backend.vercel.app
 VITE_WEB_PUSH_PUBLIC_KEY=<public VAPID key matching the backend sender>
 VITE_ENVIRONMENT=production
 ```
@@ -27,8 +27,8 @@ The native WebSocket client never puts an access token in the URL. The backend `
 The supplied backend production configuration identifies:
 
 - Frontend: `https://gapak.vercel.app`
-- API: `https://gapak-api-production.up.railway.app`
-- WebSocket: `wss://gapak-api-production.up.railway.app/ws`
+- API: `https://gapak-backend.vercel.app`
+- WebSocket: `wss://gapak-backend.vercel.app/ws`
 
 Railway must allow the exact frontend origin through `CORS_ORIGINS`; credentials cannot be used with `*`.
 
