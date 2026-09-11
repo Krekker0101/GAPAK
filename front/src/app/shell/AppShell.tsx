@@ -101,7 +101,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const location = useLocation();
   const currentDomain = useMemo(() => domainFromPath(location.pathname), [location.pathname]);
   const onNavigate = (domain: DomainKey) => navigate(DOMAIN_PATHS[domain]);
-  const { user, logout, setPresenceStatus } = useAuth();
+  const { user, logout, setPresenceStatus, presenceSaving } = useAuth();
   const toast = useToast();
   const { theme, resolvedTheme, setTheme } = useTheme();
   const network = useNetworkState();
@@ -512,7 +512,16 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                           {(['online', 'away', 'busy', 'invisible'] as PresenceStatus[]).map((p) => (
                             <button
                               key={p}
-                              onClick={() => setPresenceStatus(p)}
+                              type="button"
+                              aria-pressed={user.presence === p}
+                              disabled={presenceSaving}
+                              onClick={() => {
+                                void setPresenceStatus(p).then(() => {
+                                  toast.success('Presence saved');
+                                }).catch((error: unknown) => {
+                                  toast.error('Could not save presence', error instanceof Error ? error.message : 'Please try again.');
+                                });
+                              }}
                               className={`px-2 py-1 rounded text-[11px] font-medium capitalize text-left flex items-center gap-1.5 ${
                                 user.presence === p ? 'bg-indigo-600/30 text-indigo-300 font-bold' : 'hover:bg-surface-muted text-tertiary'
                               }`}
@@ -524,6 +533,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                             </button>
                           ))}
                         </div>
+                        {presenceSaving && <p role="status" className="px-2 pb-2 text-muted">Saving presence…</p>}
 
                         <div className="border-t border-subtle pt-1 space-y-0.5">
                           <button

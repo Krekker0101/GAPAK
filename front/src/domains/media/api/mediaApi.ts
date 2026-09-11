@@ -1,16 +1,7 @@
 import { httpClient } from '../../../shared/api/httpClient';
 import type { MediaAsset as BackendMediaAsset, PlaybackGrant as BackendPlaybackGrant, UploadPartGrant, UploadSession as BackendUploadSession } from '../../../shared/api/backendContracts';
 import type { MediaUsageContext, UploadInitResponse } from '../../../shared/types/media';
-
-const mapSession = (response: BackendUploadSession): UploadInitResponse => ({
-  uploadId: response.id,
-  mode: response.totalParts > 1 ? 'multipart' : 'single',
-  chunkSizeBytes: response.partSizeBytes,
-  totalParts: response.totalParts,
-  parts: response.partGrants?.map(g => ({ partNumber: g.partNumber, url: g.request.url, headers: g.request.headers })),
-  expiresAt: response.expiresAt,
-  mediaId: response.mediaFileId,
-});
+import { mapUploadSession } from './uploadSessionMapping';
 
 export const mediaApi = {
   initializeUpload: async (input: { fileName: string; mimeType: string; sizeBytes: number; checksumSha256?: string; context: MediaUsageContext; multipart: boolean; partSizeBytes?: number }, idempotencyKey: string, signal?: AbortSignal): Promise<UploadInitResponse> => {
@@ -19,11 +10,11 @@ export const mediaApi = {
       ...(input.checksumSha256 ? { checksumSha256: input.checksumSha256 } : {}), multipart: input.multipart,
       ...(input.partSizeBytes ? { partSizeBytes: input.partSizeBytes } : {}),
     }, { idempotencyKey, signal });
-    return mapSession(response);
+    return mapUploadSession(response);
   },
   getUpload: async (uploadId: string, signal?: AbortSignal): Promise<UploadInitResponse> => {
     const response = await httpClient.get<BackendUploadSession>(`/media/upload-sessions/${encodeURIComponent(uploadId)}`, { signal });
-    return mapSession(response);
+    return mapUploadSession(response);
   },
   requestUploadPart: (uploadId: string, partNumber: number, idempotencyKey: string, signal?: AbortSignal) =>
     httpClient.post<UploadPartGrant>(`/media/upload-sessions/${encodeURIComponent(uploadId)}/parts`, { partNumber }, { idempotencyKey, signal }),

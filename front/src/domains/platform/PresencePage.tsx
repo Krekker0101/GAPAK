@@ -4,28 +4,27 @@ import { useLocation } from 'react-router-dom';
 import { Activity, Search } from 'lucide-react';
 import { PageError, PageLoading } from '../../pages/common';
 import { presenceApi } from './api/platformApi';
-import { useAuth } from '../auth/AuthContext';
 import { authManager } from '../../shared/api/authManager';
 
 export const PresenceHeartbeat: React.FC = () => {
   const location = useLocation();
-  const { setPresenceStatus } = useAuth();
   const connectionId = useRef(crypto.randomUUID());
   const path = useRef(location.pathname);
   path.current = location.pathname;
   useEffect(() => {
-    let active = true;
+    let inFlight = false;
     const heartbeat = () => {
+      if (inFlight) return;
+      inFlight = true;
       const state = document.visibilityState === 'visible' ? 'ACTIVE' : 'IDLE';
-      void presenceApi.heartbeat(connectionId.current, state, path.current).then((presence) => {
-        if (active) setPresenceStatus(presence.isOnline && presence.state === 'ACTIVE' ? 'online' : 'away');
-      }).catch(() => undefined);
+      // Connection activity must never change a user's saved availability preference.
+      void presenceApi.heartbeat(connectionId.current, state, path.current)
+        .catch(() => undefined).finally(() => { inFlight = false; });
     };
     heartbeat();
     const timer = window.setInterval(heartbeat, 30_000);
     document.addEventListener('visibilitychange', heartbeat);
     return () => {
-      active = false;
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', heartbeat);
       // An auth-failure unmount has already cleared the in-memory credential.
@@ -34,7 +33,7 @@ export const PresenceHeartbeat: React.FC = () => {
         void presenceApi.disconnect(connectionId.current, 'app_shell_unmounted').catch(() => undefined);
       }
     };
-  }, [setPresenceStatus]);
+  }, []);
   return null;
 };
 

@@ -1,5 +1,6 @@
 import { httpClient } from '../../../shared/api/httpClient';
 import type { BackendPrivacy, BackendProfile, BackendPublicProfile } from '../../../shared/api/backendContracts';
+import type { PresencePreference } from '../../auth/presencePreference';
 
 export type UpdateProfileRequest = Partial<Pick<BackendProfile, 'displayName' | 'bio' | 'avatarFileId' | 'statusMessage'>>;
 // The backend validates privacy as one atomic settings document. Sending the
@@ -18,6 +19,7 @@ export const usersApi = {
   updateProfile: (payload: UpdateProfileRequest, idempotencyKey: string, signal?: AbortSignal) => httpClient.patch<BackendProfile>('/users/me', payload, { idempotencyKey, signal }),
   updatePrivacy: (payload: UpdatePrivacyRequest, idempotencyKey: string, signal?: AbortSignal) => httpClient.patch<BackendProfile>('/users/me/privacy', payload, { idempotencyKey, signal }),
   updateTheme: (theme: 'light' | 'dark' | 'auto', idempotencyKey: string, signal?: AbortSignal) => httpClient.patch<BackendProfile>('/users/me/theme', { theme }, { idempotencyKey, signal }),
+  updatePresence: (presence: PresencePreference, idempotencyKey: string) => httpClient.patch<BackendProfile>('/users/me/presence', { presence }, { idempotencyKey }),
   /** Username/display-name search. Server is expected to only return accounts the caller is permitted to see. */
   search: (query: string, limit = 20, signal?: AbortSignal) =>
     httpClient.get<BackendPublicProfile[]>('/users/search', { params: { q: query, limit }, signal }),

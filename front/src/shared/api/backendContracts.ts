@@ -111,6 +111,7 @@ export interface BackendProfile {
   isAnonymous: boolean;
   twoFactorEnabled: boolean;
   theme: string;
+  presence?: string;
   privacy: BackendPrivacy;
 }
 

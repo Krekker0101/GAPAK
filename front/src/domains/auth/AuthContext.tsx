@@ -10,6 +10,8 @@ import { realtimeManager } from '../../shared/realtime/RealtimeManager';
 import { deviceCryptoManager } from '../chats/crypto/DeviceCryptoManager';
 import { cryptoApi } from '../chats/api/cryptoApi';
 import type { BackendAuthUser, BackendProfile } from '../../shared/api/backendContracts';
+import { usersApi } from '../users/api/usersApi';
+import { createPresenceSaveQueue, readPresencePreference } from './presencePreference';
 
 export interface AuthContextValue {
   state: AuthState;
@@ -24,7 +26,8 @@ export interface AuthContextValue {
   startOAuth: (provider: string) => Promise<void>;
   logout: () => Promise<void>;
   logoutAllDevices: () => Promise<void>;
-  setPresenceStatus: (presence: PresenceStatus) => void;
+  setPresenceStatus: (presence: PresenceStatus) => Promise<void>;
+  presenceSaving: boolean;
   clearError: () => void;
   restoreSession: () => Promise<void>;
 }
@@ -61,6 +64,7 @@ const toUserProfile = (user: BackendAuthUser | BackendProfile): UserProfile => {
     permissions: permissionsForRole(role),
     isAnonymous: user.isAnonymous,
     twoFactorEnabled: user.twoFactorEnabled,
+    ...('presence' in user ? { presence: readPresencePreference(user.presence) } : {}),
   };
 };
 
@@ -70,6 +74,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [user, setUser] = useState<UserProfile | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const hydrationPromiseRef = useRef<Promise<void> | null>(null);
+  const [presenceSaving, setPresenceSaving] = useState(false);
+  const presenceQueue = useRef(createPresenceSaveQueue());
+  const pendingPresenceSaves = useRef(0);
 
   const hydrateSession = useCallback((): Promise<void> => {
     // React StrictMode and multiple providers can request restoration at the
@@ -246,10 +253,41 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     telemetry.record('auth', 'logout_all_completed', 'info');
   }, [queryClient]);
 
-  const setPresenceStatus = useCallback((presence: PresenceStatus) => { setUser((prev) => prev ? { ...prev, presence } : prev); }, []);
+  const setPresenceStatus = useCallback(async (presence: PresenceStatus) => {
+    const preference = readPresencePreference(presence);
+    const userId = user?.id;
+    const sessionId = authManager.getSessionId();
+    if (!preference || !userId || !sessionId) {
+      throw new ApiError('A signed-in account and a valid presence are required', 400, 'INVALID_PRESENCE');
+    }
+    pendingPresenceSaves.current += 1;
+    setPresenceSaving(true);
+    try {
+      await presenceQueue.current(async () => {
+        // Queued requests must never run under a different browser session.
+        if (authManager.getSessionId() !== sessionId) {
+          throw new ApiError('Your session changed. Select your status again.', 409, 'SESSION_CHANGED');
+        }
+        const saved = await usersApi.updatePresence(preference, crypto.randomUUID());
+        if (authManager.getSessionId() !== sessionId) {
+          throw new ApiError('Your session changed. Reload to confirm the saved status.', 409, 'SESSION_CHANGED');
+        }
+        if (saved.id !== userId || readPresencePreference(saved.presence) !== preference) {
+          throw new ApiError('The server did not confirm the selected presence', 502, 'PRESENCE_NOT_SAVED');
+        }
+        // Only confirmed writes update the UI; a failed request leaves the old selection intact.
+        setUser((current) => current?.id === userId ? { ...current, presence: preference } : current);
+        void queryClient.invalidateQueries({ queryKey: ['users'] });
+        void queryClient.invalidateQueries({ queryKey: ['presence'] });
+      });
+    } finally {
+      pendingPresenceSaves.current -= 1;
+      setPresenceSaving(pendingPresenceSaves.current > 0);
+    }
+  }, [user?.id, queryClient]);
 
   return (
-    <AuthContext.Provider value={{ state, user, error, login, register, anonymousRegister, verify2FA, forgotPassword, resetPassword, startOAuth, logout, logoutAllDevices, setPresenceStatus, clearError: () => setError(null), restoreSession: hydrateSession }}>
+    <AuthContext.Provider value={{ state, user, error, login, register, anonymousRegister, verify2FA, forgotPassword, resetPassword, startOAuth, logout, logoutAllDevices, setPresenceStatus, presenceSaving, clearError: () => setError(null), restoreSession: hydrateSession }}>
       {children}
     </AuthContext.Provider>
   );

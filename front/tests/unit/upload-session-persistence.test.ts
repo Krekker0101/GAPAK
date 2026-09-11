@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const read = (file: string) => readFileSync(file, 'utf8');
+const read = (file: string) => readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 
 test('upload session store persists metadata in IndexedDB and never the File object itself', () => {
   const source = read('src/domains/media/UploadSessionStore.ts');
